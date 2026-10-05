@@ -33,6 +33,18 @@ fi
 git -C "$PMB/pmbootstrap" fetch -q --tags origin
 git -C "$PMB/pmbootstrap" checkout -q "$PMBOOTSTRAP_REF"
 
+echo "==> pmbootstrap patches"
+# Fixes needed to run pmbootstrap rootless; see docs/02-design.md.
+for patch in "$ROOT"/patches/pmbootstrap-*.patch; do
+	[ -e "$patch" ] || continue
+	if git -C "$PMB/pmbootstrap" apply --check "$patch" 2>/dev/null; then
+		git -C "$PMB/pmbootstrap" apply "$patch"
+		echo "    applied $(basename "$patch")"
+	else
+		echo "    skipped $(basename "$patch") (already applied or does not fit)"
+	fi
+done
+
 echo "==> pmaports (edge)"
 if [ ! -d "$PMB/pmaports" ]; then
 	git clone -q --depth 1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMB/pmaports"

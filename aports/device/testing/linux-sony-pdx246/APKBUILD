@@ -83,7 +83,7 @@ prepare() {
 	# why. Drop the wrapper.
 	grep -q '^CC := scripts/basic/cc-wrapper ' "$builddir/Makefile" \
 		|| die "cc-wrapper hook moved, re-check the top-level Makefile"
-	sed -i 's|^CC := scripts/basic/cc-wrapper ||' "$builddir/Makefile"
+	sed -i 's|^CC := scripts/basic/cc-wrapper |CC := |' "$builddir/Makefile"
 
 	# Same reason: drop -Werror wherever the tree hardcodes it. The whole
 	# token has to go - a bare 's/-Werror//' would leave "-Werror=implicit-int"

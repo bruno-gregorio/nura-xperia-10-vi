@@ -682,8 +682,8 @@ made the first week of bring-up slow. The findings below are what closed it.
   necessary, not sufficient. The likely failure is Type-C role detection:
   `TYPEC_QCOM_PMIC` is not set, so the gadget depends on the PMIC/charger
   driver reporting over extcon.
-- **The display clock controller is a USB dependency on this SoC** — Reasoned,
-  from the stock device tree; not yet confirmed on the device. The chain, read
+- **The display clock controller is a USB dependency on this SoC** — Verified
+  on the device, by the flash log of the 19:23 round. The chain, read
   backwards from `dwc3-msm`: it wants a `ddr-usb` interconnect path through
   `interconnect@19100000`, whose `qcom,bcm-voters = <0x13e 0x13f>` names two
   voters; `0x13f` is `/soc/rsc@af20000/bcm_voter`, a child of the display RSC;
@@ -697,6 +697,42 @@ made the first week of bring-up slow. The findings below are what closed it.
   loads after the USB bring-up step, on the reasoning that display drivers are
   a hang risk. It has been moved into the first pass. The real init never had
   this problem, because it loads every module at once.
+- **With dispcc loaded, the whole deferral chain resolves** — Verified. In the
+  19:23 flash log, `af20000.rsc` binds `rpmh`, `af20000.rsc:bcm_voter` binds
+  `bcm_voter`, `19100000.interconnect` binds `qnoc-parrot`, and
+  `a600000.ssusb` binds `msm-dwc3`. `devices_deferred` no longer mentions USB
+  at all - only display GPIO regulators, `qcom,scmi`, `gpio_keys` and
+  `kgsl-smmu`.
+- **`eud` binds and gives us a EUD UART** — Verified.
+  `88e0000.qcom,msm-eud: ttyEUD0 at MMIO 0x0 (irq = 263) is a EUD UART`, and
+  the device binds `msm-eud`. That half of the fix was right.
+- **dispcc was loading 200 ms too late, not far too late** — Verified from the
+  timestamps. The USB bring-up ran at 2.95 s, `dispcc` at ~3.1 s and
+  `msm-dwc3` finished probing at 4.33 s. The probe log shows `udc-core:
+  couldn't find an available UDC or it's busy` twice, which also proves the
+  pinned `deviceinfo_usb_network_udc` is being honoured - it refused to fall
+  back to the emulator.
+- **`dwc3-msm` probes and then stays in "none" mode** — Verified. The last
+  thing it prints is `IRQ hs_phy_irq not found`, `Nominal values not found`,
+  `Using default bus votes`, and then nothing. `a600000.dwc3` never appears as
+  a platform device, so no real UDC is ever registered and `/sys/class/udc`
+  holds only `dummy_udc.0`. The stock tree gives `ssusb@a600000` a
+  `dwc3@a600000` child with `dr_mode = "otg"` and `usb-role-switch`, so the
+  core is only created when something asks for a role. On Android that request
+  comes from the charger and Type-C stack, none of which exists in an
+  initramfs.
+- **The driver has a sysfs mode override, and our build has it** — Verified in
+  `dwc3-msm.ko`: `dev_attr_mode`, `mode_store`, `dwc3_otg_start_peripheral`,
+  the strings `peripheral`, `host`, `none`, and `dev_attr_usb_data_enabled`.
+  Neither `eud.ko` nor `dwc3-msm.ko` takes any module parameter, so sysfs is
+  the only way in. The staged probe now writes `peripheral` to
+  `/sys/bus/platform/devices/*.ssusb/mode` and waits up to twelve seconds for
+  a non-dummy UDC.
+- **Where that write belongs for the real init** — Open. `init.sh` calls
+  `load_modules` and then `setup_usb_network` with nothing in between, and
+  `run_hooks` is never called before that point, so there is no sanctioned
+  place to put a device quirk. Proving the mechanism in the staged probe comes
+  first.
 
 ## Flashing
 

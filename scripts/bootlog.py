@@ -482,6 +482,38 @@ for m in $PASS1; do
 	modprobe "$m" >> "$LOG" 2>&1
 done
 
+# dwc3-msm probes, registers a role switch, and then sits in "none" mode: it
+# never creates its dwc3@a600000 core child, so no real UDC is ever registered
+# and the gadget has nothing to bind to but dummy_udc.0. The DT says
+# dr_mode = "otg" with usb-role-switch, so something has to ask for a role.
+# Nothing in an initramfs does - on Android that comes from the charger stack.
+# The driver's own "mode" attribute is the short way to ask.
+mark 55 "forcing peripheral mode on the ssusb wrapper"
+for d in /sys/bus/platform/devices/*.ssusb; do
+	[ -w "$d/mode" ] || continue
+	echo peripheral > "$d/mode" 2>>"$LOG"
+	echo "wrote peripheral to $d/mode" >> "$LOG"
+	[ -w "$d/usb_data_enabled" ] && echo 1 > "$d/usb_data_enabled" 2>>"$LOG"
+done
+# The core comes up from a work queue, so the UDC appears a moment later.
+# Re-mark on every pass: the stall watchdog resets the phone after fifteen
+# seconds of no progress, and a wait that looks like a hang would be reset.
+w=0
+while [ "$w" -lt 12 ]; do
+	real=""
+	for u in /sys/class/udc/*; do
+		case "${u##*/}" in
+		dummy_udc*|'*') ;;
+		*) real="${u##*/}" ;;
+		esac
+	done
+	[ -n "$real" ] && break
+	w=$((w + 1))
+	mark 56 "waiting for a real UDC, ${w}s"
+	sleep 1
+done
+echo "udc wait ended after ${w}s, real udc: ${real:-none}" >> "$LOG"
+
 mark 60 "udc: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')"
 mark 61 setup_usb_network
 setup_usb_network >> "$LOG" 2>&1

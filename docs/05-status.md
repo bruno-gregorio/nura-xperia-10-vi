@@ -160,8 +160,13 @@ does the AVB side offline, from the dumps, without touching the phone.
   and `GOLD_CPU_OFF`. The fixups cannot resolve, the overlay cannot be applied,
   and the device is declared corrupt. Nothing about AVB, signatures or
   `os_version` was ever involved.
-- **Carrying Sony's device trees is the way round it for now** — Reasoned,
-  untested on the device. `scripts/swap-vendor-dtb.py` rebuilds a
+- **Carrying Sony's device trees gets us past the bootloader** — Verified on
+  the device. Our kernel, our initramfs and our command line flashed together
+  with Sony's fourteen trees produced no corrupt message for the first time;
+  the phone sat on the Sony logo instead, which is what a handed-off boot with
+  no display driver looks like. No USB gadget came up, so the debug shell was
+  not reached, and how far the kernel got is still unknown.
+- **Carrying Sony's device trees is the way round it** — Verified. `scripts/swap-vendor-dtb.py` rebuilds a
   `vendor_boot` with a different dtb area and leaves every other section and
   header field alone, so our kernel, our initramfs and our command line can
   travel with Sony's fourteen trees until our own base defines the labels the

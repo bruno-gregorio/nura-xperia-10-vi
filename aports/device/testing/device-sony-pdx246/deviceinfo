@@ -46,9 +46,9 @@ deviceinfo_rootfs_image_sector_size="4096"
 #
 # earlycon: parrot.dtb points stdout-path at the GENI port on 0x98c000 and
 # already asks for console=ttyMSM0,115200n8 in chosen/bootargs, so a bare
-# "earlycon" is enough - it picks the port up from the device tree. This is
-# the only thing that can print before the console driver registers, and it
-# only works because the driver is builtin (see pmos.config).
+# "earlycon" is enough - it picks the port up from the device tree. It works
+# with msm_geni_serial left as a module because Qualcomm builds the early
+# console as its own always-builtin object; see pmos.config.
 #
 # pmos.debug-shell: stop in the initramfs instead of continuing to a userspace
 # that has no display driver to draw on. The shell brings up the USB gadget and

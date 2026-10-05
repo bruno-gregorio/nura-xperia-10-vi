@@ -41,14 +41,14 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 | Kernel aport layout (two tarballs, DT into `dts/vendor`) | **Verified** | `dts/Makefile` keys off `vendor/Makefile`, and the tree configures and compiles from it |
 | Only `parrot.dtb` is built, not Qualcomm's whole DT release | **Verified** | `make dtbs` emits exactly one `DTC` line. The stock `audio/` and `camera/` trees cannot build at all without headers from the out-of-tree `sm6450-modules` repo |
 | `pmos.config` survives `olddefconfig` intact | **Verified** | Every `=y`, `=n` and "is not set" in it was read back out of the generated `.config` |
-| Debug UART is builtin, so `earlycon` can work | **Verified** | `MSM_GENI_SE`, `SERIAL_MSM_GENI`, `SERIAL_MSM_GENI_CONSOLE` all `=y` in the generated config |
+| `earlycon` works with the serial driver left modular | **Verified** | `msm_geni_serial_earlycon.o` is built by `CONFIG_SERIAL_MSM_GENI_EARLY_CONSOLE`, which is a *bool*, so it is always in `vmlinux`; it carries `OF_EARLYCON_DECLARE(..., "qcom,msm-geni-console", ...)`, the compatible on the port in `parrot.dtb`. Building the GENI drivers in instead pulls IPC logging, then minidump, then SMEM — stock keeps that cluster modular on purpose |
 | This tree expects an `O=` build; we build in tree | **Verified** | Qualcomm's 137 tracepoint headers use `TRACE_INCLUDE_PATH .` and need `-I$(srctree)/$(src)`, which `scripts/Makefile.lib` adds only `ifdef building_out_of_srctree`. `prepare()` drops that condition. Expect more in-tree assumptions of this shape |
 | Kernel builds with Alpine clang | Unverified | In progress; `-Werror` stripped, `cc-wrapper` removed, LTO/CFI off |
 | `pmos.config` satisfies `pmb kconfig check` | Unverified | Written against `kconfigcheck.toml`, not yet run |
 | boot-deploy emits usable `boot.img` + `vendor_boot.img` | Reasoned | boot-deploy's v4 path does exactly this |
 | `deviceinfo_dtb="vendor/qcom/parrot"` resolves | Reasoned | `dtbs_install` path vs boot-deploy's `find_dtb` glob |
 | Leaving stock `dtbo` in place gives the right DT | Reasoned | This is what stock does; untested with *our* base |
-| The 88 first-stage modules are all in-tree | **Verified** | Every name matched to an `obj-$(CONFIG_...)` target in the kernel Makefiles. 88, not 90: `msm-geni-se` and `msm_geni_serial` are builtin now and have no `.ko` |
+| The 90 first-stage modules are all in-tree | **Verified** | Every name matched to an `obj-$(CONFIG_...)` target in the kernel Makefiles. The list is stock's, unmodified |
 | USB module names (`dwc3-msm`, `phy-msm-*`) | Verified | `drivers/usb/{dwc3,phy}/Makefile`: `CONFIG_USB_DWC3_MSM` -> `dwc3-msm.o`, `CONFIG_MSM_HSUSB_PHY` -> `phy-msm-snps-hs.o`, `CONFIG_USB_MSM_SSPHY_QMP` -> `phy-msm-ssusb-qmp.o`. `parrot_GKI.config` enables only these two PHYs (no eUSB2, no QUSB) |
 | Every kernel-side prerequisite for the USB gadget is present | **Verified** | `USB_DWC3=y` with `USB_DWC3_DUAL_ROLE=y` (not host-only), and `USB_CONFIGFS_{ACM,NCM,RNDIS,MASS_STORAGE}` all `=y`. The glue (`dwc3-msm`) and the two PHYs are modules and are in `modules-initfs` |
 | USB gadget actually enumerates on the device | Guess | Config is necessary, not sufficient. The likely failure is Type-C role detection: `TYPEC_QCOM_PMIC` is not set, so the gadget depends on the PMIC/charger driver reporting over extcon |

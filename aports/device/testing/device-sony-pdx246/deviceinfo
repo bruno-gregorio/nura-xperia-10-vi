@@ -6,6 +6,18 @@ deviceinfo_format_version="0"
 deviceinfo_name="Sony Xperia 10 VI"
 deviceinfo_manufacturer="Sony"
 deviceinfo_codename="sony-pdx246"
+
+# Name the real USB controller rather than letting the initramfs pick. Without
+# this, get_usb_udc() takes the first entry in /sys/class/udc, and this kernel
+# also builds dummy_hcd, which registers dummy_udc.0 - a software host and
+# gadget emulator with no connection to the USB-C port. On 2026-10-05 the
+# gadget bound to it and enumerated beautifully: cdc_ncm, cdc_acm, ttyACM0,
+# usb0 with an IP, "USB_STATE=CONFIGURED", all of it inside the phone and
+# invisible from outside. Naming the controller means a gadget either lands on
+# the hardware or fails loudly. From the stock boot: a600000.ssusb is the
+# Qualcomm glue and a600000.dwc3 the core, and the core is what registers
+# the UDC.
+deviceinfo_usb_network_udc="a600000.dwc3"
 deviceinfo_year="2024"
 deviceinfo_arch="aarch64"
 

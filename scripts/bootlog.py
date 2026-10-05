@@ -85,6 +85,23 @@ pmbootlog_write() {
 		dmesg 2>/dev/null
 		echo "--- modules ---"
 		cat /proc/modules 2>/dev/null
+		# What the probe itself got up to, which dmesg does not say.
+		echo "--- probe log ---"
+		cat /pmprobe.log 2>/dev/null
+		# The three things that answer "why did this driver never probe?".
+		# A driver that is waiting on a provider prints nothing at all, so
+		# without these a silent permanent deferral is invisible - which is
+		# exactly how dwc3-msm hid for a day.
+		echo "--- deferred probes ---"
+		mount -t debugfs none /sys/kernel/debug 2>/dev/null
+		cat /sys/kernel/debug/devices_deferred 2>/dev/null
+		echo "--- udc ---"
+		ls /sys/class/udc 2>/dev/null
+		echo "--- platform devices and their drivers ---"
+		for d in /sys/bus/platform/devices/*; do
+			drv=$(readlink "$d/driver" 2>/dev/null)
+			echo "${d##*/} ${drv##*/}"
+		done 2>/dev/null
 		echo "--- end seq=$1 ---"
 	} > /pmbootlog.tmp 2>/dev/null
 	dd if=/pmbootlog.tmp of="$2" bs=65536 conv=notrunc,fsync 2>/dev/null
@@ -322,76 +339,111 @@ crypto-qti-common crypto-qti-hwkm hwkm ufshcd-crypto-qti
 #         because a deliberate reset keeps feeding the retry counter.
 STAGE_INIT = r"""#!/bin/busybox ash
 # Staged bring-up probe, written by scripts/bootlog.py. Not a real init.
-export PATH=/usr/bin:/bin:/usr/sbin:/sbin
-/bin/busybox --install -s
-/bin/busybox-extras --install -s 2>/dev/null
+#
+# Nothing in here may run before the watchdog. The first version of this probe
+# armed it after mount_proc_sys_dev, which meant the handful of steps before
+# that - sourcing init_functions.sh, installing the busybox applets, mounting
+# /proc itself - had no net under them at all. The phone hung in exactly that
+# window and sat there for 22 minutes. So the watchdog goes first, and it is
+# written to need nothing: no applet links, no /proc, no storage. The reboot
+# probe already proved that a bare busybox sleep and reboot -f work this early.
+B=/bin/busybox
+$B echo 0 > /pmstage
 
-IN_CI=false
-LOG_PREFIX="[pmOS-rd]"
-. /init_functions.sh
-. /usr/share/misc/source_deviceinfo 2>/dev/null
-
-LOG=/pmprobe.log
-echo 0 > /pmstage
-
-mark() {
-	echo "$1" > /pmstage
-	echo "[$1] $2" >> "$LOG"
-	echo "[pmprobe $1] $2"
+pmstage_reset() {
+	# sysrq-b is emergency_restart(), which skips the orderly shutdown a
+	# wedged driver can block, so prefer it - but it needs /proc, which may
+	# be exactly what did not happen yet.
+	[ -w /proc/sysrq-trigger ] && $B echo b > /proc/sysrq-trigger
+	$B reboot -f
+	# reboot(2) refused. Do not sit here looking like a hang.
+	$B sleep 90
+	$B reboot -f
 }
 
-mark 1 mount_proc_sys_dev
-mount_proc_sys_dev
-mkdir -p /tmp
-
-# Make a wedged modprobe recoverable without anyone touching the phone.
-# khungtaskd panics on a task stuck uninterruptible, which is what a driver
-# waiting forever on a clock, a regulator or firmware looks like, and panic=
-# on the command line turns that into a reset. sysrq is the escape hatch
-# underneath: 'b' is emergency_restart(), which skips the orderly shutdown a
-# wedged driver could block.
-echo 1  > /proc/sys/kernel/sysrq
-echo 1  > /proc/sys/kernel/hung_task_panic
-echo 20 > /proc/sys/kernel/hung_task_timeout_secs
-
-# The stall watchdog, started before anything can hang. It is the only reason
-# this probe is safe to run unattended.
+# The stall watchdog. Fifteen seconds is generous: on Sony's own kernel this
+# hardware brings UFS up 0.67s into the boot and the largest gap anywhere in
+# its log is 2.3s, so nothing here legitimately takes that long.
 (
 	last=-1
 	stall=0
 	while :; do
-		cur=$(cat /pmstage 2>/dev/null) || cur=-1
+		cur=$($B cat /pmstage 2>/dev/null) || cur=-1
 		if [ "$cur" = "$last" ]; then
 			stall=$((stall + 1))
 		else
 			stall=0
 			last=$cur
 		fi
-		# Once the gadget is up the index no longer has to be guessed
-		# from the clock, so stop hurrying and leave time to look.
+		# Once the gadget is up the step no longer has to be read off
+		# the clock, so stop hurrying and leave time to look.
 		if [ -e /pmusb ]; then
 			[ "$stall" -ge 600 ] && break
 		else
-			[ "$stall" -ge 25 ] && break
+			[ "$stall" -ge 15 ] && break
 		fi
-		sleep 1
+		$B sleep 1
 	done
-	# Encode where it stopped as a delay, one second per step. Capped so
-	# that seven attempts stay inside the loop's patience.
 	n=$last
 	[ "$n" -ge 0 ] 2>/dev/null || n=0
 	[ "$n" -gt 99 ] && n=99
-	echo "stalled at $n, resetting" >> /pmprobe.log
-	sleep "$n"
-	echo b > /proc/sysrq-trigger
-	reboot -f
+	# One second per step completed. Seven attempts multiply that by seven,
+	# so the time the bootloader takes to give up names the step.
+	$B sleep "$n"
+	pmstage_reset
 ) &
 
-mark 2 parse_cmdline
+# A backstop under the backstop, in case the watchdog above cannot run - if a
+# wedged driver holds something the shell needs to fork, every loop in this
+# file stops with it. 240s is well clear of the watchdog's own worst case of
+# 15 + 99, so this firing at all is itself the finding. It defers to the live
+# link for the same reason the watchdog does: once there is something to look
+# at, resetting the phone is the last thing anyone wants.
+(
+	$B sleep 240
+	[ -e /pmusb ] || pmstage_reset
+	$B sleep 600
+	pmstage_reset
+) &
+
+LOG=/pmprobe.log
+mark() {
+	$B echo "$1" > /pmstage
+	$B echo "[$1] $2" >> "$LOG"
+	$B echo "[pmprobe $1] $2"
+}
+
+mark 1 "busybox --install"
+$B --install -s
+mark 2 "busybox-extras --install"
+$B-extras --install -s 2>/dev/null
+
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+IN_CI=false
+LOG_PREFIX="[pmOS-rd]"
+mark 3 "sourcing init_functions.sh"
+. /init_functions.sh
+mark 4 "sourcing deviceinfo"
+. /usr/share/misc/source_deviceinfo 2>/dev/null
+
+mark 5 mount_proc_sys_dev
+mount_proc_sys_dev
+mkdir -p /tmp
+
+# Make a wedged modprobe recoverable by the kernel as well as by the shell.
+# khungtaskd panics on a task stuck uninterruptible, which is what a driver
+# waiting forever on a clock, a regulator or firmware looks like, and panic=5
+# on the command line turns that into a reset.
+mark 6 "sysrq and hung_task knobs"
+echo 1  > /proc/sys/kernel/sysrq
+echo 1  > /proc/sys/kernel/hung_task_panic
+echo 20 > /proc/sys/kernel/hung_task_timeout_secs
+
+mark 7 parse_cmdline
 parse_cmdline < /proc/cmdline
-mark 3 setup_firmware_path
+mark 8 setup_firmware_path
 setup_firmware_path
-mark 4 setup_mdev
+mark 9 setup_mdev
 setup_mdev
 
 # Split the real list in two, keeping its order in both halves.
@@ -412,7 +464,7 @@ for m in $ALL; do
 	*)        PASS1="$PASS1 $m" ;;
 	esac
 done
-[ -n "$SKIPPED" ] && mark 5 "skipping:$SKIPPED"
+[ -n "$SKIPPED" ] && echo "skipping:$SKIPPED" >> "$LOG"
 
 i=9
 for m in $PASS1; do
@@ -432,8 +484,8 @@ mark 64 start_unudhcpd
 start_unudhcpd >> "$LOG" 2>&1
 
 if [ -n "$(cat /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null)" ]; then
-	# A live link. Tell the watchdog to stop hurrying, then put a shell on
-	# every way in and keep streaming progress at whoever is listening.
+	# A live link. Tell both watchdogs to stop hurrying, then put a shell
+	# on every way in and stream progress at whoever is listening.
 	touch /pmusb
 	mark 65 "gadget bound, opening shells"
 	cat > /sbin/pmos_getty <<-'EOF'
@@ -470,8 +522,7 @@ mark 99 "all modules loaded"
 # Nothing left to find out on its own. Hold still while anyone connected has
 # a look, then hand the phone back to the loop by resetting it.
 sleep 600
-echo b > /proc/sysrq-trigger
-reboot -f
+pmstage_reset
 """
 
 
@@ -532,11 +583,11 @@ def _rebuild(d, s, newrd):
 
 
 # How long one attempt costs, in seconds, apart from the encoded delay: the
-# bootloader's own ~18 before it enters the kernel, plus the 25 the stall
+# bootloader's own ~18 before it enters the kernel, plus the 15 the stall
 # watchdog waits before deciding progress has stopped. Measured on this
 # device: the reboot probe did seven attempts in 186s with an 8s sleep in
 # them, so 186/7 - 8 = 18.6.
-ATTEMPT_FIXED = 18 + 25
+ATTEMPT_FIXED = 18 + 15
 ATTEMPTS = 7
 FALLBACK_BOOT = 35      # the stock slot getting as far as answering adb
 
@@ -558,8 +609,10 @@ def stage_map(src, skip=""):
     p1 = [m for m in mods if m not in defer]
     p2 = [m for m in mods if m in defer]
 
-    m = {1: "mount_proc_sys_dev", 2: "parse_cmdline",
-         3: "setup_firmware_path", 4: "setup_mdev"}
+    m = {1: "busybox --install", 2: "busybox-extras --install",
+         3: "sourcing init_functions.sh", 4: "sourcing deviceinfo",
+         5: "mount_proc_sys_dev", 6: "sysrq and hung_task knobs",
+         7: "parse_cmdline", 8: "setup_firmware_path", 9: "setup_mdev"}
     for i, mod in enumerate(p1, 10):
         m[i] = f"pass1 modprobe {mod}"
     m[60] = "reading /sys/class/udc"

@@ -114,6 +114,16 @@ dispcc-ravelin
 # stage - but this is the only way into a device with no working display, so it
 # has to be in the initramfs. dwc3 itself and the configfs gadget functions are
 # built in; these are the glue and the PHYs.
+#
+# eud is the Embedded USB Debugger, and leaving it out cost a day. The
+# ssusb@a600000 node has "extcon = <&eud>", so dwc3-msm asks
+# extcon_get_edev_by_phandle() for it, and that returns -EPROBE_DEFER until
+# something registers an extcon on that node - forever, silently, with not one
+# line in dmesg. Stock loads eud.ko; we built it and never loaded it. Verified
+# 2026-10-05: the whole boot came up with dwc3-msm live and zero users, and the
+# USB gadget fell back to the emulated dummy_udc instead of the real
+# controller, which is why nothing ever appeared on the host.
+eud
 phy-msm-snps-hs
 phy-msm-ssusb-qmp
 dwc3-msm

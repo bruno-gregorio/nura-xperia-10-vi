@@ -22,6 +22,7 @@ makedepends="
 	devicepkg-dev
 	findutils
 	flex
+	kmod
 	linux-headers
 	lld
 	llvm
@@ -60,11 +61,36 @@ prepare() {
 	rm -f "$builddir/arch/$_carch/boot/dts/vendor"
 	mv "$srcdir/$_dt_repo-$_dt_commit" "$builddir/arch/$_carch/boot/dts/vendor"
 
-	# Android builds this tree with a pinned Clang. Alpine's is newer and warns
-	# about constructs Google's did not, and -Werror turns each one fatal.
+	# With CONFIG_BUILD_ARM64_DT_OVERLAY=y the vendor device tree Makefile
+	# fills in dtbo-y only, and scripts/Makefile.dtbo builds parrot.dtb purely
+	# as a dependency of the overlays that name it in -base. That is the DTB we
+	# boot (the bootloader applies the stock parrot-qrd overlay to it), but
+	# scripts/Makefile.dtbinst installs $(dtb-y), which is empty here. Name it
+	# so that dtbs_install actually puts it in the package. These lines land
+	# after the Makefile's own "always-y := $(dtb-y)", hence the second one.
+	cat >> "$builddir/arch/$_carch/boot/dts/vendor/qcom/Makefile" <<-EOF
+
+		# postmarketOS: install the base DTB we boot from.
+		dtb-\$(CONFIG_ARCH_PARROT) += parrot.dtb
+		always-\$(CONFIG_ARCH_PARROT) += parrot.dtb
+	EOF
+
+	# Qualcomm wraps $(CC) in scripts/basic/cc-wrapper, which reads the
+	# compiler's stderr and fails the build on any warning not in a
+	# three-entry allowlist. That only holds with the exact Clang Google
+	# pinned for android12-5.10 (r416183b, Clang 12); with Alpine's Clang the
+	# first new warning kills the build, and the error it prints does not say
+	# why. Drop the wrapper.
+	grep -q '^CC := scripts/basic/cc-wrapper ' "$builddir/Makefile" \
+		|| die "cc-wrapper hook moved, re-check the top-level Makefile"
+	sed -i 's|^CC := scripts/basic/cc-wrapper ||' "$builddir/Makefile"
+
+	# Same reason: drop -Werror wherever the tree hardcodes it. The whole
+	# token has to go - a bare 's/-Werror//' would leave "-Werror=implicit-int"
+	# as the nonsense argument "=implicit-int".
 	local i
 	for i in $(find "$builddir" -type f \( -name Makefile -o -name Kbuild \)); do
-		sed -i -e 's/-Werror-/-W/g' -e 's/-Werror//g' "$i"
+		sed -i -E -e 's/-Werror-/-W/g' -e 's/-Werror(=[A-Za-z0-9_,=-]+)?//g' "$i"
 	done
 
 	make ARCH="$_carch" LLVM=1 gki_defconfig
@@ -75,9 +101,43 @@ prepare() {
 	make ARCH="$_carch" LLVM=1 olddefconfig
 }
 
+# Google pinned Clang 12 for this tree; Alpine ships Clang 20+. A decade of new
+# diagnostics sits in between and several of them default to errors. None are
+# actionable for a port, so downgrade the lot to warnings.
+# -Wno-unknown-warning-option has to come first: scripts/Makefile.clang appends
+# -Werror=unknown-warning-option, which would turn every name below that this
+# particular Clang has never heard of into a hard error.
+_kcflags="-Wno-error
+	-Wno-unknown-warning-option
+	-Wno-error=unknown-warning-option
+	-Wno-error=array-bounds
+	-Wno-error=array-parameter
+	-Wno-error=bitwise-instead-of-logical
+	-Wno-error=cast-function-type-mismatch
+	-Wno-error=deprecated-non-prototype
+	-Wno-error=enum-constexpr-conversion
+	-Wno-error=format
+	-Wno-error=gnu-variable-sized-type-not-at-end
+	-Wno-error=implicit-function-declaration
+	-Wno-error=implicit-int
+	-Wno-error=incompatible-function-pointer-types
+	-Wno-error=incompatible-pointer-types
+	-Wno-error=int-conversion
+	-Wno-error=misleading-indentation
+	-Wno-error=pointer-bool-conversion
+	-Wno-error=return-type
+	-Wno-error=single-bit-bitfield-constant-conversion
+	-Wno-error=sometimes-uninitialized
+	-Wno-error=strict-prototypes
+	-Wno-error=unterminated-string-initialization
+	-Wno-error=unused-but-set-variable
+	-Wno-error=unused-command-line-argument
+	-Wno-error=void-pointer-to-enum-cast"
+
 build() {
 	unset LDFLAGS
 	make ARCH="$_carch" LLVM=1 \
+		KCFLAGS="$(echo $_kcflags)" \
 		KBUILD_BUILD_VERSION="$((pkgrel + 1))-postmarketOS" \
 		Image dtbs modules
 }
@@ -85,18 +145,29 @@ build() {
 package() {
 	install -Dm644 "$builddir/arch/$_carch/boot/Image" "$pkgdir/boot/vmlinuz"
 
+	# Alpine is usr-merged, so modules belong under /usr/lib/modules.
 	make modules_install dtbs_install \
 		ARCH="$_carch" \
 		LLVM=1 \
+		KCFLAGS="$(echo $_kcflags)" \
 		INSTALL_PATH="$pkgdir/boot/" \
-		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_MOD_PATH="$pkgdir/usr" \
 		INSTALL_MOD_STRIP=1 \
 		INSTALL_DTBS_PATH="$pkgdir/boot/dtbs"
 
-	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+	rm -f "$pkgdir"/usr/lib/modules/*/build "$pkgdir"/usr/lib/modules/*/source
+
+	# deviceinfo_dtb points here; fail the build rather than ship a boot.img
+	# with no device tree in it.
+	test -f "$pkgdir/boot/dtbs/vendor/qcom/parrot.dtb" \
+		|| die "parrot.dtb was not installed, check the vendor dts Makefile"
 
 	install -D "$builddir/include/config/kernel.release" \
 		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
 }
 
-sha512sums=""
+sha512sums="
+f7e5d009c6699eddefa45a525f9859519baf35ef3a8a28383917868b396dc107a5c92ca1dbb1a744beaf12b812ed4c0451d8f9e88e2950cb40d5c7e5f2de2f02  linux-sony-pdx246-03a594e6c40a35ee47791286e9e9eed91480add2.tar.gz
+5283a79e5520ca148693d7fae23179ad20f27bf69d26f921d6e5122a267985afd75f2723b7fc4f85721ee7076db8a6a28489223fdaa972e9c4588f11d741ccec  linux-sony-pdx246-dt-958dce5aaab6c58df7573843e85398b477d8dc62.tar.gz
+0112c57f5d6ade3e4428ccfdf227633050d4ceb173792ce7d7004d74f9414ea5b43d02bd6d82a836115ed52ef82217310a030c76e58443aa671a613b9df7a1d3  pmos.config
+"

@@ -23,6 +23,7 @@ catches a later hang rather than only a panic.
 
   bootlog.py install <vendor_boot-in> <vendor_boot-out>
   bootlog.py probe   <vendor_boot-in> <vendor_boot-out>
+  bootlog.py stage   <vendor_boot-in> <vendor_boot-out>
   bootlog.py decode  <rddata-dump>
 
 'install' only rewrites the vendor ramdisk. The dtb area is copied across
@@ -279,6 +280,224 @@ def probe(src, dst):
     print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
 
 
+
+# Modules held back from the first pass. The first pass exists to get the USB
+# gadget up before anything has had a chance to hang, so it leaves out
+# everything the gadget cannot need: the whole storage chain, thermal and DCVS,
+# the Gunyah hypervisor drivers, crypto, display, and the SM4450 ("ravelin")
+# controllers this SoC has its own copy of. None of them is dropped - the
+# second pass loads them in exactly the order the real list has them.
+STAGE_DEFER = """
+gh_virt_wdt qcom-pmu-lib qcom_wdt_core dcvs_fp qcom-dcvs
+dispcc-parrot dispcc-ravelin gcc-ravelin pinctrl-ravelin qnoc-ravelin
+qcom-cpufreq-hw sched-walt qcom_tsens thermal_pause cpu_hotplug bcl_pmic5
+gh_msgq gh_rm_drv gh_arm_drv gh_ctrl gh_dbl
+icc-debug mem_buf_dev mem_buf mem-hooks memory_dump_v2
+msm_dma_iommu_mapping msm_geni_serial msm-geni-se qcom_cpu_vendor_hooks
+qcom-dload-mode qcom_dma_heaps qrtr msm_qmp qti-regmap-debugfs
+nvmem_qcom-spmi-sdam rtc-pm8xxx tmecom-intf
+sdhci-msm-scaling cqhci sdhci-msm
+phy-qcom-ufs phy-qcom-ufs-qrbtc-sdm845 ufs_qcom phy-qcom-ufs-qmp-v4-parrot
+crypto-qti-common crypto-qti-hwkm hwkm ufshcd-crypto-qti
+"""
+
+# A /init that loads the modules one at a time and opens every channel it can
+# before doing so. Not a real init: it stops well short of a root filesystem.
+#
+# The real init loads all 89 modules with a single "modprobe -a", so one module
+# that wedges stops the boot with nothing to show for it - which is exactly the
+# state this port has been stuck in. This opens two channels first, in order of
+# usefulness:
+#
+#   USB.  By symbol dependency the gadget needs eleven of those modules and
+#         none of the storage ones, so loading a subset first can get a live
+#         link up before the boot dies. Then everything is visible as it
+#         happens, over the network gadget and the ACM serial port.
+#   Time. A watchdog notices when module loading stops making progress and
+#         delays the reset by one second per step already done, so the time the
+#         bootloader takes to run its retry counter down names the step that
+#         hung. It needs no storage, no USB and no console, which is all that
+#         is left when the gadget does not come up - and it is hands-free,
+#         because a deliberate reset keeps feeding the retry counter.
+STAGE_INIT = r"""#!/bin/busybox ash
+# Staged bring-up probe, written by scripts/bootlog.py. Not a real init.
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+/bin/busybox --install -s
+/bin/busybox-extras --install -s 2>/dev/null
+
+IN_CI=false
+LOG_PREFIX="[pmOS-rd]"
+. /init_functions.sh
+. /usr/share/misc/source_deviceinfo 2>/dev/null
+
+LOG=/pmprobe.log
+echo 0 > /pmstage
+
+mark() {
+	echo "$1" > /pmstage
+	echo "[$1] $2" >> "$LOG"
+	echo "[pmprobe $1] $2"
+}
+
+mark 1 mount_proc_sys_dev
+mount_proc_sys_dev
+mkdir -p /tmp
+
+# Make a wedged modprobe recoverable without anyone touching the phone.
+# khungtaskd panics on a task stuck uninterruptible, which is what a driver
+# waiting forever on a clock, a regulator or firmware looks like, and panic=
+# on the command line turns that into a reset. sysrq is the escape hatch
+# underneath: 'b' is emergency_restart(), which skips the orderly shutdown a
+# wedged driver could block.
+echo 1  > /proc/sys/kernel/sysrq
+echo 1  > /proc/sys/kernel/hung_task_panic
+echo 20 > /proc/sys/kernel/hung_task_timeout_secs
+
+# The stall watchdog, started before anything can hang. It is the only reason
+# this probe is safe to run unattended.
+(
+	last=-1
+	stall=0
+	while :; do
+		cur=$(cat /pmstage 2>/dev/null) || cur=-1
+		if [ "$cur" = "$last" ]; then
+			stall=$((stall + 1))
+		else
+			stall=0
+			last=$cur
+		fi
+		# Once the gadget is up the index no longer has to be guessed
+		# from the clock, so stop hurrying and leave time to look.
+		if [ -e /pmusb ]; then
+			[ "$stall" -ge 600 ] && break
+		else
+			[ "$stall" -ge 25 ] && break
+		fi
+		sleep 1
+	done
+	# Encode where it stopped as a delay, one second per step. Capped so
+	# that seven attempts stay inside the loop's patience.
+	n=$last
+	[ "$n" -ge 0 ] 2>/dev/null || n=0
+	[ "$n" -gt 99 ] && n=99
+	echo "stalled at $n, resetting" >> /pmprobe.log
+	sleep "$n"
+	echo b > /proc/sysrq-trigger
+	reboot -f
+) &
+
+mark 2 parse_cmdline
+parse_cmdline < /proc/cmdline
+mark 3 setup_firmware_path
+setup_firmware_path
+mark 4 setup_mdev
+setup_mdev
+
+# Split the real list in two, keeping its order in both halves.
+LIST=/lib/modules/initramfs.load
+ALL=$(grep -v '^[[:space:]]*#' "$LIST" | tr -s ' \t\n' ' ')
+PASS1=""
+PASS2=""
+for m in $ALL; do
+	case " @DEFER@ " in
+	*" $m "*) PASS2="$PASS2 $m" ;;
+	*)        PASS1="$PASS1 $m" ;;
+	esac
+done
+
+i=9
+for m in $PASS1; do
+	i=$((i + 1))
+	mark "$i" "pass1 modprobe $m"
+	modprobe "$m" >> "$LOG" 2>&1
+done
+
+mark 60 "udc: $(ls /sys/class/udc 2>/dev/null | tr '\n' ' ')"
+mark 61 setup_usb_network
+setup_usb_network >> "$LOG" 2>&1
+mark 62 setup_usb_acm_configfs
+setup_usb_acm_configfs >> "$LOG" 2>&1
+mark 63 setup_usb_configfs_udc
+setup_usb_configfs_udc >> "$LOG" 2>&1
+mark 64 start_unudhcpd
+start_unudhcpd >> "$LOG" 2>&1
+
+if [ -n "$(cat /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null)" ]; then
+	# A live link. Tell the watchdog to stop hurrying, then put a shell on
+	# every way in and keep streaming progress at whoever is listening.
+	touch /pmusb
+	mark 65 "gadget bound, opening shells"
+	cat > /sbin/pmos_getty <<-'EOF'
+	#!/bin/sh
+	exec /bin/sh -l
+	EOF
+	chmod +x /sbin/pmos_getty
+	telnetd -b "${HOST_IP}:23" -l /sbin/pmos_getty &
+	run_getty ttyGS0
+	( tail -f "$LOG" > /dev/ttyGS0 2>/dev/null ) &
+else
+	mark 66 "no gadget - falling back to the retry-counter channel"
+fi
+
+mark 70 "arming the flash log"
+. /bootlog.sh
+
+i=70
+for m in $PASS2; do
+	i=$((i + 1))
+	mark "$i" "pass2 modprobe $m"
+	modprobe "$m" >> "$LOG" 2>&1
+done
+
+mark 99 "all modules loaded"
+{
+	echo "--- deferred probes ---"
+	mount -t debugfs none /sys/kernel/debug 2>/dev/null
+	cat /sys/kernel/debug/devices_deferred 2>/dev/null
+	echo "--- block devices ---"
+	ls /sys/block 2>/dev/null
+} >> "$LOG" 2>&1
+
+# Nothing left to find out on its own. Hold still while anyone connected has
+# a look, then hand the phone back to the loop by resetting it.
+sleep 600
+echo b > /proc/sysrq-trigger
+reboot -f
+"""
+
+
+def stage(src, dst):
+    """Rebuild a vendor_boot whose /init is the staged module probe."""
+    d = open(src, "rb").read()
+    s = sections(d)
+    o_rd, vr = s["ramdisk"]
+    entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
+
+    init = next((e for e in entries if e[1] == "init"), None)
+    if init is None:
+        sys.exit("error: no /init in the vendor ramdisk - wrong image?")
+
+    defer = " ".join(STAGE_DEFER.split())
+    init[2] = STAGE_INIT.replace("@DEFER@", defer).encode()
+
+    # The staged init sources /bootlog.sh itself, once the storage chain is
+    # about to be loaded, so the file still has to be there.
+    entries = [e for e in entries if e[1] != "bootlog.sh"]
+    entries.append([[0, 0o100755, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+                    "bootlog.sh", BOOTLOG_SH.encode()])
+
+    newrd = gzip.compress(cpio_build(entries), 6)
+    open(dst, "wb").write(_rebuild(d, s, newrd))
+
+    held = len(defer.split())
+    print(f"  in   {src}")
+    print(f"  out  {dst}")
+    print(f"  /init replaced with the staged probe ({len(init[2])} bytes)")
+    print(f"  {held} modules held back for the second pass")
+    print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
+    print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
+
+
 def _rebuild(d, s, newrd):
     """Reassemble a vendor_boot around a new vendor ramdisk."""
     up = s["up"]
@@ -321,6 +540,8 @@ if __name__ == "__main__":
         install(a[1], a[2])
     elif len(a) == 3 and a[0] == "probe":
         probe(a[1], a[2])
+    elif len(a) == 3 and a[0] == "stage":
+        stage(a[1], a[2])
     elif len(a) == 2 and a[0] == "decode":
         decode(a[1])
     else:

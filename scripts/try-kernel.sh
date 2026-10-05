@@ -73,6 +73,17 @@ getvar() { fastboot getvar "$1" 2>&1 | sed -n "s/^$1: *//p" | head -1; }
 # somebody - me included - decided it was dead and reached for the buttons at
 # the three minute mark, which threw the run away and taught us nothing. A
 # line every fifteen seconds saying how long is left is what stops that.
+# Either half of the initramfs gadget: the network function shows up as usb0
+# or under systemd's predictable name for USB ethernet, and the ACM function as
+# a ttyACM port. Neither needs anything configured on the host to be visible.
+usb_gadget_present() {
+	[ -n "$(ls /dev/ttyACM* 2>/dev/null)" ] && return 0
+	ip -o link show 2>/dev/null \
+		| sed -n 's/^[0-9]*: \([^:@]*\)[:@].*/\1/p' \
+		| grep -qE '^(usb[0-9]|enp[0-9]+s[0-9]+[a-z0-9]*u[0-9])' && return 0
+	return 1
+}
+
 wait_for_adb() {
 	limit=${1:-180}
 	i=0
@@ -93,11 +104,23 @@ wait_for_adb() {
 			echo "fastboot"
 			return 0
 		fi
+		# A gadget means the initramfs got far enough to bring USB up,
+		# which is worth stopping for: it is a live link into a boot
+		# that would otherwise only be visible as elapsed time.
+		if usb_gadget_present; then
+			printf '\r   %-70s\n' "USB gadget appeared after ${i}s" >&2
+			echo "gadget"
+			return 0
+		fi
 		i=$((i + 2))
 		if [ $((i % 15)) -lt 2 ]; then
-			# ~54s an attempt, 7 attempts, then the fallback boots.
-			printf '\r   %ds elapsed, about attempt %d of 7 - the logo redrawing is normal, %ds left ' \
-				"$i" "$((i / 54 + 1))" "$((limit - i))" >&2
+			# Deliberately not a count of attempts. The retry counter
+			# only advances when the bootloader begins one, so a hung
+			# kernel produces exactly one - and earlier versions of
+			# this line reported "attempt 4 of 7" during runs where
+			# a single attempt had ever happened.
+			printf '\r   %ds elapsed, %ds left - the logo redrawing is normal ' \
+				"$i" "$((limit - i))" >&2
 		fi
 	done
 	printf '\r   %-70s\n' "nothing after ${limit}s" >&2
@@ -119,7 +142,16 @@ build_vendor_boot() {
 	# hook broke: the hook writes to UFS from a background job while
 	# load_modules is still bringing the storage stack up, and a write into a
 	# half-probed controller is a plausible way to wedge the whole I/O path.
-	if [ "${PROBE:-0}" = "1" ]; then
+	if [ "${STAGE:-0}" = "1" ]; then
+		# Answers "which module hangs?" - the question the reboot probe
+		# left behind once it showed the initramfs runs. Loads the
+		# modules one at a time instead of in a single modprobe -a, and
+		# tries to get the USB gadget up out of its first pass so the
+		# rest is visible live rather than only as elapsed time.
+		say "STAGE=1: replacing /init with the staged module probe"
+		"$ROOT/scripts/bootlog.py" stage "$WORK/vendor_boot.img" "$WORK/vendor_boot-stage.img"
+		mv "$WORK/vendor_boot-stage.img" "$WORK/vendor_boot.img"
+	elif [ "${PROBE:-0}" = "1" ]; then
 		# Answers "does the initramfs run at all?" using the retry
 		# counter as the only output channel: an init that reboots on
 		# purpose burns all seven attempts and falls back, while a
@@ -223,7 +255,7 @@ cmd_try() {
 	echo "   slot _$cur answering means it crashed and fell back."
 	# Seven attempts at roughly 54 seconds each is already six minutes, and
 	# then the fallback slot still has to boot Android. 420 was not enough.
-	got=$(wait_for_adb 660) || true
+	got=$(wait_for_adb "${WAIT:-660}") || true
 	echo
 	if [ -z "$got" ]; then
 		echo "RESULT: nothing came up in 11 minutes."
@@ -234,6 +266,11 @@ cmd_try() {
 		echo "RESULT: the bootloader gave up and dropped to fastboot."
 		echo "  It did not boot the fallback slot, so read the counter:"
 		echo "    fastboot getvar slot-retry-count:$spare"
+	elif [ "$got" = "gadget" ]; then
+		echo "RESULT: the initramfs got USB up. That is a live link into a"
+		echo "  boot that would otherwise only be visible as elapsed time."
+		echo
+		cmd_harvest || true
 	elif [ "$got" = "_$spare" ]; then
 		echo "RESULT: OUR KERNEL BOOTED. adb answers on slot $got."
 	else
@@ -293,6 +330,73 @@ cmd_log() {
 		>/dev/null 2>&1 || die "could not clear rddata"
 }
 
+# Pull everything off a live initramfs over whichever half of the USB gadget
+# came up. The staged probe holds the phone still for ten minutes and then
+# resets itself, so there is a window here and nobody has to press anything.
+#
+# Neither path configures the host. The network half needs an address on
+# 172.16.42.0/24, which NetworkManager usually takes from the initramfs' own
+# DHCP server but may not; the ACM half needs read/write on a ttyACM node,
+# which is normally root:dialout. Where one of those is missing this says so
+# and stops, because fixing it is a change to the host and therefore the
+# user's call - scripts/console.sh prints the exact commands.
+HARVEST="$ROOT/out/probe-harvest.txt"
+
+harvest_cmds() {
+	printf '%s\n' \
+		'cat /pmprobe.log' \
+		'echo ===STAGE===; cat /pmstage' \
+		'echo ===DEFERRED===; mount -t debugfs none /sys/kernel/debug 2>/dev/null; cat /sys/kernel/debug/devices_deferred' \
+		'echo ===MODULES===; cat /proc/modules' \
+		'echo ===BLOCK===; ls /sys/block' \
+		'echo ===UDC===; cat /sys/kernel/config/usb_gadget/g1/UDC' \
+		'echo ===DMESG===; dmesg' \
+		'echo ===END==='
+}
+
+cmd_harvest() {
+	mkdir -p "$ROOT/out"
+	host_addr=$(ip -4 -o addr show 2>/dev/null | grep -o '172\.16\.42\.[0-9]*' | head -1)
+	if [ -n "$host_addr" ]; then
+		say "harvesting over the network gadget (host $host_addr)"
+		harvest_cmds | timeout 240 python3 "$ROOT/scripts/telnet.py" 172.16.42.1 23 \
+			> "$HARVEST" 2>&1 || true
+		if grep -q '===END===' "$HARVEST" 2>/dev/null; then
+			say "saved to $HARVEST"
+			sed -n '1,40p' "$HARVEST"
+			return 0
+		fi
+		say "the network gadget did not answer; trying the serial port"
+	fi
+
+	acm=$(ls /dev/ttyACM* 2>/dev/null | head -1)
+	if [ -n "$acm" ] && [ -r "$acm" ] && [ -w "$acm" ]; then
+		say "harvesting over the ACM serial port $acm"
+		stty -F "$acm" raw -echo 115200 2>/dev/null || true
+		timeout 90 cat "$acm" > "$HARVEST" 2>/dev/null &
+		catpid=$!
+		# run_getty waits for the host to send something before it
+		# spawns the shell, so that the greeting is not echoed back
+		# garbled. Say hello first, then ask.
+		sleep 1
+		printf '\n' > "$acm" 2>/dev/null || true
+		sleep 3
+		harvest_cmds > "$acm" 2>/dev/null || true
+		wait "$catpid" 2>/dev/null || true
+		say "saved to $HARVEST"
+		sed -n '1,40p' "$HARVEST"
+		return 0
+	fi
+
+	say "the gadget is there but this host cannot talk to it yet"
+	echo "   network: $(ip -o link show 2>/dev/null | sed -n 's/^[0-9]*: \([^:@]*\)[:@].*/\1/p' | grep -E '^(usb[0-9]|enp[0-9]+s[0-9]+[a-z0-9]*u[0-9])' | tr '\n' ' ')"
+	echo "   serial:  $(ls /dev/ttyACM* 2>/dev/null | tr '\n' ' ')"
+	echo
+	echo "   Both fixes change host state, so they are yours to make:"
+	echo "     scripts/console.sh         prints the exact commands"
+	return 1
+}
+
 cmd_restore() {
 	need_fastboot
 	cur=$(getvar current-slot)
@@ -309,7 +413,8 @@ cmd_restore() {
 
 case "${1:-}" in
 	--log)     shift; cmd_log "$@" ;;
+	--harvest) shift; cmd_harvest "$@" ;;
 	--restore) shift; cmd_restore "$@" ;;
 	"")        cmd_try ;;
-	*)         die "usage: $0 [--log | --restore]" ;;
+	*)         die "usage: $0 [--log | --harvest | --restore]" ;;
 esac

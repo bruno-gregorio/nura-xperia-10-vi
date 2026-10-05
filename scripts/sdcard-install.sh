@@ -109,6 +109,28 @@ ip -o addr show | grep -q " $HOST_IP/" \
 	|| die "no interface on this host holds $HOST_IP
        the USB network is not configured; see scripts/console.sh"
 
+# --- stop the clock --------------------------------------------------------
+# Both the staged probe and the patched real init reset the phone on a timer
+# measured in minutes, which is right for an unattended boot and wrong while a
+# gigabyte is going onto the card. /pmhold makes those resets wait. It has to
+# come off again, or the phone stops being hands-free, so the trap goes in at
+# the same moment.
+HELD=0
+HTTP_PID=
+SERVE_DIR=
+cleanup() {
+	[ -n "$HTTP_PID" ] && kill "$HTTP_PID" 2>/dev/null
+	if [ -n "$SERVE_DIR" ]; then
+		rm -f "$SERVE_DIR/rootfs.img" "$SERVE_DIR/http.log"
+		rmdir "$SERVE_DIR" 2>/dev/null
+	fi
+	if [ "$HELD" = 1 ]; then
+		remote 'rm -f /pmhold' >/dev/null 2>&1
+		echo "==> released /pmhold; the phone's own reset timer is live again"
+	fi
+	return 0
+}
+
 # --- what we are about to overwrite ----------------------------------------
 say "looking at $DEV on the phone"
 info=$(remote "
@@ -155,6 +177,11 @@ if [ "$ASSUME_YES" != 1 ]; then
 fi
 
 # --- partition -------------------------------------------------------------
+trap cleanup EXIT INT TERM
+say "holding off the phone's reset timer"
+remote 'touch /pmhold; echo held' >/dev/null 2>&1 || true
+HELD=1
+
 if [ "$WHOLE_DISK" != 1 ]; then
 	say "writing a GPT with one partition"
 	# parted is a real binary in the initramfs, not a busybox applet.
@@ -187,12 +214,6 @@ say "serving on http://$HOST_IP:$PORT/rootfs.img"
 python3 -m http.server "$PORT" --bind "$HOST_IP" --directory "$SERVE_DIR" \
 	>"$SERVE_DIR/http.log" 2>&1 &
 HTTP_PID=$!
-cleanup() {
-	kill "$HTTP_PID" 2>/dev/null || true
-	rm -f "$SERVE_DIR/rootfs.img" "$SERVE_DIR/http.log"
-	rmdir "$SERVE_DIR" 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM
 sleep 1
 kill -0 "$HTTP_PID" 2>/dev/null || die "the HTTP server did not start:
 $(cat "$SERVE_DIR/http.log")"

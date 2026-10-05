@@ -360,6 +360,12 @@ B=/bin/busybox
 $B echo 0 > /pmstage
 
 pmstage_reset() {
+	# A live shell can stop the clock. Every reset in here is on a timer
+	# measured in minutes, which is right for a boot nobody is watching and
+	# wrong for one where something is mid-operation - writing a rootfs to
+	# the SD card takes longer than the probe's own patience. Nothing
+	# creates /pmhold on its own, so an unattended boot still resets.
+	while [ -e /pmhold ]; do $B sleep 5; done
 	# sysrq-b is emergency_restart(), which skips the orderly shutdown a
 	# wedged driver can block, so prefer it - but it needs /proc, which may
 	# be exactly what did not happen yet.
@@ -593,6 +599,8 @@ echo 1 > /proc/sys/kernel/sysrq
 	# far longer than this needs and far shorter than waiting for a person.
 	sleep 240
 	[ -e /pmusbok ] && exit 0
+	# Same hold file as the staged probe: a shell that got in can stop this.
+	while [ -e /pmhold ]; do sleep 5; done
 	[ -w /proc/sysrq-trigger ] && echo b > /proc/sysrq-trigger
 	reboot -f
 	sleep 90

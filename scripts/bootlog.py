@@ -587,24 +587,33 @@ pmstage_reset
 # be recovered without someone pressing buttons.
 USB_WATCHDOG = """
 # --- pdx246: make a hung boot recoverable ----------------------------------
-echo 1 > /proc/sys/kernel/sysrq
-# hung_task_panic is deliberately left alone. It was set here with a 20 second
-# timeout, which panics the kernel over any task that blocks for 20 seconds -
-# and on a bring-up boot that is ordinary: a probe waiting on firmware, or
-# udevadm settle draining ninety modules' events. It catches exactly the hangs
-# the timer below already catches, since both need the kernel to still be
-# scheduling userspace, so it bought nothing and reset good boots.
+# First thing in the file, and written to need nothing: no applet symlinks,
+# because "busybox --install -s" has not run yet, and no /proc, because
+# mount_proc_sys_dev has not either. That matters - mount_proc_sys_dev
+# modprobes libcomposite, so there is module loading above the old position of
+# this block, and a hang there left the phone silent for ever: nothing resets
+# it, so the bootloader never starts another attempt and the A/B retry counter
+# never moves. Armed here, a hang becomes a reset loop instead, and seven of
+# those end in Android, which we can read.
+#
+# hung_task_panic is deliberately not set. It was, with a 20 second timeout,
+# which panics the kernel over any task that blocks for 20 seconds - ordinary
+# on a bring-up boot, where a probe waits on firmware and udevadm settle
+# drains ninety modules' events. It caught nothing this timer does not, since
+# both need the kernel to still be scheduling userspace, and with panic=5 on
+# the command line it reset boots that were only slow.
 (
-	# A working boot has USB up in about five seconds, so four minutes is
+	# A working boot has USB up in about sixteen seconds, so four minutes is
 	# far longer than this needs and far shorter than waiting for a person.
-	sleep 240
+	/bin/busybox sleep 240
 	[ -e /pmusbok ] && exit 0
 	# Same hold file as the staged probe: a shell that got in can stop this.
-	while [ -e /pmhold ]; do sleep 5; done
-	[ -w /proc/sysrq-trigger ] && echo b > /proc/sysrq-trigger
-	reboot -f
-	sleep 90
-	reboot -f
+	while [ -e /pmhold ]; do /bin/busybox sleep 5; done
+	[ -w /proc/sysrq-trigger ] && /bin/busybox echo b > /proc/sysrq-trigger
+	/bin/busybox reboot -f
+	# reboot(2) refused. Do not sit here looking like a hang.
+	/bin/busybox sleep 90
+	/bin/busybox reboot -f
 ) &
 # ---------------------------------------------------------------------------
 """
@@ -674,9 +683,11 @@ def usbquirk(src, dst):
         # The watchdog belongs in stage 1 only, and before the jump: a
         # background job survives its parent's exec, so one is enough.
         if name == "init":
-            wd = "mount_proc_sys_dev\n"
+            # As early as the file allows: after the shebang, before anything
+            # that could wedge. "set -a" is line 5 and appears once.
+            wd = "set -a\n"
             if wd not in text:
-                sys.exit("error: could not find mount_proc_sys_dev in init")
+                sys.exit("error: could not find 'set -a' in init")
             text = text.replace(wd, wd + USB_WATCHDOG.lstrip("\n"), 1)
         e[2] = text.encode()
         patched.append(name)

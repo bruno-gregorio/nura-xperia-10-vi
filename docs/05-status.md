@@ -286,10 +286,39 @@ made the first week of bring-up slow. The findings below are what closed it.
   running 5120 LBAs, which sysfs reports in 512-byte units as start 249831384
   and size 40960. The hook refuses to write unless both match, because the cost
   of a wrong guess is overwriting a real partition.
-- **Whether the log actually comes back is still open** — the hook is installed
-  in every image `scripts/try-kernel.sh` flashes, but nothing has returned a
-  record yet. An empty `rddata` after a failed boot is itself a result: it
-  means the kernel died before UFS probed.
+- **The log channel works, proven on the hardware** — Verified 2026-10-05. The
+  hook's own `pmbootlog_find` and `pmbootlog_write` were run under TWRP, where
+  the kernel is Sony's and known good. It identified `/dev/block/sda97` by
+  geometry, wrote its record, and 199649 bytes read back. So the find-and-write
+  path is not in doubt, and that is what makes the negative result below mean
+  something.
+- **Our kernel does not reach the point where UFS works** — Verified
+  2026-10-05, and it is the sharpest thing we know about the failure. Two boots
+  with the hook installed left `rddata` all zeros. Since the hook demonstrably
+  writes when the kernel is healthy, and since it waits two minutes for the
+  block device rather than giving up early, an all-zero partition means the
+  kernel died before `ufs_qcom` probed. That puts the failure between the first
+  instruction and roughly entry sixty of `initramfs.load`.
+- **Always clear `rddata` between runs** — a stale record is indistinguishable
+  from a fresh one, and the uptime in the header is the only hint. `--log`
+  wipes it after reading for this reason.
+- **Sony's own command line, read off the running recovery** — Verified
+  2026-10-05, captured by the hook. 41 parameters, in
+  `out/device-dump-root/reference/twrp-dmesg.txt` along with 2411 lines of a
+  successful boot on this hardware, which is the only known-good reference we
+  have for what probes in what order.
+- **The Qualcomm parameters are not what hung the phone** — this corrects a
+  conclusion drawn earlier the same day. A boot carrying `swiotlb=noforce`,
+  `disable_dma32=on`, `kpti=0`, `rcu_nocbs=0-7`, `pcie_ports=compat`,
+  `msm_rtb.filter=0x237`, `allow_mismatched_32bit_el0` and
+  `android12_only.will_be_removed_soon.memblock_nomap_remove=on` hung where a
+  shorter command line had panicked, and the parameters looked responsible.
+  They are not: Sony's recovery kernel boots this device with every one of
+  them. Whatever the difference is, it is not that these options are fatal.
+- **Sony passes `video=vfb:640x400,bpp=32,memsize=3072000`** — Verified, and
+  worth revisiting. It was deliberately left out of our command line on the
+  grounds that a virtual framebuffer would claim `fb0` ahead of the real panel.
+  Stock sets it anyway.
 
 ## The build environment
 

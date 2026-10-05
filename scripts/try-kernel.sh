@@ -191,7 +191,14 @@ cmd_log() {
 	adb exec-out 'dd if=/dev/block/by-name/rddata bs=65536 count=16 2>/dev/null' \
 		> "$WORK/bootlog.bin"
 	echo
-	"$ROOT/scripts/bootlog.py" decode "$WORK/bootlog.bin"
+	"$ROOT/scripts/bootlog.py" decode "$WORK/bootlog.bin" || true
+
+	# Wipe it, or the next run's "no log" is indistinguishable from this
+	# run's log still sitting there. An all-zero rddata has to mean the
+	# kernel did not get far enough to write, and nothing else.
+	say "clearing rddata for the next round"
+	adb shell 'dd if=/dev/zero of=/dev/block/by-name/rddata bs=65536 count=16 conv=fsync' \
+		>/dev/null 2>&1 || die "could not clear rddata"
 }
 
 cmd_restore() {

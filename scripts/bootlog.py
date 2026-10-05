@@ -22,6 +22,7 @@ up, then writes the whole history at once and keeps re-writing, which also
 catches a later hang rather than only a panic.
 
   bootlog.py install <vendor_boot-in> <vendor_boot-out>
+  bootlog.py probe   <vendor_boot-in> <vendor_boot-out>
   bootlog.py decode  <rddata-dump>
 
 'install' only rewrites the vendor ramdisk. The dtb area is copied across
@@ -232,6 +233,72 @@ def install(src, dst):
     print(f"  dtb area {ds} bytes, copied across untouched")
 
 
+# A throwaway /init that does nothing but reboot, used to answer one question:
+# does the initramfs run at all?
+#
+# It is the only channel left when the kernel dies before storage. The A/B
+# retry counter advances every time the bootloader begins an attempt, so an
+# init that deliberately resets the phone burns the counter down and falls back
+# to the stock slot, which is visible from the host without a console, without
+# USB during boot, and without anyone watching the screen. A kernel that never
+# reaches userspace burns one attempt and then hangs, which looks completely
+# different: one decrement instead of seven.
+#
+# Everything is spelled /bin/busybox explicitly because 'busybox --install -s'
+# has not run, so none of the usual applet names resolve yet.
+PROBE_INIT = """#!/bin/busybox ash
+# Bring-up probe, written by scripts/bootlog.py. Not a real init.
+/bin/busybox sleep 8
+/bin/busybox reboot -f
+# If reboot(2) was refused, do not sit here looking like a hang.
+/bin/busybox sleep 120
+/bin/busybox reboot -f
+"""
+
+
+def probe(src, dst):
+    """Rebuild a vendor_boot whose /init only reboots."""
+    d = open(src, "rb").read()
+    s = sections(d)
+    o_rd, vr = s["ramdisk"]
+    entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
+
+    init = next((e for e in entries if e[1] == "init"), None)
+    if init is None:
+        sys.exit("error: no /init in the vendor ramdisk - wrong image?")
+    init[2] = PROBE_INIT.encode()
+    entries = [e for e in entries if e[1] != "bootlog.sh"]
+
+    newrd = gzip.compress(cpio_build(entries), 6)
+    out = _rebuild(d, s, newrd)
+    open(dst, "wb").write(out)
+    print(f"  in   {src}")
+    print(f"  out  {dst}")
+    print(f"  /init replaced with the reboot probe ({len(PROBE_INIT)} bytes)")
+    print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
+    print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
+
+
+def _rebuild(d, s, newrd):
+    """Reassemble a vendor_boot around a new vendor ramdisk."""
+    up = s["up"]
+    hdr = bytearray(d[:up(s["hs"])])
+    struct.pack_into("<I", hdr, 24, len(newrd))
+    o_vrt, vrt_size = s["vrt"]
+    vrt = bytearray(d[o_vrt:o_vrt + vrt_size])
+    if s["vrt_num"] == 1 and vrt_size >= 8:
+        struct.pack_into("<I", vrt, 4, len(newrd))
+    o_dtb, ds = s["dtb"]
+    o_bc, bc = s["bc"]
+    out = bytearray()
+    out += hdr
+    out += newrd + b"\0" * (up(len(newrd)) - len(newrd))
+    out += d[o_dtb:o_dtb + ds] + b"\0" * (up(ds) - ds)
+    out += bytes(vrt) + b"\0" * (up(vrt_size) - vrt_size)
+    out += d[o_bc:o_bc + bc] + b"\0" * (up(bc) - bc)
+    return bytes(out)
+
+
 def decode(path):
     d = open(path, "rb").read()
     if not d.startswith(LOG_MAGIC):
@@ -252,6 +319,8 @@ if __name__ == "__main__":
     a = sys.argv[1:]
     if len(a) == 3 and a[0] == "install":
         install(a[1], a[2])
+    elif len(a) == 3 and a[0] == "probe":
+        probe(a[1], a[2])
     elif len(a) == 2 and a[0] == "decode":
         decode(a[1])
     else:

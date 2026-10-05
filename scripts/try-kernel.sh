@@ -119,7 +119,15 @@ build_vendor_boot() {
 	# hook broke: the hook writes to UFS from a background job while
 	# load_modules is still bringing the storage stack up, and a write into a
 	# half-probed controller is a plausible way to wedge the whole I/O path.
-	if [ "${BOOTLOG:-1}" = "0" ]; then
+	if [ "${PROBE:-0}" = "1" ]; then
+		# Answers "does the initramfs run at all?" using the retry
+		# counter as the only output channel: an init that reboots on
+		# purpose burns all seven attempts and falls back, while a
+		# kernel that never reaches userspace burns one and hangs.
+		say "PROBE=1: replacing /init with the reboot probe"
+		"$ROOT/scripts/bootlog.py" probe "$WORK/vendor_boot.img" "$WORK/vendor_boot-probe.img"
+		mv "$WORK/vendor_boot-probe.img" "$WORK/vendor_boot.img"
+	elif [ "${BOOTLOG:-1}" = "0" ]; then
 		say "BOOTLOG=0: flashing without the log hook"
 	else
 		"$ROOT/scripts/bootlog.py" install "$WORK/vendor_boot.img" "$WORK/vendor_boot-log.img"

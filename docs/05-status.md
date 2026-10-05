@@ -313,6 +313,27 @@ made the first week of bring-up slow. The findings below are what closed it.
   or the five resets were never kernel panics in the first place. Settling that
   needs `slot-retry-count` read right after a timed hang, which needs the
   button combo, so it has not been done.
+- **The kernel boots and reaches userspace** — Verified 2026-10-05, and it is
+  the first solid ground this port has had. A vendor_boot whose `/init` was
+  replaced by nothing but `sleep 8; reboot -f` made the phone reboot seven
+  times and fall back to the stock slot after 186 seconds, which is 26 seconds
+  an attempt: about 18 of bootloader, 8 of sleep. So the arm64 `Image` is
+  loaded and entered, Sony's device trees are accepted, the vendor ramdisk
+  decompresses, and `/init` executes. None of that is in question any more.
+  The failure is further in - in `load_modules` or past it.
+- **A hang leaves exactly one attempt on the counter, not seven** — Verified.
+  After eleven minutes of hanging, `slot-retry-count` had gone from 7 to 6.
+  The counter advances when the bootloader begins an attempt, so a kernel that
+  stops never produces a second one. There is nothing to wait for: a round
+  that has hung has hung, and the eleven minute timeout only delays finding
+  out. It also means `panic=5` was never reached in any of those runs.
+- **The retry counter is a usable output channel** — Verified, and it is the
+  only one that works before storage. An init that reboots on purpose burns
+  all seven attempts and falls back, which the host sees without a console,
+  without USB during boot and without anyone watching the screen; a kernel
+  that dies first burns one and stops. One bit per round, four minutes a
+  round, hands-free. `PROBE=1 scripts/try-kernel.sh` is the mechanism, and
+  bisecting `initramfs.load` with it is the way to find what actually hangs.
 - **A hang cannot be recovered without touching the phone, and that is final**
   — Verified by elimination. The A/B retry counter only advances when the
   bootloader starts an attempt, so a kernel that stops without panicking never

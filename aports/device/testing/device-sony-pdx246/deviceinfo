@@ -42,18 +42,7 @@ deviceinfo_flash_fastboot_partition_vbmeta="vbmeta"
 # UFS on this device reports 4096-byte logical blocks.
 deviceinfo_rootfs_image_sector_size="4096"
 
-# Bring-up settings. Drop both once the device boots on its own.
-#
-# earlycon: parrot.dtb points stdout-path at the GENI port on 0x98c000 and
-# already asks for console=ttyMSM0,115200n8 in chosen/bootargs, so a bare
-# "earlycon" is enough - it picks the port up from the device tree. It works
-# with msm_geni_serial left as a module because Qualcomm builds the early
-# console as its own always-builtin object; see pmos.config.
-#
-# pmos.debug-shell: stop in the initramfs instead of continuing to a userspace
-# that has no display driver to draw on. The shell brings up the USB gadget and
-# listens on telnet 172.16.42.1:23 and a CDC-ACM port, so the first boot can be
-# inspected over the USB-C cable with no hardware modification at all; from
-# there 'pmos_logdump' exposes dmesg as a USB mass-storage volume, and
-# 'pmos_continue_boot' carries on booting.
-deviceinfo_kernel_cmdline="earlycon pmos.debug-shell"
+# deviceinfo_kernel_cmdline is deliberately NOT set. boot-deploy's get_cmdline()
+# uses it *instead of* the /usr/lib/kernel-cmdline.d/ drop-ins rather than as
+# well as them, so setting it here would throw away kernel-cmdline.conf. The
+# cmdline, and why each option is on it, lives there.

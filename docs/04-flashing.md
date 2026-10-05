@@ -6,87 +6,78 @@ Read it fully before connecting the phone, and take the backups.
 
 ## Before anything: two irreversible things
 
-1. **Unlocking the bootloader wipes the device and destroys Sony's DRM keys
-   permanently.** They cannot be restored by relocking. On Xperias this
-   degrades camera processing and some DRM playback *even after returning to
-   stock*. This is Sony's design, not something this port can work around.
-2. **Anti-rollback is enforced in hardware.** Writing a `vbmeta` with a
-   rollback index lower than what the device has recorded puts it in the AVB
-   red state ("Your device is corrupt") and it will not boot. The LineageOS
-   port hit this and found that the verification-disable flags do **not**
-   exempt you. Stock ships rollback index `1782864000` (2026-07-01).
+- **Unlocking the bootloader wipes the device and destroys Sony's DRM keys
+  permanently.** They cannot be restored by relocking. On Xperias this degrades
+  camera processing and some DRM playback *even after returning to stock*. This
+  is Sony's design, not something this port can work around.
+- **Anti-rollback is enforced in hardware.** Writing a `vbmeta` with a rollback
+  index lower than what the device has recorded puts it in the AVB red state
+  ("Your device is corrupt") and it will not boot. The LineageOS port hit this
+  and found that the verification-disable flags do **not** exempt you. Stock
+  ships rollback index `1782864000` (2026-07-01).
 
-## Step 1 — back up every partition you are about to touch
+## Procedure
 
-Do this first, from a booted stock system with root, or from the stock
-recovery. Without these you have no way back.
+In order. Step 1 is the one that makes every later step recoverable.
 
-```sh
-# with the device booted and adb root available
-for p in boot vendor_boot dtbo vbmeta vbmeta_system; do
-    adb shell su -c "dd if=/dev/block/by-name/${p}_a of=/sdcard/${p}_a.img"
-    adb pull /sdcard/${p}_a.img stock/
-done
-```
+1. **Back up every partition you are about to touch.** From a booted stock
+   system with root, or from the stock recovery. Without these you have no way
+   back; `stock/vbmeta_a.img` in particular is what makes step 4 safe.
 
-Keep `stock/` somewhere safe. `stock/vbmeta_a.img` in particular is what makes
-Step 4 safe.
+   ```sh
+   # with the device booted and adb root available
+   for p in boot vendor_boot dtbo vbmeta vbmeta_system; do
+       adb shell su -c "dd if=/dev/block/by-name/${p}_a of=/sdcard/${p}_a.img"
+       adb pull /sdcard/${p}_a.img stock/
+   done
+   ```
 
-## Step 2 — unlock
+2. **Unlock.** Sony's official unlock, which requires an unlock code from
+   <https://developer.sony.com/open-devices/unlock-bootloader>.
 
-Sony's official unlock, which requires an unlock code from
-<https://developer.sony.com/open-devices/unlock-bootloader>:
+   ```sh
+   adb reboot bootloader
+   fastboot oem unlock 0x<YOUR_CODE>
+   ```
 
-```sh
-adb reboot bootloader
-fastboot oem unlock 0x<YOUR_CODE>
-```
+3. **Build the images.** See [03-build.md](03-build.md). You end up with
+   `sony-pdx246-boot.img`, `sony-pdx246-vendor_boot.img` and
+   `sony-pdx246-root.img` under
+   `.pmb/work/chroot_native/home/pmos/rootfs/`.
 
-## Step 3 — build the images
+4. **Flash vbmeta the careful way.** pmbootstrap's `flasher flash_vbmeta`
+   generates an *empty* vbmeta with `avbtool make_vbmeta_image --flags 2`. That
+   image has rollback index 0, and `--flags 2` only disables the hashtree, not
+   verification — the wrong shape twice over on this device. Flash the **stock**
+   vbmeta with the flags patched instead: `fastboot` rewrites the flags byte as
+   it sends it, so the rollback index and every descriptor stay exactly as the
+   device already recorded them. This is the single most important deviation
+   from a stock pmOS install.
 
-See [03-build.md](03-build.md). You end up with, under
-`.pmb/work/chroot_native/home/pmos/rootfs/`:
+   ```sh
+   fastboot --disable-verity --disable-verification flash vbmeta stock/vbmeta_a.img
+   ```
 
-- `sony-pdx246-boot.img`
-- `sony-pdx246-vendor_boot.img`  (DTB + initramfs — **must** be flashed)
-- `sony-pdx246-root.img`
+5. **Flash the images.** `scripts/flash.sh` does exactly this with the backup
+   checks.
 
-## Step 4 — vbmeta, the careful way
+   ```sh
+   cd .pmb/work/chroot_native/home/pmos/rootfs/
+   fastboot flash boot        sony-pdx246-boot.img
+   fastboot flash vendor_boot sony-pdx246-vendor_boot.img
+   fastboot flash userdata    sony-pdx246-root.img
+   fastboot reboot
+   ```
 
-pmbootstrap's `flasher flash_vbmeta` generates an *empty* vbmeta with
-`avbtool make_vbmeta_image --flags 2`. That image has rollback index 0, and
-`--flags 2` only disables the hashtree, not verification. On this device that
-is the wrong shape twice over.
+Two rules for that last step:
 
-Flash the **stock** vbmeta with the flags patched instead. `fastboot` rewrites
-the flags byte in the image as it sends it, so the rollback index and every
-descriptor stay exactly as the device already recorded them:
+- **Do not flash `dtbo`.** The stock `parrot-qrd` overlay there is what turns
+  our base `parrot.dtb` into this device's device tree.
+- **Only one slot is touched.** The other slot keeps whatever stock left there,
+  which is the way back: `fastboot --set-active=b` (or `a`) returns you to
+  Android, assuming that slot was healthy.
 
-```sh
-fastboot --disable-verity --disable-verification flash vbmeta stock/vbmeta_a.img
-```
-
-This is the single most important deviation from a stock pmOS install.
-
-## Step 5 — flash
-
-```sh
-fastboot flash boot        .pmb/work/chroot_native/home/pmos/rootfs/sony-pdx246-boot.img
-fastboot flash vendor_boot .pmb/work/chroot_native/home/pmos/rootfs/sony-pdx246-vendor_boot.img
-fastboot flash userdata    .pmb/work/chroot_native/home/pmos/rootfs/sony-pdx246-root.img
-fastboot reboot
-```
-
-`scripts/flash.sh` does exactly this with the backup checks; see below.
-
-**Do not flash `dtbo`.** The stock `parrot-qrd` overlay there is what turns our
-base `parrot.dtb` into this device's device tree.
-
-**Only one slot is touched.** The other slot keeps whatever stock left there,
-which is the way back: `fastboot --set-active=b` (or `a`) returns you to
-Android, assuming that slot was healthy.
-
-## Step 6 — getting in, with no display
+## Getting in, with no display
 
 The display driver is an out-of-tree module that this port does not build yet,
 so the first boots are blind. The images are built for that: `deviceinfo`
@@ -97,7 +88,7 @@ expect the device to sit there looking dead.
 ### The USB-C cable you flashed with is the console
 
 The debug shell brings the gadget up and offers three ways in at once. No
-hardware modification, no UART cable:
+hardware modification, no UART cable.
 
 ```sh
 ip addr show                 # a new usb0 / enp*u* interface should appear
@@ -105,7 +96,7 @@ telnet 172.16.42.1 23        # the initramfs debug shell
 screen /dev/ttyACM0 115200   # same shell on the CDC-ACM port
 ```
 
-Inside that shell:
+Once inside, these are the four commands that matter.
 
 ```sh
 cat /pmOS_init.log           # what the initramfs did
@@ -132,10 +123,10 @@ This needs no cable and no working USB, only a reboot. `parrot.dtb` reserves
 pmsg. Its `compatible` is plain `"ramoops"`, so the builtin `PSTORE_RAM` binds
 to it with no help from us, early in boot. The previous boot's console
 therefore survives a reboot and can be read from stock, from a recovery, or
-from a later boot that does work:
+from a later boot that does work.
 
-```
-/sys/fs/pstore/console-ramoops-0
+```sh
+cat /sys/fs/pstore/console-ramoops-0
 ```
 
 If the kernel died after `postcore_initcall` — which is almost anything
@@ -146,8 +137,8 @@ driver-related — the reason is in there.
 The port is at `0x98c000` (`qcom,msm-geni-console`), `parrot.dtb` already asks
 for `console=ttyMSM0,115200n8` in `chosen/bootargs`, and `deviceinfo` adds a
 bare `earlycon` so the port is picked up from `stdout-path` before the driver
-registers. All of this is builtin, not modular, which is what makes `earlycon`
-possible at all.
+registers. That works with `msm_geni_serial` left as a module because Qualcomm
+builds the early console as its own always-builtin object.
 
 Reaching it physically is the problem: on recent Xperias the UART comes out on
 the USB-C SBU pins and needs a specific resistance on CC to select it. Only
@@ -155,14 +146,18 @@ worth the trouble for a panic so early that even ramoops is empty.
 
 ### Did it even start?
 
-If the device shows the Sony logo and reboots to the bootloader, the bootloader
-rejected the images — that is AVB, not the kernel. Re-read Step 4.
+Two failure shapes are worth telling apart before changing anything.
 
-If it hangs on a black screen with no USB device appearing *and* ramoops comes
-back empty after a reboot, the kernel never reached `postcore_initcall`. That
-is a serial problem, not something more flashing will fix.
+- **Sony logo, then back to the bootloader.** The bootloader rejected the
+  images — that is AVB, not the kernel. Re-read step 4.
+- **Black screen, no USB device, and ramoops empty after a reboot.** The kernel
+  never reached `postcore_initcall`. That is a serial problem, not something
+  more flashing will fix.
 
 ## Recovery
+
+A device in the AVB red state can still reach fastboot, so this is recoverable
+as long as you have the backups from step 1.
 
 ```sh
 fastboot --set-active=b        # boot the untouched slot
@@ -171,6 +166,3 @@ fastboot flash boot        stock/boot_a.img
 fastboot flash vendor_boot stock/vendor_boot_a.img
 fastboot flash vbmeta      stock/vbmeta_a.img
 ```
-
-A device that is in the AVB red state can still reach fastboot, so this is
-recoverable as long as you have the backups from Step 1.

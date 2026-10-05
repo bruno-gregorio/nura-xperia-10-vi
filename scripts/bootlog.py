@@ -640,33 +640,47 @@ def usbquirk(src, dst):
     o_rd, vr = s["ramdisk"]
     entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
 
-    init = next((e for e in entries if e[1] == "init"), None)
-    if init is None:
-        sys.exit("error: no /init in the vendor ramdisk - wrong image?")
-    text = init[2].decode()
+    # Both stages get the quirk, because which one runs depends on
+    # deviceinfo_create_initfs_extra. With it false - the default - mkinitfs
+    # builds one archive, /init_2nd.sh is already in it, and stage 1 execs
+    # straight into it well before its own setup_usb_network. Everything after
+    # that jump in stage 1 is dead code, which is where the first version of
+    # this patch put the quirk.
+    patched = []
+    for name in ("init", "init_2nd.sh"):
+        e = next((x for x in entries if x[1] == name), None)
+        if e is None:
+            continue
+        text = e[2].decode()
+        if "pdx246: ask dwc3 for a role" in text:
+            sys.exit(f"error: /{name} already carries the quirk - rebuild "
+                     "from a clean image rather than stacking patches")
+        anchor = "\nsetup_usb_network\n"
+        if anchor not in text:
+            continue
+        text = text.replace(anchor, "\n" + USB_QUIRK + anchor, 1)
+        # The watchdog belongs in stage 1 only, and before the jump: a
+        # background job survives its parent's exec, so one is enough.
+        if name == "init":
+            wd = "mount_proc_sys_dev\n"
+            if wd not in text:
+                sys.exit("error: could not find mount_proc_sys_dev in init")
+            text = text.replace(wd, wd + USB_WATCHDOG.lstrip("\n"), 1)
+        e[2] = text.encode()
+        patched.append(name)
 
-    if "pdx246: ask dwc3 for a role" in text:
-        sys.exit("error: /init already carries the quirk - rebuild from a "
-                 "clean image rather than stacking patches")
-    anchor = "\nsetup_usb_network\n"
-    if anchor not in text:
-        sys.exit("error: could not find setup_usb_network in init - has "
-                 "mkinitfs changed?")
-    text = text.replace(anchor, "\n" + USB_QUIRK + anchor, 1)
-
-    wd = "mount_proc_sys_dev\n"
-    if wd not in text:
-        sys.exit("error: could not find mount_proc_sys_dev in init")
-    text = text.replace(wd, wd + USB_WATCHDOG.lstrip("\n"), 1)
-    init[2] = text.encode()
+    if "init_2nd.sh" not in patched:
+        sys.exit("error: no init_2nd.sh with a setup_usb_network call - the "
+                 "stage that actually brings USB up is missing")
 
     newrd = gzip.compress(cpio_build(entries), 6)
     open(dst, "wb").write(_rebuild(d, s, newrd))
     print(f"  in   {src}")
     print(f"  out  {dst}")
-    print("  /init now writes peripheral to *.ssusb/mode before"
+    print(f"  patched: {', '.join('/' + n for n in patched)}")
+    print("  each now writes peripheral to *.ssusb/mode before"
           " setup_usb_network")
-    print("  and arms a 240s watchdog before load_modules, so a hang resets")
+    print("  and /init arms a 240s watchdog, so a hang resets itself")
     print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
     print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
 

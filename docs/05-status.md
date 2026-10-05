@@ -756,15 +756,27 @@ made the first week of bring-up slow. The findings below are what closed it.
   `/init` as the image is built and `try-kernel.sh` applies it to every
   real-init flash. If this port is ever upstreamed the quirk needs a proper
   home.
-- **The real init hangs before `setup_usb_network`** — Verified by absence.
-  The 19:42 round flashed a correct image - the quirk is at line 54 of the
-  patched `/init` and the bootlog hook at line 36 - and three minutes later
-  the host had no USB interface at all, where the staged probe had one in
-  sixteen seconds. Everything between is `load_modules`, which in the real
-  init is a single `modprobe -a` over all 90 modules. The staged probe loads
-  the same 90 in two passes and finishes, so no single module hangs on its
-  own; the difference is either the order or the fact that one `modprobe`
-  process owns all of them.
+- **The real init has two stages, and stage 1 ends at line 59** — Verified.
+  `deviceinfo_create_initfs_extra` defaults to false, so mkinitfs builds one
+  archive with `/init_2nd.sh` already inside it, and stage 1's
+  `jump_init_2nd` - which is `exec /init_2nd.sh` when that file exists - runs
+  right after `setup_firmware_path`. Everything below it in `init.sh` is dead
+  code on this device: `setup_mdev`, `load_modules`, `setup_usb_network`, all
+  of it. `load_modules` never runs at all, so `modules-initfs` only decides
+  which `.ko` files mkinitfs puts in the archive; loading is udev's job, via
+  `udevd -d`, `udevadm trigger --action=add` and `udevadm settle` at the top
+  of stage 2.
+- **The 19:42 round failed because the quirk was in that dead code** —
+  Verified. Not a hang: `usbquirk` anchored on `setup_usb_network`, found
+  stage 1's copy, and patched a line the device never reaches. Both stages now
+  get the quirk, and in stage 2 it lands between `setup_udev` and
+  `setup_usb_network`, with `debug_shell` fourteen lines further on. The
+  watchdog stays in stage 1 only, before the jump, because a background job
+  survives its parent's `exec`.
+- **Withdrawn: "the real init hangs in `load_modules`"** — it does not, and
+  cannot, because `load_modules` is never called. The reasoning that led there
+  was sound given no USB and no log, but it was built on assuming `init.sh`
+  runs to the end.
 - **A hung real init needed a person, and no longer does** — Reasoned, not yet
   tested. `load_modules` wedging is the one failure mode that cannot recover
   on its own: nothing resets the phone, so the bootloader never begins another

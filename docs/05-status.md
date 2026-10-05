@@ -728,11 +728,38 @@ made the first week of bring-up slow. The findings below are what closed it.
   the only way in. The staged probe now writes `peripheral` to
   `/sys/bus/platform/devices/*.ssusb/mode` and waits up to twelve seconds for
   a non-dummy UDC.
-- **Where that write belongs for the real init** — Open. `init.sh` calls
-  `load_modules` and then `setup_usb_network` with nothing in between, and
-  `run_hooks` is never called before that point, so there is no sanctioned
-  place to put a device quirk. Proving the mechanism in the staged probe comes
-  first.
+- **Writing `peripheral` to `*.ssusb/mode` brings the controller up** —
+  Verified on the device, over a live USB link. The probe log reads
+  `[55] forcing peripheral mode on the ssusb wrapper`, `wrote peripheral to
+  /sys/bus/platform/devices/a600000.ssusb/mode`, `udc wait ended after 1s,
+  real udc: a600000.dwc3`. One second. `dmesg` shows the mechanism exactly:
+  `DWC3 exited from low power mode` and then `dwc3 a600000.dwc3: Adding to
+  iommu group 0` - the core child being created - followed by `usb0: HOST MAC`
+  and `usb0: link becomes ready`.
+- **The USB gadget enumerates to the host** — Verified. Sixteen seconds from
+  reboot to a gadget the host can see: `enp0s20f0u2` at 172.16.42.2 with the
+  phone on 172.16.42.1 answering ping in 2.1 ms, telnet open on port 23, and a
+  `/dev/ttyACM0`. The Fedora host needs no configuration for either: it
+  DHCP-configures the NCM interface by itself, and a `uaccess` ACL grants the
+  logged-in user read-write on the ACM node, so neither of the two host-side
+  fixes `scripts/console.sh` offers was needed.
+- **A complete boot, from the live shell** — Verified. `/sys/class/udc` holds
+  `a600000.dwc3` beside `dummy_udc.0`, `g1/UDC` names the real one, 90 modules
+  are loaded, `/pmstage` reads 99, and `sda`, `sdb`, `sdc` and `mmcblk1` are
+  all present. `out/device-dump-root/reference/pmos-boot-dmesg.txt` is the
+  kernel log of that boot, taken over telnet.
+- **Where that write belongs for the real init** — Settled, if not elegantly.
+  `init.sh` calls `load_modules` and then `setup_usb_network` with nothing in
+  between, and `run_hooks` is only reached from `init_2nd.sh`, after the
+  rootfs is mounted, so there is no sanctioned place for a device quirk.
+  Rather than fork `postmarketos-mkinitfs`, `bootlog.py usbquirk` patches
+  `/init` as the image is built and `try-kernel.sh` applies it to every
+  real-init flash. If this port is ever upstreamed the quirk needs a proper
+  home.
+- **`blkid` kills the debug shell** — Verified, twice is not needed. Running
+  it over telnet dropped the connection; the device stayed up and pingable, so
+  it is `blkid` scanning every loop and ram device against a 4096-byte-sector
+  disk, not a crash. Use `/proc/partitions` instead.
 
 ## Flashing
 

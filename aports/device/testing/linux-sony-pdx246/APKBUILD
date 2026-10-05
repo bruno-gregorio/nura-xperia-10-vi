@@ -61,18 +61,24 @@ prepare() {
 	rm -f "$builddir/arch/$_carch/boot/dts/vendor"
 	mv "$srcdir/$_dt_repo-$_dt_commit" "$builddir/arch/$_carch/boot/dts/vendor"
 
-	# With CONFIG_BUILD_ARM64_DT_OVERLAY=y the vendor device tree Makefile
-	# fills in dtbo-y only, and scripts/Makefile.dtbo builds parrot.dtb purely
-	# as a dependency of the overlays that name it in -base. That is the DTB we
-	# boot (the bootloader applies the stock parrot-qrd overlay to it), but
-	# scripts/Makefile.dtbinst installs $(dtb-y), which is empty here. Name it
-	# so that dtbs_install actually puts it in the package. These lines land
-	# after the Makefile's own "always-y := $(dtb-y)", hence the second one.
-	cat >> "$builddir/arch/$_carch/boot/dts/vendor/qcom/Makefile" <<-EOF
-
-		# postmarketOS: install the base DTB we boot from.
-		dtb-\$(CONFIG_ARCH_PARROT) += parrot.dtb
-		always-\$(CONFIG_ARCH_PARROT) += parrot.dtb
+	# Qualcomm's device tree release covers every board in the parrot family
+	# and builds them all as overlays (CONFIG_BUILD_ARM64_DT_OVERLAY=y); the
+	# base DTBs fall out only as -base dependencies, so scripts/Makefile.dtbinst
+	# never installs them. Worse, two of the subdirectories it descends into,
+	# audio/ and camera/, #include headers that only exist in the out-of-tree
+	# sm6450-modules repository, so "make dtbs" cannot succeed as shipped.
+	#
+	# None of those device trees are ours. We boot the base parrot.dtb and let
+	# the bootloader apply the stock parrot-qrd overlay from the untouched dtbo
+	# partition on top, which is exactly what the stock boot flow does -
+	# parrot-qrd-overlay.dtbo-base names parrot.dtb first. So build that one
+	# DTB and nothing else: that drops the two unbuildable subdirectories, puts
+	# the DTB in $(dtb-y) where dtbs_install can see it, and takes the dtbs
+	# target from several hundred device trees down to one.
+	cat > "$builddir/arch/$_carch/boot/dts/vendor/qcom/Makefile" <<-'EOF'
+		dtb-$(CONFIG_ARCH_PARROT) += parrot.dtb
+		always-y := $(dtb-y)
+		clean-files := *.dtb *.dtbo
 	EOF
 
 	# Qualcomm wraps $(CC) in scripts/basic/cc-wrapper, which reads the
@@ -169,5 +175,5 @@ package() {
 sha512sums="
 f7e5d009c6699eddefa45a525f9859519baf35ef3a8a28383917868b396dc107a5c92ca1dbb1a744beaf12b812ed4c0451d8f9e88e2950cb40d5c7e5f2de2f02  linux-sony-pdx246-03a594e6c40a35ee47791286e9e9eed91480add2.tar.gz
 5283a79e5520ca148693d7fae23179ad20f27bf69d26f921d6e5122a267985afd75f2723b7fc4f85721ee7076db8a6a28489223fdaa972e9c4588f11d741ccec  linux-sony-pdx246-dt-958dce5aaab6c58df7573843e85398b477d8dc62.tar.gz
-0112c57f5d6ade3e4428ccfdf227633050d4ceb173792ce7d7004d74f9414ea5b43d02bd6d82a836115ed52ef82217310a030c76e58443aa671a613b9df7a1d3  pmos.config
+739968ee63f192d4ca38f66888722030dc41cd3a60c56efb42fd070fbff23a3fe6b4a9a3d590d55cb4e8246d445f654418d36fdbac0f335d34061e4d0b163b14  pmos.config
 "

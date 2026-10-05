@@ -7,6 +7,10 @@
 #
 # Everything below is built from the kernel tree itself, so no out-of-tree
 # module repository is needed to reach a root filesystem.
+#
+# Two names from stock's list are deliberately missing: msm-geni-se and
+# msm_geni_serial. We build the debug UART into vmlinux instead, because
+# earlycon cannot come from a module, so there is no .ko left to load.
 
 # clocks, dcvs, watchdog
 gh_virt_wdt
@@ -50,7 +54,6 @@ mem-hooks
 memory_dump_v2
 minidump
 msm_dma_iommu_mapping
-msm_geni_serial
 phy-generic
 pinctrl-msm
 qcom_cpu_vendor_hooks
@@ -69,7 +72,6 @@ qcom_aoss
 msm_qmp
 socinfo
 stub-regulator
-msm-geni-se
 nvmem_qfprom
 
 # storage: sdhci + UFS. Without these there is no root filesystem.

@@ -135,14 +135,58 @@ print("   vbmeta flags 0x%08x -> 0x%08x (hashtree+verification disabled)" % (old
 PY
 }
 
+# Boot a slot into Android and wait for it to mark itself successful.
+#
+# Needed because --set-active clears that flag: the bootloader has no reason
+# to believe a slot it was just pointed at is good, so switching back to the
+# stock slot makes it unproven and the fallback check below refuses it. Only
+# a completed boot sets it again, and Android does that a little after
+# sys.boot_completed rather than at it.
+settle_slot() {
+	say "booting slot $1 once so it marks itself successful again"
+	fastboot reboot >/dev/null 2>&1 || die "could not reboot into slot $1"
+	wait_for_adb 300 >/dev/null || die "slot $1 did not come up - it is not a fallback"
+	i=0
+	while [ "$i" -lt 150 ]; do
+		[ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
+		sleep 3
+		i=$((i + 3))
+	done
+	sleep 25
+	need_fastboot
+	[ "$(getvar "slot-successful:$1")" = "yes" ] \
+		|| die "slot $1 booted but never marked itself successful"
+	say "slot $1 is a safe fallback again"
+}
+
 cmd_try() {
 	need_fastboot
 	cur=$(getvar current-slot)
 	case "$cur" in a) spare=b ;; b) spare=a ;; *) die "could not read current-slot (got '${cur:-}')" ;; esac
 
+	# A run that hung leaves the experiment slot active, so the next round
+	# starts from the wrong side and the check below would refuse. If the
+	# other slot is the good one, go back to it rather than making the human
+	# work it out.
 	ok=$(getvar "slot-successful:$cur")
-	[ "$ok" = "yes" ] || die "slot $cur is not marked successful, so it is not a
-       safe fallback. Boot it into Android once and let it settle first."
+	if [ "$ok" != "yes" ] && [ "$(getvar "slot-successful:$spare")" = "yes" ]; then
+		say "slot $cur is not a safe fallback but slot $spare is; going back to $spare"
+		fastboot --set-active="$spare" >/dev/null 2>&1 || die "could not switch to slot $spare"
+		tmp=$cur; cur=$spare; spare=$tmp
+		settle_slot "$cur"
+		ok=$(getvar "slot-successful:$cur")
+	fi
+	# Still nothing? Then the flag was cleared by a --set-active somewhere and
+	# no slot has booted since. Boot the one we are on: if it is the stock
+	# slot it will come up and mark itself, and if it is not, settle_slot
+	# fails and says so rather than flashing over the only way back.
+	if [ "$ok" != "yes" ]; then
+		say "no slot is marked successful; settling the current one first"
+		settle_slot "$cur"
+		ok=$(getvar "slot-successful:$cur")
+	fi
+	[ "$ok" = "yes" ] || die "neither slot is marked successful, so there is no
+       safe fallback. Boot the stock slot into Android once and let it settle."
 
 	say "experiment goes on slot $spare; stock slot $cur stays as the way back"
 	build_vendor_boot

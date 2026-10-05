@@ -232,12 +232,22 @@ list is cheap to re-derive and worth trusting.
   (`ro.hardware.nfc_nci = SNxxx`), tri-LED and LPG PWM on `pm6150l`, flash LED
   likewise, vibrator on `pm7250b` through `qpnp-vibrator-ldo`. Mainline's
   `leds-qcom-lpg` covers the first two.
-- **Sony's own board tree is the one input still missing** — Reasoned. The
-  device tree release carries Qualcomm's `parrot-atp`, `-idp` and `-qrd`
-  reference boards and nothing for pdx246, and the live tree that would settle
-  panel model, battery parameters and GPIO assignment is denied to the `shell`
-  user. One Developer options toggle fixes this; see
-  [05-status.md](05-status.md).
+- **The board tree is no longer missing, and there was never a Sony one** —
+  Verified 2026-10-05 by capturing the live device tree from recovery, where
+  adbd runs as root. It decompiles to 27892 lines and its `model` is
+  "Qualcomm Technologies, Inc. Parrot QRD", `compatible` `qcom,parrot-qrd`,
+  board-id `<0x1000b 0x00>`. Sony did not write a board tree: they ship
+  Qualcomm's QRD reference tree, which is why the device tree release has no
+  pdx246 files. The captured tree is the merged base-plus-dtbo result the
+  kernel actually received, so it is better than either input on its own, and
+  it is what `sm6450-sony-xperia-pdx246.dts` gets transcribed from.
+- **The panel is a Samsung FHD AMOLED in command mode** — Verified.
+  `qcom,mdss_dsi_samsung_fhd_amoled_cmd`, named "samsung fhd amoled cmd mode
+  dsi panel", selected by `msm_drm.dsi_display0=` on the kernel command line
+  and present as a node with its timings in the live tree. Its display rails
+  are OLEDB and IBB under `qcom,amoled` on `pm6150l`. Command mode matters: a
+  mainline panel driver for it needs `MIPI_DSI_MODE_` flags and a TE line, not
+  the simpler video-mode path.
 
 ## Ordered plan
 

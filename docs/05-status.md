@@ -98,6 +98,48 @@ captures everything below into `out/device-dump/`, read-only.
   is denied, so reading ramoops after a failed boot needs root too. Step 5 of
   the next steps assumed otherwise and no longer does.
 
+### What root in recovery gave us
+
+Captured 2026-10-05 from LineageOS recovery and TWRP, both of which run adbd
+as root (`uid=0`, context `u:r:su:s0`) where the installed GSI does not. This
+closed every gap the unprivileged pass left open.
+
+- **`adb root` on the booted GSI tears down the USB gadget** — Verified,
+  twice. adbd reports "restarting adbd as root" and the device then leaves USB
+  entirely rather than re-enumerating, so the rooted pass is not reachable from
+  the running system. Recovery is, and needs no toggle.
+- **The live device tree, 20589 properties, 3651 nodes** — Verified. Decompiled
+  to 27892 lines of DTS. `model` is "Qualcomm Technologies, Inc. Parrot QRD",
+  `compatible` is `qcom,parrot-qrd`, `qcom,parrot`, `qcom,qrd`, and
+  `qcom,board-id` is `<0x1000b 0x00>`. This independently confirms the claim
+  above that the device runs Qualcomm's QRD reference tree rather than a Sony
+  board tree, and it is the merged base-plus-overlay result the kernel actually
+  received, so it supersedes the missing board tree gap entirely.
+- **The panel is `qcom,mdss_dsi_samsung_fhd_amoled_cmd`** — Verified, from both
+  the kernel command line (`msm_drm.dsi_display0=`) and the node in the live
+  tree, named "samsung fhd amoled cmd mode dsi panel". Command mode, not video
+  mode. Its display regulators are OLEDB and IBB under `qcom,amoled` on
+  `pm6150l`.
+- **The real kernel command line** — Verified. `console=ttyMSM0,115200n8`,
+  which matches what this port bakes into its own cmdline, plus
+  `kvm-arm.mode=protected` and `bootconfig`.
+- **A complete backup of both slots** — Verified. `boot`, `vendor_boot`,
+  `dtbo`, `vbmeta` and `vbmeta_system` for slots a and b, in
+  `out/device-dump-root/stock/`. `flash.sh flash` needs three of these and now
+  has them, so the firmware download is no longer on the critical path.
+- **`dtbo` holds 37 overlays** — Verified. Three carry `board-id <0x1000b
+  0x00>` and all three name the same Samsung panel; extracted and decompiled
+  under `out/device-dump-root/dtbo/`.
+- **`fastboot fetch` works but only for `vendor_boot`** — Verified.
+  `max-fetch-size` is `0x10000000`, and any other partition is refused with
+  "Fetch is only allowed on [vendor_boot, vendor_boot_a, vendor_boot_b]".
+- **debugfs is available in recovery** — Verified. 442 lines of `clk_summary`,
+  138 of `regulator_summary` and 201 of pinmux state captured.
+- **pstore is empty** — Verified. No prior crash to read; expected after clean
+  boots.
+- **TWRP exists for this device** — Verified. It identifies as `twrp_pdx246`,
+  `device:pdx246`.
+
 ## The build environment
 
 - **pmbootstrap runs rootless with the three patches** — Verified. The native

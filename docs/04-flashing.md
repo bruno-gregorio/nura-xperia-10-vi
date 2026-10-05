@@ -89,45 +89,78 @@ Android, assuming that slot was healthy.
 ## Step 6 — getting in, with no display
 
 The display driver is an out-of-tree module that this port does not build yet,
-so the first boots are blind. In rough order of likelihood:
+so the first boots are blind. The images are built for that: `deviceinfo`
+carries `pmos.debug-shell`, so **the boot deliberately stops in the initramfs**
+instead of continuing into a userspace nothing can draw. Expect that, and
+expect the device to sit there looking dead.
 
-### USB networking from the initramfs
+### The USB-C cable you flashed with is the console
 
-pmOS's initramfs brings up a USB gadget and listens on `172.16.42.1`. That is
-why `phy-msm-snps-hs`, `phy-msm-ssusb-qmp` and `dwc3-msm` are in
-`modules-initfs`. If it works:
+The debug shell brings the gadget up and offers three ways in at once. No
+hardware modification, no UART cable:
 
 ```sh
-ip addr show            # look for a new usb0/enp*u* interface
-ssh user@172.16.42.1    # full boot
-telnet 172.16.42.1 23   # initramfs debug shell, if the boot stalled there
+ip addr show                 # a new usb0 / enp*u* interface should appear
+telnet 172.16.42.1 23        # the initramfs debug shell
+screen /dev/ttyACM0 115200   # same shell on the CDC-ACM port
 ```
 
-### pstore / ramoops
+Inside that shell:
 
-`pmos.config` enables `PSTORE_RAM` and `PSTORE_CONSOLE`. If the kernel got far
-enough to register pstore and then died, the previous boot's console survives a
-reboot. From a working boot, or from stock:
+```sh
+cat /pmOS_init.log           # what the initramfs did
+dmesg                        # what the kernel did
+pmos_logdump                 # hand both over as a USB mass-storage volume
+pmos_continue_boot           # carry on into the real rootfs
+```
+
+`pmos_logdump` is the one to reach for if the network gadget is flaky: it
+writes `pmOS_init.txt`, `dmesg.txt`, `blkid.txt`, `cmdline.txt` and
+`partitions.txt` to a FAT image and exposes it as a USB drive.
+
+This works because `USB_DWC3` is builtin and in dual-role mode and the ACM,
+NCM, RNDIS and mass-storage gadget functions are all `=y`; `dwc3-msm` and the
+two PHYs load from `modules-initfs`. The part that is *not* confirmed is Type-C
+role detection — `TYPEC_QCOM_PMIC` is not set, so whether the port ever decides
+it is a device rather than a host runs through the PMIC driver and extcon. If
+nothing enumerates at all, suspect that before suspecting the gadget stack.
+
+### pstore / ramoops — if nothing enumerates
+
+This needs no cable and no working USB, only a reboot. `parrot.dtb` reserves
+`ramoops_region@ffd00000`: 768K, of which 256K is the console ring and 256K is
+pmsg. Its `compatible` is plain `"ramoops"`, so the builtin `PSTORE_RAM` binds
+to it with no help from us, early in boot. The previous boot's console
+therefore survives a reboot and can be read from stock, from a recovery, or
+from a later boot that does work:
 
 ```
 /sys/fs/pstore/console-ramoops-0
 ```
 
-### Serial
+If the kernel died after `postcore_initcall` — which is almost anything
+driver-related — the reason is in there.
 
-`CONFIG_SERIAL_MSM_GENI_CONSOLE=y` and the cmdline carries
-`console=ttyMSM0,115200n8 earlycon`. Reaching it needs a UART cable on the USB
-connector, which on recent Xperias means a specific resistor on the ID pin.
-This is the only way to see an early panic.
+### Serial, as a last resort
+
+The port is at `0x98c000` (`qcom,msm-geni-console`), `parrot.dtb` already asks
+for `console=ttyMSM0,115200n8` in `chosen/bootargs`, and `deviceinfo` adds a
+bare `earlycon` so the port is picked up from `stdout-path` before the driver
+registers. All of this is builtin, not modular, which is what makes `earlycon`
+possible at all.
+
+Reaching it physically is the problem: on recent Xperias the UART comes out on
+the USB-C SBU pins and needs a specific resistance on CC to select it. Only
+worth the trouble for a panic so early that even ramoops is empty.
 
 ### Did it even start?
 
 If the device shows the Sony logo and reboots to the bootloader, the bootloader
 rejected the images — that is AVB, not the kernel. Re-read Step 4.
 
-If it hangs on a black screen with no USB device appearing, the kernel either
-did not start or died before the USB gadget came up. That is a pstore or serial
-problem, not something more flashing will fix.
+If it hangs on a black screen with no USB device appearing *and* ramoops comes
+back empty after a reboot, the kernel never reached `postcore_initcall`. That
+is a serial problem, not something more flashing will fix.
 
 ## Recovery
 

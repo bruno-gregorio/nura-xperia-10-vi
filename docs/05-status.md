@@ -374,6 +374,59 @@ made the first week of bring-up slow. The findings below are what closed it.
   worth revisiting. It was deliberately left out of our command line on the
   grounds that a virtual framebuffer would claim `fb0` ahead of the real panel.
   Stock sets it anyway.
+- **The real init loads all 89 modules in one `modprobe -a`** — Verified by
+  reading `load_modules` out of the shipped initramfs. That is why a hang here
+  has been so opaque: one module that wedges takes the single `modprobe`
+  process with it, and nothing reports which one. `STAGE=1
+  scripts/try-kernel.sh` replaces `/init` with a probe that loads them one at
+  a time instead.
+- **The USB gadget needs eleven of those modules, and no storage** — Verified
+  from `modules.dep`: the symbol closure of `dwc3-msm` and the two PHYs is
+  `clk-qcom`, `debug-regulator`, `gdsc-regulator`, `minidump`,
+  `proxy-consumer`, `qcom-scm`, `qcom_ipc_logging` and `smem`. That is the
+  whole reason a staged probe is worth building - the gadget can come up long
+  before the storage chain, so the first pass loads a curated 40 (clocks,
+  pinctrl, regulators, the SMMU, rpmh, the PMIC, the PHYs, `dwc3-msm`) and
+  tries to open a live link before anything can hang. Reasoned, not yet
+  measured: dependencies that are runtime rather than symbol ones - clocks,
+  pins, regulators, interconnect - do not appear in `modules.dep`, so the
+  curated list is a judgement about what `dwc3-msm` needs to bind, and the
+  probe is what tests it.
+- **The UDC is `a600000.dwc3`** — Verified in recovery. There is a
+  `dummy_udc.0` beside it on Sony's kernel, which `get_usb_udc` would never
+  pick because it takes the first name alphabetically.
+- **The gadget functions are built into our kernel, not modules** — Verified:
+  `libcomposite`, `usb_f_ncm` and `usb_f_rndis` are all strings in our
+  `vmlinuz`, and none of them has a `.ko` in the initramfs. So the gadget needs
+  no module beyond the controller and its PHYs.
+- **`CONFIG_MAGIC_SYSRQ` and `CONFIG_DETECT_HUNG_TASK` are both in** —
+  Verified the same way (`sysrq-trigger`, `khungtaskd` and `blocked for more
+  than` are all in the image). Two things follow. `echo b >
+  /proc/sysrq-trigger` is `emergency_restart()`, which skips the orderly
+  shutdown a wedged driver could block, so it is a more reliable reset than
+  `reboot -f`. And `/proc/sys/kernel/hung_task_panic` turns a task stuck
+  uninterruptible into a panic, which `panic=5` then turns into a reset - that
+  is what a driver waiting forever on a clock, a regulator or firmware looks
+  like, so it covers the most likely shape of our hang. Both are set from the
+  probe rather than the command line, which avoids the rebuild entirely.
+- **`hung_task_panic=` is not a boot parameter in this kernel** — Verified,
+  the string is absent. The sysctl is the only way in, which is fine: the
+  probe writes it straight after `/proc` is mounted.
+- **Elapsed time is a usable analog channel, not just a bit** — Reasoned, and
+  being measured now. The stall watchdog delays its reset by one second per
+  step completed, so seven attempts multiply the difference by seven and the
+  time to the fallback names the step: about `7 x (43 + n) + 35` seconds, where
+  43 is the bootloader's 18 plus the watchdog's 25. `bootlog.py stages <image>
+  [seconds]` prints the map in both directions. The noise is the time the probe
+  spends loading the modules before the one that hung, a few seconds an index,
+  which biases a reading low by a couple of steps rather than scattering it.
+- **Nothing in the probe can report a hard lockup** — Reasoned. Every channel
+  here needs the scheduler: the stall watchdog is a shell loop, khungtaskd is a
+  kthread. A spinlock deadlock with interrupts off stops all of them, and on
+  arm64 there is no NMI watchdog to catch it. That case still looks like the
+  hangs we have had - one attempt burnt, then silence - and still needs the
+  buttons.
+
 
 ## The build environment
 

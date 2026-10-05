@@ -23,7 +23,8 @@ catches a later hang rather than only a panic.
 
   bootlog.py install <vendor_boot-in> <vendor_boot-out>
   bootlog.py probe   <vendor_boot-in> <vendor_boot-out>
-  bootlog.py stage   <vendor_boot-in> <vendor_boot-out>
+  bootlog.py stage   <vendor_boot-in> <vendor_boot-out> [skip-these-modules]
+  bootlog.py stages  <vendor_boot> [seconds-to-fallback]
   bootlog.py decode  <rddata-dump>
 
 'install' only rewrites the vendor ramdisk. The dtb area is copied across
@@ -398,12 +399,20 @@ LIST=/lib/modules/initramfs.load
 ALL=$(grep -v '^[[:space:]]*#' "$LIST" | tr -s ' \t\n' ' ')
 PASS1=""
 PASS2=""
+SKIPPED=""
 for m in $ALL; do
+	# A module named in the skip list is left out of the boot entirely.
+	# Once the probe has found one that hangs, that is how you find out
+	# whether the boot gets any further without it.
+	case " @SKIP@ " in
+	*" $m "*) SKIPPED="$SKIPPED $m" ; continue ;;
+	esac
 	case " @DEFER@ " in
 	*" $m "*) PASS2="$PASS2 $m" ;;
 	*)        PASS1="$PASS1 $m" ;;
 	esac
 done
+[ -n "$SKIPPED" ] && mark 5 "skipping:$SKIPPED"
 
 i=9
 for m in $PASS1; do
@@ -466,7 +475,7 @@ reboot -f
 """
 
 
-def stage(src, dst):
+def stage(src, dst, skip=""):
     """Rebuild a vendor_boot whose /init is the staged module probe."""
     d = open(src, "rb").read()
     s = sections(d)
@@ -478,7 +487,9 @@ def stage(src, dst):
         sys.exit("error: no /init in the vendor ramdisk - wrong image?")
 
     defer = " ".join(STAGE_DEFER.split())
-    init[2] = STAGE_INIT.replace("@DEFER@", defer).encode()
+    skip = " ".join(skip.split())
+    init[2] = (STAGE_INIT.replace("@DEFER@", defer)
+                         .replace("@SKIP@", skip)).encode()
 
     # The staged init sources /bootlog.sh itself, once the storage chain is
     # about to be loaded, so the file still has to be there.
@@ -491,6 +502,8 @@ def stage(src, dst):
 
     held = len(defer.split())
     print(f"  in   {src}")
+    if skip:
+        print(f"  skipping entirely: {skip}")
     print(f"  out  {dst}")
     print(f"  /init replaced with the staged probe ({len(init[2])} bytes)")
     print(f"  {held} modules held back for the second pass")
@@ -518,6 +531,73 @@ def _rebuild(d, s, newrd):
     return bytes(out)
 
 
+# How long one attempt costs, in seconds, apart from the encoded delay: the
+# bootloader's own ~18 before it enters the kernel, plus the 25 the stall
+# watchdog waits before deciding progress has stopped. Measured on this
+# device: the reboot probe did seven attempts in 186s with an 8s sleep in
+# them, so 186/7 - 8 = 18.6.
+ATTEMPT_FIXED = 18 + 25
+ATTEMPTS = 7
+FALLBACK_BOOT = 35      # the stock slot getting as far as answering adb
+
+
+def stage_map(src, skip=""):
+    """Index -> what the staged probe was doing, in load order."""
+    d = open(src, "rb").read()
+    s = sections(d)
+    o_rd, vr = s["ramdisk"]
+    names = {e[1]: e[2] for e in cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))}
+    key = next((k for k in names if k.endswith("modules/initramfs.load")), None)
+    if key is None:
+        sys.exit("error: no initramfs.load in that image")
+    mods = [l.strip() for l in names[key].decode().splitlines()
+            if l.strip() and not l.strip().startswith("#")]
+    defer = set(STAGE_DEFER.split())
+    skipped = set(skip.split())
+    mods = [m for m in mods if m not in skipped]
+    p1 = [m for m in mods if m not in defer]
+    p2 = [m for m in mods if m in defer]
+
+    m = {1: "mount_proc_sys_dev", 2: "parse_cmdline",
+         3: "setup_firmware_path", 4: "setup_mdev"}
+    for i, mod in enumerate(p1, 10):
+        m[i] = f"pass1 modprobe {mod}"
+    m[60] = "reading /sys/class/udc"
+    m[61] = "setup_usb_network"
+    m[62] = "setup_usb_acm_configfs"
+    m[63] = "setup_usb_configfs_udc"
+    m[64] = "start_unudhcpd"
+    m[65] = "gadget bound, opening shells"
+    m[66] = "no gadget, falling back to the clock"
+    m[70] = "arming the flash log"
+    for i, mod in enumerate(p2, 71):
+        m[i] = f"pass2 modprobe {mod}"
+    m[99] = m.get(99, "") + "  (and everything past 99, which encodes the same)"
+    return m
+
+
+def stages(src, seconds=None, skip=""):
+    m = stage_map(src, skip)
+    if seconds is None:
+        print("  index  expected fallback  step")
+        for i in sorted(m):
+            t = ATTEMPTS * (ATTEMPT_FIXED + min(i, 99)) + FALLBACK_BOOT
+            print(f"  {i:5}  {t // 60}m{t % 60:02d}s             {m[i]}")
+        print("\n  Expected times ignore the time the probe spends loading the")
+        print("  modules before the one that hung, which adds a few seconds an")
+        print("  index, so a measured time lands a little above its row.")
+        return
+    t = int(seconds)
+    n = round((t - FALLBACK_BOOT) / ATTEMPTS - ATTEMPT_FIXED)
+    print(f"  {t}s to the fallback -> index about {n}")
+    for i in range(max(1, n - 2), n + 3):
+        if i in m:
+            print(f"    {i:3}{'  <-' if i == n else '    '} {m[i]}")
+    if n >= 99:
+        print("\n  99 is the cap, so this only says it got past the USB bring-up.")
+    elif n < 1:
+        print("\n  Below the first step: it never ran the probe at all.")
+
 def decode(path):
     d = open(path, "rb").read()
     if not d.startswith(LOG_MAGIC):
@@ -540,8 +620,10 @@ if __name__ == "__main__":
         install(a[1], a[2])
     elif len(a) == 3 and a[0] == "probe":
         probe(a[1], a[2])
-    elif len(a) == 3 and a[0] == "stage":
-        stage(a[1], a[2])
+    elif a[:1] == ["stage"] and len(a) in (3, 4):
+        stage(a[1], a[2], a[3] if len(a) == 4 else "")
+    elif a[:1] == ["stages"] and len(a) in (2, 3):
+        stages(a[1], a[2] if len(a) == 3 else None)
     elif len(a) == 2 and a[0] == "decode":
         decode(a[1])
     else:

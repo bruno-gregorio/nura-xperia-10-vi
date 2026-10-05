@@ -179,8 +179,27 @@ and `adb reboot bootloader` begins the next round.
 ```sh
 scripts/try-kernel.sh             # flash to the spare slot and boot it
 scripts/try-kernel.sh --log       # read the last boot's log back off flash
+scripts/try-kernel.sh --harvest   # pull a live initramfs over the USB gadget
 scripts/try-kernel.sh --restore   # put the spare slot back to stock
 ```
+
+Three environment variables change what gets flashed, all of them bring-up
+only. `BOOTLOG=0` leaves the flash-log hook out. `PROBE=1` replaces `/init`
+with nothing but a sleep and a reboot, which answers whether the initramfs
+runs at all. `STAGE=1` is the useful one once it does:
+
+```sh
+STAGE=1 WAIT=1300 scripts/try-kernel.sh
+```
+
+It replaces `/init` with a probe that loads the 89 modules one at a time
+rather than in the single `modprobe -a` the real init uses, and opens every
+channel it can before starting. The first pass is a curated 40 - clocks,
+pinctrl, regulators, the SMMU, rpmh, the PMIC, the two PHYs and `dwc3-msm` -
+chosen because the USB gadget needs none of the storage chain, so a live link
+can come up before the boot dies. If it does, `--harvest` runs itself and the
+remaining 49 load in front of you. If it does not, the time to the fallback
+names the step that hung; see below.
 
 The other half is being able to read what happened, and on this device that
 took some finding. There is no console: the GENI UART is not brought out to a
@@ -228,6 +247,38 @@ contains the whole boot.
   by hand, and there is no firmware image here to recover a corrupt one, so it
   is left alone. At roughly 54 seconds an attempt a failed round takes about
   six minutes, unattended.
+### Reading the clock, when nothing enumerates
+
+The last channel on this device is how long the bootloader takes to give up.
+It needs no storage, no USB and no console, and it is hands-free, because a
+deliberate reset keeps feeding the A/B retry counter.
+
+The staged probe starts a watchdog before anything can hang. When module
+loading stops making progress for 25 seconds it delays the reset by one
+second per step already completed, so seven attempts multiply that difference
+by seven, and the time to the fallback names the step:
+
+```sh
+scripts/bootlog.py stages .pmb/work/chroot_rootfs_sony-pdx246/boot/vendor_boot.img
+scripts/bootlog.py stages <that image> 620     # 620s to the fallback -> index
+```
+
+Underneath the watchdog are two kernel mechanisms the probe switches on, both
+through `/proc` so that no command-line rebuild is needed:
+
+- **`hung_task_panic`** makes khungtaskd panic on a task stuck
+  uninterruptible, which is what a driver waiting forever on a clock, a
+  regulator or firmware looks like. `panic=5` turns that into a reset.
+- **`sysrq`**, so the watchdog can reset with `echo b > /proc/sysrq-trigger`.
+  That is `emergency_restart()`, which skips the orderly shutdown a wedged
+  driver could otherwise block.
+
+None of it survives a hard lockup. Every channel here needs the scheduler -
+the watchdog is a shell loop, khungtaskd is a kthread - and a spinlock
+deadlock with interrupts off stops all of them, with no NMI watchdog on arm64
+to catch it. That case looks like one attempt burnt and then silence, and
+still needs Power+VolUp.
+
 
 ## Getting in, with no display
 

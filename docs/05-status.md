@@ -147,6 +147,34 @@ blind; the last three were single-variable experiments against a known-good
 image, which is what finally separated the causes. `scripts/avb-inspect.py`
 does the AVB side offline, from the dumps, without touching the phone.
 
+- **The bootloader rejects our device tree, and that is the whole of it** —
+  Verified by a single-variable flash. A `vendor_boot` identical to stock in
+  every respect except the device tree area - stock kernel, stock ramdisk,
+  stock command line, stock bootconfig, stock load addresses - red-states a
+  phone that stock boots. The cause is overlay application: the bootloader
+  applies an overlay from `dtbo` to the base tree it selects, resolving the
+  overlay's `__fixups__` against the base's `__symbols__`. Sony's base defines
+  1234 labels and ours 999, and all 37 stock overlays reference at least one of
+  the 61 our base does not define, among them `mdss_dsi0`, `mdss_dsi_phy0`,
+  `audio_gpr`, `lpass_cdc`, `bluetooth_wcn6750`, `cnss_wlan_mem`, `cpu4_pause`
+  and `GOLD_CPU_OFF`. The fixups cannot resolve, the overlay cannot be applied,
+  and the device is declared corrupt. Nothing about AVB, signatures or
+  `os_version` was ever involved.
+- **Carrying Sony's device trees is the way round it for now** — Reasoned,
+  untested on the device. `scripts/swap-vendor-dtb.py` rebuilds a
+  `vendor_boot` with a different dtb area and leaves every other section and
+  header field alone, so our kernel, our initramfs and our command line can
+  travel with Sony's fourteen trees until our own base defines the labels the
+  overlays need. The real fix is to build the base tree with the
+  `sm6450-modules` includes.
+- **`stdout-path` comes from the bootloader, not from `parrot.dtb`** —
+  Verified, and this corrects a comment in `kernel-cmdline.conf`. Neither our
+  base tree nor Sony's defines it at the root; in the live tree it sits in
+  `/chosen` next to `linux,initrd-start`, which is the bootloader's own
+  handiwork. It reads
+  `stdout-path = "/soc/qcom,qup_uart@98c000:115200n8"`, so bare `earlycon` does
+  find the GENI port - but it will do so whichever base tree we ship, because
+  the property is not ours to supply.
 - **The red state is not AVB** — Verified, and this reverses the earlier
   reading. `vbmeta_b` was re-flashed with the two disable flags set and a
   signature that `avb-inspect.py` proves is invalid, and the device booted

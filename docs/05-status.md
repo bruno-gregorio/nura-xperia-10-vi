@@ -934,6 +934,19 @@ made the first week of bring-up slow. The findings below are what closed it.
   its own, so an unattended boot still resets itself on the same schedule;
   `sdcard-install.sh` creates it before the first write and removes it from a
   trap, so a crash or an interrupt hands the phone back.
+- **The staged probe can hand off to the stock second stage** — Written and
+  verified against the archive; untested on the device. `HANDOFF=1` puts a
+  `/pmhandoff` file in the ramdisk, and the staged init `exec`s
+  `/init_2nd.sh` after its last module pass instead of idling until it
+  resets. The point is that it sidesteps the stage 1 hang entirely: the probe
+  loads modules in an order known to work here, and stage 2 opens by having
+  udev load everything, which by then has nothing left to do. It is never a
+  blind step, because the handoff is below the point where the gadget is
+  bound and telnet is listening. Both of the probe's watchdogs are killed
+  across it - left armed they would fire minutes later into a live session,
+  or into a system that had already switched root, which `init_2nd.sh`'s
+  `kill $(pidof sh)` would not prevent, since this init runs as busybox `ash`
+  and not as `sh`.
 
 ## Flashing
 
@@ -1006,39 +1019,33 @@ made the first week of bring-up slow. The findings below are what closed it.
 
 ## Next steps, in order
 
-1. **Run `scripts/device-probe.sh`, then `scripts/device-collect.sh`**, with
-   the phone booted normally and USB debugging on. Both are read-only and
-   neither needs root. Done once already on 2026-10-05; see "Read off the live
-   device" above. Re-run the collector after turning on "Rooted debugging" in
-   Developer options, because that is what makes the live device tree, the
-   kernel command line, the debugfs clock and regulator summaries, and a real
-   `dd` backup of the boot partitions readable. Everything in step 3 and the
-   device tree gap above falls out of that one toggle.
-2. **Run `scripts/flash.sh flash-boot`**, with `scripts/console.sh` in a
-   second terminal. `ramboot` was the intended step here and this device
-   refuses it, so the smallest equivalent is flashing the two boot partitions
-   on the active slot: userdata, dtbo and vbmeta stay as they are, and
-   `restore-boot` puts the stock kernel back from the dumps in step 3. Flash
-   the active slot, never the other one - slot a's rollback index is
-   1772323200 against slot b's 1777593600, so making the older slot active
-   risks the bootloader refusing it on anti-rollback.
-3. **Take the backups** in [04-flashing.md](04-flashing.md) step 1, for both
-   slots. Do this before anything is flashed, not before the RAM boot. With
-   the "Rooted debugging" toggle on, `scripts/device-collect.sh` does this by
-   `dd` into `out/device-dump/stock/`, which is the backup that document said
-   had to be a firmware download.
-4. **Look for a USB gadget.** That single observation splits the problem in
-   half: if it appears, the kernel booted and the work moves to userspace; if
-   not, read ramoops. `scripts/console.sh` is this step.
-5. **Read `/sys/fs/pstore/console-ramoops*` after the next boot.** Still the
-   cheapest instrument and it needs no cable: the region is reserved in the DTB
-   we build, `PSTORE_RAM` is builtin, and 256K of console ring survives a
-   reboot. One correction, Verified 2026-10-05: `/sys/fs/pstore` is denied to
-   the `shell` user, so reading it from the installed Android needs the "Rooted
-   debugging" toggle from step 1. From a booted postmarketOS it is readable
-   anyway. Serial on `0x98c000` is the fallback and needs physical access to
-   the USB-C SBU pins that nobody has yet.
-6. **Flash the rootfs and try a real boot**, once steps 1-5 say the kernel
-   runs. The image exists and verifies; what is untested is whether the
-   initramfs finds and mounts it on the device. Steps 1-5 do not depend on it.
-7. **Only then: build `sm6450-modules` for display.**
+Steps 1 to 5 of the old list are done: the probe and collector have run, both
+slots are backed up by `dd` under `out/device-dump/stock/`, the boot partitions
+are flashed on the spare slot by `scripts/try-kernel.sh`, and the USB gadget
+question is answered - it comes up, and there is a telnet shell and a serial
+port on the cable. What is left starts from there.
+
+1. **Put the rootfs on the SD card, from the staged probe's shell.**
+   `STAGE=1 ./scripts/try-kernel.sh` gets a shell in about sixteen seconds,
+   then `./scripts/sdcard-install.sh --yes` partitions `/dev/mmcblk1` and
+   streams the image across. The image already carries the UUID that is on
+   the flashed command line, so this needs no reflash. This is the step that
+   turns the port from an initramfs into something that can boot.
+2. **Hand the boot back to the stock second stage.** `HANDOFF=1 STAGE=1` has
+   the probe `exec /init_2nd.sh` once its own module passes are done and the
+   gadget is up. Stage 2 then runs `wait_root_partition`, `resize2fs`,
+   `mount_root_partition` and `switch_root` against the card from step 1. If
+   that works, the port boots; everything after it is ordinary userspace.
+3. **Find where stock stage 1 wedges.** Still unknown, and now diagnosable:
+   the watchdog arms on line 5 instead of line 35, so a hang becomes a reset
+   loop that ends in Android with a flash log to read. The log hook arms right
+   after `mount_proc_sys_dev`, so the presence or absence of a record is
+   itself the answer - the hook waits for UFS, which only appears once stage 2
+   has let udev load the storage modules. Steps 1 and 2 do not wait on this.
+4. **Rebuild the kernel without `dummy_hcd`.** `# CONFIG_USB_DUMMY_HCD is not
+   set` is already in `pmos.config` and needs a build to take effect. Not
+   urgent: `deviceinfo_usb_network_udc` names the real controller, so the
+   gadget cannot land on `dummy_udc.0` by accident any more. It does mean
+   rebuilding the rootfs image too, because the modules live in it.
+5. **Build `sm6450-modules` for display.** The last thing, as before. It also
+   retires `deviceinfo_no_framebuffer`.

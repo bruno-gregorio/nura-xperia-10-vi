@@ -1,0 +1,32 @@
+--- a/pmb/chroot/binfmt.py
++++ b/pmb/chroot/binfmt.py
+@@ -11,6 +11,15 @@
+ from pmb.helpers import logging
+ 
+ 
++# binfmt_misc is global to the host, not per container or per chroot, and
++# register() deliberately leaves an existing handler alone. Remember the ones
++# we put there ourselves so that unregister() cannot tear down a handler that
++# the distribution, the container runtime or the user set up - inside a
++# rootless container /proc/sys/fs/binfmt_misc is not even writable, so that
++# attempt fails and takes the whole shutdown with it.
++_registered_here: set[str] = set()
++
++
+ def is_registered(arch_qemu: str | Arch) -> bool:
+     return os.path.exists(f"/proc/sys/fs/binfmt_misc/qemu-{arch_qemu}")
+ 
+@@ -53,10 +62,13 @@
+     logging.info("Register qemu binfmt (" + arch_qemu + ")")
+     register = "/proc/sys/fs/binfmt_misc/register"
+     pmb.helpers.run.root(["sh", "-c", 'echo "' + code + '" > ' + register])
++    _registered_here.add(arch_qemu)
+ 
+ 
+ def unregister(arch: Arch) -> None:
+     arch_qemu = arch.qemu_user()
++    if arch_qemu not in _registered_here:
++        return
+     binfmt_file = "/proc/sys/fs/binfmt_misc/qemu-" + arch_qemu
+     if not os.path.exists(binfmt_file):
+         return

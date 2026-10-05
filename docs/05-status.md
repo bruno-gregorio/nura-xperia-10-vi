@@ -299,18 +299,32 @@ made the first week of bring-up slow. The findings below are what closed it.
   block device rather than giving up early, an all-zero partition means the
   kernel died before `ufs_qcom` probed. That puts the failure between the first
   instruction and roughly entry sixty of `initramfs.load`.
-- **The log hook itself may be what hangs the phone** — Guess, and the next
-  thing to settle. Every boot carrying the hook has hung: the 26-parameter
-  one, the 13-parameter one, and the freshly rebuilt 13-parameter one that
-  finally had `panic=5` baked in properly. The one boot with `panic=5` and no
-  hook panicked and reset itself five times. Three against one is not proof,
-  but it points one way, and the mechanism is there: the hook writes a
-  megabyte with `conv=fsync` from a background job the moment sysfs shows the
-  partition, which is in the middle of `load_modules`, with the rest of the
-  storage stack - `ufshcd-crypto-qti` among it, which `initramfs.load` notes
-  UFS refuses to probe without - still coming up. A write into a half-probed
-  controller is a plausible way to wedge the I/O path for good.
-  `BOOTLOG=0 scripts/try-kernel.sh` flashes without it, which is the control.
+- **The log hook is not what hangs the phone** — Verified 2026-10-05, and it
+  retires the guess that replaced it. A control run with `BOOTLOG=0`, the same
+  image with the hook left out, hung exactly the same way: nothing in eleven
+  minutes, no fallback, no USB.
+- **Two images that behave differently are byte-identical** — Verified, and it
+  is the most awkward fact here. The image from the run that panicked and reset
+  itself five times and the image from the run that hung have the same 13
+  command-line parameters, the same 478 initramfs entries with identical
+  contents, and the same four load addresses. Nothing distinguishes them. So
+  the failure is not a property of the image: either it is non-deterministic,
+  which an early race over clock, regulator or SMMU probe order would explain,
+  or the five resets were never kernel panics in the first place. Settling that
+  needs `slot-retry-count` read right after a timed hang, which needs the
+  button combo, so it has not been done.
+- **A hang cannot be recovered without touching the phone, and that is final**
+  — Verified by elimination. The A/B retry counter only advances when the
+  bootloader starts an attempt, so a kernel that stops without panicking never
+  feeds it. Nothing enumerates on USB during a normal boot, so the host cannot
+  reach the device either. Power and Volume Up is a hardware force-off and
+  there is no software equivalent. The loop is therefore hands-free exactly
+  when the kernel panics, and costs one button press when it hangs. No amount
+  of scripting changes that, and the earlier claim that it would is withdrawn.
+- **`wait_for_adb` was blind to fastboot** — fixed. The bootloader can give up
+  into fastboot instead of booting the fallback, and a wait that only polled
+  adb reported that as a dead phone, throwing the round away while the device
+  sat there waiting to be talked to.
 - **A reboot loop and a hang are indistinguishable on this phone** — Verified
   the hard way, three times, twice by me. Every boot attempt redraws the same
   Sony logo, so a device working through seven retries at 54 seconds each

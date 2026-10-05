@@ -84,6 +84,15 @@ wait_for_adb() {
 			echo "${slot:-unknown}"
 			return 0
 		fi
+		# The bootloader can also give up into fastboot rather than boot
+		# the fallback, and only checking adb made that look identical to
+		# a dead phone - a round thrown away with the device sitting
+		# there ready to be talked to.
+		if fastboot devices 2>/dev/null | grep -q .; then
+			printf '\r   %-70s\n' "dropped into fastboot after ${i}s" >&2
+			echo "fastboot"
+			return 0
+		fi
 		i=$((i + 2))
 		if [ $((i % 15)) -lt 2 ]; then
 			# ~54s an attempt, 7 attempts, then the fallback boots.
@@ -213,6 +222,10 @@ cmd_try() {
 		echo "  The kernel hung rather than panicked, so nothing reset it."
 		echo "  Hold Power+VolUp, then VolUp while plugging in USB, and run:"
 		echo "    scripts/try-kernel.sh --log"
+	elif [ "$got" = "fastboot" ]; then
+		echo "RESULT: the bootloader gave up and dropped to fastboot."
+		echo "  It did not boot the fallback slot, so read the counter:"
+		echo "    fastboot getvar slot-retry-count:$spare"
 	elif [ "$got" = "_$spare" ]; then
 		echo "RESULT: OUR KERNEL BOOTED. adb answers on slot $got."
 	else

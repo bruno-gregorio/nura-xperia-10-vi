@@ -21,6 +21,14 @@ deviceinfo_usb_network_udc="a600000.dwc3"
 deviceinfo_year="2024"
 deviceinfo_arch="aarch64"
 
+# Nothing in the initramfs can draw on the panel: the display stack is dispcc
+# plus a DPU and a panel driver we do not build, so /dev/fb0 never appears.
+# Saying so turns setup_framebuffer()'s ten-second poll for it, and splash with
+# it, into a no-op - the initramfs sets nosplash=y off this one key. Worth
+# having even though "splash" is on the cmdline, because the console is a
+# serial port and a framebuffer splash would have nowhere to go.
+deviceinfo_no_framebuffer="true"
+
 # Device related
 deviceinfo_chassis="handset"
 deviceinfo_keyboard="false"

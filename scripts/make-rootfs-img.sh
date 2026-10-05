@@ -50,8 +50,20 @@ if mount | grep -q " ${CHROOT}/"; then
 fi
 
 # ---------------------------------------------------------------------------
+# A fresh UUID means boot.img and vendor_boot.img have to be reflashed, because
+# the cmdline is where the initramfs learns which filesystem to mount. Pinning
+# it to the UUID already on the cmdline keeps the rootfs rebuildable on its own:
+#
+#   PMOS_ROOT_UUID=$(strings -a .../vendor_boot.img | grep -o 'pmos_root_uuid=...')
+#
+# which matters once the image lives on an SD card and can be rewritten in
+# place without going near fastboot.
 say "assigning a filesystem UUID"
-UUID=$(cat /proc/sys/kernel/random/uuid)
+UUID="${PMOS_ROOT_UUID:-$(cat /proc/sys/kernel/random/uuid)}"
+case "$UUID" in
+[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]-[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;;
+*) die "PMOS_ROOT_UUID=$UUID does not look like a UUID" ;;
+esac
 echo "    $UUID"
 
 # Matches pmb.install._install.create_fstab() with layout=None, which is the

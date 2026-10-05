@@ -635,6 +635,38 @@ made the first week of bring-up slow. The findings below are what closed it.
   `PMOS_PASSWORD`, default `147147`, and the hash read back out of the finished
   image verifies against that. `root` is `!` (locked), which is pmOS's normal
   arrangement.
+- **The rootfs can be rebuilt without reflashing boot** — Verified.
+  `make-rootfs-img.sh` used to mint a fresh filesystem UUID on every run,
+  which forces `boot.img` and `vendor_boot.img` to be rebuilt and reflashed,
+  because the command line is where the initramfs learns which filesystem to
+  mount. It now honours `PMOS_ROOT_UUID`, so the image can be pinned to the
+  UUID already on the flashed command line:
+
+      PMOS_ROOT_UUID=$(strings -a .pmb/work/chroot_rootfs_sony-pdx246/boot/vendor_boot.img \
+              | grep -o 'pmos_root_uuid=[0-9a-f-]*' | head -1 | cut -d= -f2)
+
+  The current image was rebuilt that way, against
+  `1e3e6bd0-9170-4c79-a34b-64ece0ad2ca6`, and `dumpe2fs` reads that UUID back
+  out of it. Once the rootfs lives on an SD card this makes the whole rootfs
+  half of the loop a card rewrite with no fastboot in it.
+- **`make-rootfs-img.sh` needs the chroot unmounted first** — Verified. Its
+  own first check refuses to run while anything is mounted under the chroot,
+  because those mounts would be copied into the image, and `pmb chroot` leaves
+  its bind mounts in place until shutdown. Run
+  `distrobox enter pmport -- ./scripts/pmb -q shutdown` before it. The script
+  then calls `shutdown` itself a second time, after `mkinitfs`, for the same
+  reason.
+- **The card is written from the debug shell, over the cable** — Written and
+  guarded, not yet run against the phone. `scripts/sdcard-install.sh` serves
+  the image over HTTP bound to the USB address alone - not `0.0.0.0`, which
+  would also publish it to the wireless network - and has the phone pull it
+  straight into `dd`, staging nothing, since the image is larger than the
+  phone's RAM. The write runs under `setsid` with its output in a file and is
+  polled over short telnet connections, because `scripts/telnet.py` stops
+  reading two seconds after its piped input ends and a dropped session would
+  otherwise take `dd` with it. It refuses any target that is not
+  `/dev/mmcblkN`, refuses a card smaller than the image, and does nothing at
+  all without `--yes`.
 
 ## The initramfs and the debug shell
 
@@ -812,6 +844,73 @@ made the first week of bring-up slow. The findings below are what closed it.
   it over telnet dropped the connection; the device stayed up and pingable, so
   it is `blkid` scanning every loop and ram device against a 4096-byte-sector
   disk, not a crash. Use `/proc/partitions` instead.
+- **The real init enumerates nothing at all** — Verified, from this host's own
+  kernel log rather than from the phone. Across the 20:10 round the host saw
+  the bootloader (`Pdx246`), fastboot (`Android`/Google, `0fce:0dde`), Android
+  on slot b (`XQ-ES72`, `0fce:320e`) and fastboot again, then a disconnect at
+  20:12:02 and **not one enumeration in the fifteen minutes after it**. So the
+  question is not whether the gadget is misconfigured: no USB device appears on
+  the cable at all, which is what a boot that never reaches `setup_udev` looks
+  like.
+- **Correction: `pmos.debug-shell` is on the command line** — Verified. An
+  earlier reading here said it was absent, from a grep that required `=` and
+  so skipped every bare flag. It is in `kernel-cmdline.conf` and in the
+  cmdline baked into the flashed image. That matters: stage 2 stops at
+  `debug_shell` four lines after `run_hooks /hooks`, well before
+  `wait_root_partition`, so a shell does **not** depend on there being a
+  rootfs to find.
+- **Nothing between the quirk and `debug_shell` can block** — Verified against
+  the initramfs source, which rules out the obvious reading of the silence.
+  `setup_framebuffer` polls for `/dev/fb0` a hundred times at 0.1 s and gives
+  up; `setup_dynamic_partitions` returns at once when no super partitions are
+  named, and this device names none; `run_hooks` returns on an empty or
+  missing directory, and only `hooks-cleanup` ships; `run_getty` wraps its
+  `getty` loop in `{ ... } &`, so even a getty on a console that does not
+  exist cannot stall the caller. Whatever stops this boot stops it earlier
+  than stage 2.
+- **udev in the initramfs has everything it needs to load drivers** — Verified
+  by listing the archive, and it kills a tidy hypothesis. Thirteen rules are
+  present including `80-drivers.rules`, whose `ENV{MODALIAS}=="?*"
+  RUN{builtin}+="kmod load"` is the line that autoloads from a modalias, and
+  `modules.alias`, `modules.dep` and their `.bin` indexes are all there beside
+  `initramfs.load`. "udev had no rules, so no modules loaded, so no USB and no
+  log" is therefore wrong.
+- **Naming the real UDC is not just tidiness** — Verified against
+  `get_usb_udc()`, which is `ls /sys/class/udc | head -1` unless
+  `deviceinfo_usb_network_udc` is set. With `dummy_hcd` built in there are two
+  entries, and `a600000.dwc3` only wins that race because `a` sorts before
+  `d`. The deviceinfo key is set, so the gadget lands on the hardware or fails
+  loudly instead of depending on alphabetical luck.
+- **Removed: the 20-second `hung_task_panic` in the watchdog** — my mistake,
+  corrected. `bootlog.py`'s watchdog set `hung_task_panic=1` with
+  `hung_task_timeout_secs=20`, which panics the kernel over any task that
+  blocks for 20 s. On a bring-up boot that is ordinary - a probe waiting on
+  firmware, or `udevadm settle` draining ninety modules' events - and with
+  `panic=5` on the command line it would reset a boot that was merely slow.
+  It also caught nothing the 240 s timer does not, since both need the kernel
+  to still be scheduling userspace. Only `sysrq` and the timer remain.
+- **Stage 1 jumps at line 44, not 59** — Verified by reading the archive's own
+  `/init`. The count of 59 here was taken from a patched image. The live part
+  of stage 1 is lines 1-44: `busybox --install`, `mount_proc_sys_dev`,
+  `parse_cmdline`, `setup_log`, `setup_firmware_path`, `jump_init_2nd`.
+  Everything below is dead on this device.
+- **The root lookup scans every block device, and that scan can be skipped** —
+  Verified against the source, and it matters because `blkid` has taken this
+  phone's debug shell down. `find_partition` runs `blkid --uuid "$uuid"`,
+  which probes everything; but `find_root_partition` only calls it when
+  `PMOS_ROOT` is empty, so setting `PMOS_ROOT` ahead of it avoids the scan
+  entirely. `get_partition_type` and `delete_old_install_partition` pass
+  `blkid` a single device, which is the safe form. One full scan remains that
+  presetting does not avoid: `resize_root_partition` asks
+  `blkid --label pmOS_install` before deciding, and then - with no
+  `pmos.force-partition-resize` and no subpartitions - prints "failed to find
+  qualifying partition" and returns without touching `parted`.
+- **This device has no framebuffer, and now says so** — Verified by absence:
+  the display stack is dispcc plus a DPU and panel driver we do not build, so
+  `/dev/fb0` cannot appear. `deviceinfo_no_framebuffer="true"` sets
+  `nosplash=y` inside the initramfs, which turns both `setup_framebuffer`'s
+  ten-second poll and the splash into no-ops. The console here is a serial
+  port, so a framebuffer splash had nowhere to go in any case.
 
 ## Flashing
 

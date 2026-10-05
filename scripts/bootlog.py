@@ -581,9 +581,13 @@ pmstage_reset
 # be recovered without someone pressing buttons.
 USB_WATCHDOG = """
 # --- pdx246: make a hung boot recoverable ----------------------------------
-echo 1  > /proc/sys/kernel/sysrq
-echo 1  > /proc/sys/kernel/hung_task_panic
-echo 20 > /proc/sys/kernel/hung_task_timeout_secs
+echo 1 > /proc/sys/kernel/sysrq
+# hung_task_panic is deliberately left alone. It was set here with a 20 second
+# timeout, which panics the kernel over any task that blocks for 20 seconds -
+# and on a bring-up boot that is ordinary: a probe waiting on firmware, or
+# udevadm settle draining ninety modules' events. It catches exactly the hangs
+# the timer below already catches, since both need the kernel to still be
+# scheduling userspace, so it bought nothing and reset good boots.
 (
 	# A working boot has USB up in about five seconds, so four minutes is
 	# far longer than this needs and far shorter than waiting for a person.

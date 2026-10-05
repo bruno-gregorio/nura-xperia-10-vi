@@ -135,13 +135,29 @@ if is_root; then
 	# The authoritative tree: what the bootloader actually handed the kernel,
 	# base DTB plus whatever the dtbo overlay changed. Decompile with
 	#   dtc -I fs -O dts out/device-dump/devicetree/base
+	# Two routes, because toybox tar on sysfs is not something to bet the one
+	# rooted session on: sysfs reports st_size 0 for these files and some tar
+	# builds then archive them empty. 'adb pull' reads to EOF instead, so it
+	# is the fallback, and the property count below is what says which worked.
+	rm -rf "$OUT/devicetree"
 	if adb exec-out 'tar -c -C /sys/firmware devicetree 2>/dev/null' > "$OUT/devicetree.tar" 2>/dev/null \
-		&& [ -s "$OUT/devicetree.tar" ]; then
-		( cd "$OUT" && rm -rf devicetree && tar -xf devicetree.tar ) \
-			&& echo "    devicetree/                  $(find "$OUT/devicetree" -type f | wc -l) properties"
+		&& [ -s "$OUT/devicetree.tar" ] \
+		&& ( cd "$OUT" && tar -xf devicetree.tar ) 2>/dev/null \
+		&& [ -n "$(find "$OUT/devicetree" -type f -size +0 2>/dev/null | head -1)" ]; then
+		echo "    devicetree/ (tar)            $(find "$OUT/devicetree" -type f | wc -l) properties"
 	else
-		rm -f "$OUT/devicetree.tar"
-		echo "    devicetree                   FAILED"
+		rm -f "$OUT/devicetree.tar"; rm -rf "$OUT/devicetree"
+		mkdir -p "$OUT/devicetree"
+		if adb pull /sys/firmware/devicetree/base "$OUT/devicetree/base" >/dev/null 2>&1 \
+			&& [ -n "$(find "$OUT/devicetree" -type f -size +0 2>/dev/null | head -1)" ]; then
+			echo "    devicetree/ (pull)           $(find "$OUT/devicetree" -type f | wc -l) properties"
+		else
+			rm -rf "$OUT/devicetree"
+			echo "    devicetree                   FAILED both tar and pull"
+		fi
+	fi
+	if [ -d "$OUT/devicetree" ]; then
+		echo "    decompile it with: dtc -I fs -O dts $OUT/devicetree/base"
 	fi
 
 	say "boot partition backup"

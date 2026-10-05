@@ -7,6 +7,10 @@
 #
 # Everything below is built from the kernel tree itself, so no out-of-tree
 # module repository is needed to reach a root filesystem.
+#
+# Note there is no dm-mod here. pmOS needs CONFIG_BLK_DEV_DM=y for the root
+# filesystem, so device-mapper is in vmlinux and there is no .ko for mkinitfs
+# to find - it is available earlier than stock has it, not later.
 
 # clocks, dcvs, watchdog
 gh_virt_wdt
@@ -113,6 +117,3 @@ dispcc-ravelin
 phy-msm-snps-hs
 phy-msm-ssusb-qmp
 dwc3-msm
-
-# generic
-dm-mod

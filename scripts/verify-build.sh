@@ -57,11 +57,28 @@ else
 		"$APORTS/device-sony-pdx246/modules-initfs" \
 		| tr '-' '_' | sort -u > "$WORK/wanted.txt"
 	printf '    %s modules requested in the initramfs\n' "$(wc -l < "$WORK/wanted.txt")"
+	# A name can be absent because it is builtin, which is fine for the kernel
+	# but still breaks mkinitfs - there is no .ko for it to find. Separate the
+	# two: builtin means "drop it from the list", absent means "the build is
+	# wrong".
+	builtin=$(dirname "$(find "$moddir" -name modules.builtin | head -1)")
+	sed -n 's|.*/\([^/]*\)\.ko$|\1|p' "$builtin/modules.builtin" \
+		| tr '-' '_' | sort -u > "$WORK/builtin.txt"
 	missing=$(comm -23 "$WORK/wanted.txt" "$WORK/built.txt")
 	if [ -n "$missing" ]; then
-		echo "    NOT BUILT:"
-		echo "$missing" | sed 's/^/      /'
-		fail=1
+		echo "$missing" | sort -u > "$WORK/missing.txt"
+		isbuiltin=$(comm -12 "$WORK/missing.txt" "$WORK/builtin.txt")
+		absent=$(comm -23 "$WORK/missing.txt" "$WORK/builtin.txt")
+		if [ -n "$isbuiltin" ]; then
+			echo "    BUILTIN, so there is no .ko - remove from modules-initfs:"
+			echo "$isbuiltin" | sed 's/^/      /'
+			fail=1
+		fi
+		if [ -n "$absent" ]; then
+			echo "    NOT BUILT AT ALL:"
+			echo "$absent" | sed 's/^/      /'
+			fail=1
+		fi
 	else
 		echo "    all present"
 	fi

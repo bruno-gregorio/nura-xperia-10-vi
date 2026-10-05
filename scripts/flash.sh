@@ -86,10 +86,19 @@ cmd_flash_boot() {
        before writing anything here."
 	done
 
-	echo "Writing boot and vendor_boot on slot $slot. Nothing else is touched:"
-	echo "  userdata keeps its data, dtbo keeps the parrot-qrd overlay that"
-	echo "  turns our base parrot.dtb into this device's tree, and vbmeta is"
-	echo "  left alone because an unlocked bootloader does not enforce it."
+	[ -f "$STOCK_DIR/vbmeta_$slot.img" ] || die "missing $STOCK_DIR/vbmeta_$slot.img.
+       Without it this flash red-states the device: see the comment above."
+
+	echo "Writing vbmeta, boot and vendor_boot on slot $slot."
+	echo "  userdata keeps its data, and dtbo keeps the parrot-qrd overlay that"
+	echo "  turns our base parrot.dtb into this device's tree."
+	echo
+	echo "  vbmeta is the device's own, re-flashed with verification off. An"
+	echo "  unlocked bootloader does NOT stop verifying - unlocked gives the"
+	echo "  orange state, while a vbmeta that fails to verify gives the red"
+	echo "  state and refuses to boot at all. Verified the hard way on"
+	echo "  2026-10-05: flashing boot without this produced \"Your device is"
+	echo "  corrupt, it can't be trusted and it won't boot\"."
 	echo
 	echo "  boot:        $BOOT_IMG"
 	echo "  vendor_boot: $VENDOR_BOOT_IMG"
@@ -100,6 +109,12 @@ cmd_flash_boot() {
 	read -r reply
 	[ "$reply" = "FLASH" ] || die "aborted"
 
+	# The device's own vbmeta, with the two disable flags set by fastboot
+	# rather than a replacement built by avbtool: an avbtool-generated empty
+	# one carries rollback index 0, and the bootloader enforces anti-rollback
+	# in hardware, so it would red-state the device regardless of the flags.
+	fastboot --disable-verity --disable-verification flash vbmeta \
+		"$STOCK_DIR/vbmeta_$slot.img" || die "flashing vbmeta failed"
 	fastboot flash boot "$BOOT_IMG" || die "flashing boot failed"
 	fastboot flash vendor_boot "$VENDOR_BOOT_IMG" || die "flashing vendor_boot failed"
 
@@ -112,10 +127,15 @@ cmd_restore_boot() {
 	command -v fastboot >/dev/null || die "fastboot not found"
 	fastboot devices | grep -q . || die "no device in fastboot mode"
 	read_slot
-	for f in "boot_$slot.img" "vendor_boot_$slot.img"; do
+	for f in "boot_$slot.img" "vendor_boot_$slot.img" "vbmeta_$slot.img"; do
 		[ -f "$STOCK_DIR/$f" ] || die "missing $STOCK_DIR/$f - nothing to restore from"
 	done
-	echo "Restoring stock boot and vendor_boot on slot $slot."
+	echo "Restoring stock vbmeta, boot and vendor_boot on slot $slot."
+	# vbmeta goes back unpatched, so verification is enforcing again and the
+	# device returns to exactly the state the dumps were taken in. Restoring
+	# the stock kernel while leaving verification off would also boot, but it
+	# would not be the state we promised to put back.
+	fastboot flash vbmeta "$STOCK_DIR/vbmeta_$slot.img" || die "restoring vbmeta failed"
 	fastboot flash boot "$STOCK_DIR/boot_$slot.img" || die "restoring boot failed"
 	fastboot flash vendor_boot "$STOCK_DIR/vendor_boot_$slot.img" || die "restoring vendor_boot failed"
 	echo

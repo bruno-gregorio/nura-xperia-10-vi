@@ -310,6 +310,34 @@ does the AVB side offline, from the dumps, without touching the phone.
   is `fastboot flash $PARTITION_ROOTFS $IMAGE`, the *combined* image. Only
   `fastboot-bootpart` sets `"split": True` and uses the split images.
 
+- **Our device tree carries the ids the bootloader matches on** — Verified
+  against Sony's own. `scripts/dtb-ids.py` reads `qcom,msm-id`,
+  `qcom,board-id` and `qcom,pmic-id`, which is what a Qualcomm bootloader
+  selects a base tree by. Stock `vendor_boot` concatenates fourteen trees;
+  number eight is "Qualcomm Technologies, Inc. Parrot SoC" with
+  `msm-id = <0x219 0x10000 0x265 0x10000>` and `board-id = <0x0 0x0>`, and ours
+  carries exactly those, model string included. `board-id = <0x0 0x0>` is not a
+  defect: every stock base tree uses it, because the board identity arrives
+  later from the `dtbo` overlay, which is what rewrites the root to
+  `board-id = <0x1000b 0x00>` and a merged seven-SoC `msm-id` in the live tree.
+- **Sony also ships a second Parrot base we have no equivalent for** —
+  Verified, consequence untested. Tree six is "Parrot 4Gb SoC", same `msm-id`
+  but `board-id = <0x0 0x600>`. If this unit is the variant that wants the
+  `0x600` subtype, stock has a tree for it and our `vendor_boot` offers only
+  the `<0x0 0x0>` one.
+- **Our `parrot.dtb` is a strict subset of Sony's** — Verified. 2201 nodes
+  against 2562: 361 nodes under `/soc` are missing and nothing is extra, which
+  is the expected shape given the build compiles only the base tree without the
+  `sm6450-modules` includes. What is absent is camera (`qcom,cam-*`,
+  `qcom,tfe*`, `qcom,csiphy*`, `qcom,cci*`), display (`qcom,mdss_mdp@ae00000`,
+  `qcom,mdss_dsi_ctrl0@ae94000`, `qcom,mdss_dsi_phy0@ae94900`,
+  `qcom,sde_rscc@af20000`, both SDE SMMU contexts and `qcom,dp_display`), the
+  whole ASoC machine (every `qcom,msm-dai-*` and `qcom,msm-pcm-*`,
+  `qcom,msm-adsp-loader`, `spf_core_platform`), video (`qcom,vidc@aa00000`) and
+  108 pin configuration children of `/soc/pinctrl@f000000`. None of it is
+  needed for a serial or USB console, but the display nodes are why a black
+  screen says nothing about whether the kernel ran.
+
 ## The rootfs image
 
 - **The rootfs image is built, and the UUID chain is intact** — Verified.

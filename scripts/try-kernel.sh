@@ -135,10 +135,12 @@ cmd_try() {
 
 	say "waiting. our kernel answering on slot _$spare is a win;"
 	echo "   slot _$cur answering means it crashed and fell back."
-	got=$(wait_for_adb 420) || true
+	# Seven attempts at roughly 54 seconds each is already six minutes, and
+	# then the fallback slot still has to boot Android. 420 was not enough.
+	got=$(wait_for_adb 660) || true
 	echo
 	if [ -z "$got" ]; then
-		echo "RESULT: nothing came up in 7 minutes."
+		echo "RESULT: nothing came up in 11 minutes."
 		echo "  The kernel hung rather than panicked, so nothing reset it."
 		echo "  Hold Power+VolUp, then VolUp while plugging in USB, and run:"
 		echo "    scripts/try-kernel.sh --log"

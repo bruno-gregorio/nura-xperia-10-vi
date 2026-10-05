@@ -53,6 +53,27 @@ checkout that pmbootstrap actually reads.
    distrobox enter pmport -- ./scripts/pmb build --force device-sony-pdx246
    ```
 
+   Rebuilding is not enough on its own, and the gap between the two cost a day
+   here. `--force` produces a new apk in `.pmb/work/packages/`, but the rootfs
+   chroot still has the old one installed, and `mkinitfs` reads the chroot
+   rather than the repository. So `kernel-cmdline.conf` can be edited,
+   committed, synced and rebuilt while `vendor_boot.img` goes on carrying the
+   previous command line, with nothing anywhere reporting a problem. The
+   flashed image simply is not what the source says. Install it into the chroot
+   and regenerate the images explicitly:
+
+   ```sh
+   distrobox enter pmport -- ./scripts/pmb -q chroot -r -- \
+       apk add --allow-untrusted \
+       /mnt/pmbootstrap/packages/edge/aarch64/device-sony-pdx246-0.1-r0.apk
+   distrobox enter pmport -- ./scripts/pmb -q chroot -r -- mkinitfs
+   ```
+
+   `apk fix --reinstall` does not do it: with the version unchanged apk answers
+   `[APK unavailable, skipped]`. Naming the file is what works. Afterwards,
+   check the command line that actually reached the image rather than the one
+   that was meant to, by reading offset 28 of `vendor_boot.img`.
+
 4. **Check what a built apk actually declares, when that is in doubt.**
 
    ```sh

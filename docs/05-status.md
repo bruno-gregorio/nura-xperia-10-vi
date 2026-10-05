@@ -36,7 +36,7 @@ Last updated: 2026-10-04. **The device has never been booted with any of this.**
 | `deviceinfo_dtb="vendor/qcom/parrot"` resolves | Reasoned | `dtbs_install` path vs boot-deploy's `find_dtb` glob |
 | Leaving stock `dtbo` in place gives the right DT | Reasoned | This is what stock does; untested with *our* base |
 | The 86 first-stage modules are all in-tree | Reasoned | They are in `drivers/clk/qcom`, `drivers/pinctrl/qcom` etc. |
-| USB module names (`dwc3-msm`, `phy-msm-*`) | **Guess** | Taken from config symbol names, not from a build |
+| USB module names (`dwc3-msm`, `phy-msm-*`) | Verified | `drivers/usb/{dwc3,phy}/Makefile`: `CONFIG_USB_DWC3_MSM` -> `dwc3-msm.o`, `CONFIG_MSM_HSUSB_PHY` -> `phy-msm-snps-hs.o`, `CONFIG_USB_MSM_SSPHY_QMP` -> `phy-msm-ssusb-qmp.o`. `parrot_GKI.config` enables only these two PHYs (no eUSB2, no QUSB) |
 | USB gadget comes up in the initramfs | Guess | The whole debug plan rests on this |
 | Flashing procedure in `04-flashing.md` | Reasoned | Derived from AVB behaviour; **not executed** |
 
@@ -62,7 +62,9 @@ Last updated: 2026-10-04. **The device has never been booted with any of this.**
 4. Flash and look for a USB gadget. That single observation splits the problem
    in half: if it appears, the kernel booted and the work moves to userspace;
    if not, it is pstore or serial from here.
-5. Confirm the real module names for USB against `.pmb/work/.../lib/modules`
-   once the kernel has built, and fix `modules-initfs` — the current names are
-   the least-verified thing in this port.
+5. Cross-check every name in `modules-initfs` against
+   `.pmb/work/chroot_native/.../lib/modules` once the kernel has built. The USB
+   three are confirmed from the Makefiles; the 86 inherited from stock's
+   `modules.load` are stock's own filenames and should match, but a built tree
+   settles it.
 6. Only then: build `sm6450-modules` for display.

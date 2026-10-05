@@ -11,9 +11,10 @@ a stale or truncated blob cannot pass.
 
 Exits nonzero on the first thing that is wrong.
 """
+import gzip
 import hashlib
+import io
 import struct
-import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -34,6 +35,7 @@ WANT_ADDRS = {
     "dtb_addr": 0x01F00000,
 }
 DEVICEINFO = ROOT / "aports/device/testing/device-sony-pdx246/deviceinfo"
+MODULES_INITFS = ROOT / "aports/device/testing/device-sony-pdx246/modules-initfs"
 CMDLINE_CONF = ROOT / "aports/device/testing/device-sony-pdx246/kernel-cmdline.conf"
 KERNEL_APK = ROOT / ".pmb/work/packages/edge/aarch64"
 
@@ -113,6 +115,26 @@ def dtb_from_kernel_apk():
             if m.name == f"boot/dtbs/{want}":
                 return t.extractfile(m).read(), apks[-1].name
     return None, apks[-1].name
+
+
+def initramfs_entries(path):
+    """Names in the gzip-compressed cpio initramfs, without extracting it."""
+    names = []
+    with gzip.open(path, "rb") as fh:
+        data = fh.read()
+    off = 0
+    while off + 110 <= len(data):
+        if data[off:off + 6] != b"070701":
+            break
+        f = [int(data[off + 6 + i * 8: off + 14 + i * 8], 16) for i in range(13)]
+        namesize, filesize = f[11], f[6]
+        name = data[off + 110: off + 110 + namesize - 1].decode("utf-8", "replace")
+        if name == "TRAILER!!!":
+            break
+        names.append(name)
+        off += (110 + namesize + 3) & ~3
+        off += (filesize + 3) & ~3
+    return names
 
 
 def main():
@@ -196,6 +218,37 @@ def main():
               f"got 0x{v[name]:08x}"
               + ("  <- mkbootimg's default base is 0x10000000; set"
                  " deviceinfo_bootimg_custom_args" if v[name] != addr else ""))
+
+    print("\n-- initramfs --")
+    initramfs = BOOT / "initramfs"
+    if not initramfs.is_file():
+        check(False, "initramfs exists", f"not at {initramfs}")
+    else:
+        entries = initramfs_entries(initramfs)
+        check(len(entries) > 100, f"{len(entries)} entries")
+
+        # Every name in modules-initfs should be in there. modprobe treats '-'
+        # and '_' alike and stock's list mixes them, so normalise.
+        want = {ln.strip().replace("-", "_")
+                for ln in MODULES_INITFS.read_text().splitlines()
+                if ln.strip() and not ln.lstrip().startswith("#")}
+        got = {Path(e).name[:-3].replace("-", "_")
+               for e in entries if e.endswith(".ko")}
+        missing = sorted(want - got)
+        check(not missing, f"all {len(want)} modules-initfs names present",
+              f"{len(got)} .ko in the image"
+              + (f"; missing {', '.join(missing)}" if missing else ""))
+
+        # The debug shell is only reachable if these are present. telnetd is an
+        # applet of busybox-extras, and 'init' does 'busybox-extras --install
+        # -s' at boot to create its symlink, so the binary is what to check.
+        for f, why in (("usr/bin/busybox", "the shell itself"),
+                       ("usr/bin/busybox-extras", "carries the telnetd applet"),
+                       ("usr/bin/unudhcpd", "hands the host an IP over USB"),
+                       ("init", "parses pmos.debug-shell"),
+                       ("init_functions.sh", "defines debug_shell()")):
+
+            check(f in entries, f"{f} ({why})")
 
     print("\n-- cmdline --")
     cmdline = v["cmdline"]

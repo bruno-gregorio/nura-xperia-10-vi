@@ -136,7 +136,10 @@ conflating them is the easiest mistake to make here.
   512M *filesystem* for the boot partition, not a kernel.
 
 Both boot images matter: header v4 splits the kernel from the DTB and
-initramfs. Check them before going near the device.
+initramfs. Check them before going near the device — this parses both headers,
+compares the embedded DTB against the kernel package's, checks the four load
+addresses and every option in `kernel-cmdline.conf`, and looks inside the
+initramfs for the modules and the binaries the debug shell needs.
 
 ```sh
 python3 scripts/verify-bootimg.py

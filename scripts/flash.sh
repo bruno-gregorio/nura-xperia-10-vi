@@ -1,12 +1,24 @@
 #!/bin/sh
 # Get a postmarketOS build onto a Sony Xperia 10 VI (pdx246).
 #
-#   scripts/flash.sh ramboot          boot it from RAM, writing nothing
-#   scripts/flash.sh flash stock/     flash it, needs the backups from step 1
+#   scripts/flash.sh ramboot          boot from RAM - REFUSED by this bootloader
+#   scripts/flash.sh flash-boot       flash just boot+vendor_boot, reversible
+#   scripts/flash.sh restore-boot     put the stock boot images back
+#   scripts/flash.sh flash stock/     the full install, writes userdata too
 #
-# Read docs/04-flashing.md first. 'ramboot' is the one to start with: it
-# answers "does this kernel come up at all" without touching a partition, so
-# there is nothing to undo if the answer is no.
+# Read docs/04-flashing.md first.
+#
+# 'ramboot' was the intended starting point and this device will not do it:
+# Sony's bootloader answers 'not supported' to fastboot boot, verified
+# 2026-10-05 on bootloader 6450-0001_X_Boot_SM6450_LA2.0_U_19. The image
+# uploads fine, only the boot command is refused, and staging vendor_boot
+# first makes no difference.
+#
+# 'flash-boot' is what replaces it. It writes the two boot partitions on the
+# active slot and nothing else: userdata, dtbo and vbmeta are untouched, so
+# the installed system keeps its data and 'restore-boot' puts the stock
+# kernel back from the dumps device-collect.sh made. That makes trying a
+# kernel a two-minute round trip instead of a reinstall.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -56,9 +68,58 @@ cmd_ramboot() {
 	fastboot stage "$VENDOR_BOOT_IMG"
 	fastboot boot "$BOOT_IMG"
 	echo
-	echo "If the bootloader refuses this, it is locked down against RAM boot;"
-	echo "use 'flash' instead. Otherwise see docs/04-flashing.md for how to"
-	echo "reach the debug shell over the USB-C cable."
+	echo "If that printed \"not supported\", this bootloader cannot RAM boot"
+	echo "at all and no amount of staging changes it. Use 'flash-boot', which"
+	echo "is reversible with 'restore-boot'. See docs/04-flashing.md."
+}
+
+# Where device-collect.sh leaves the stock images it dumped as root. These are
+# what makes flash-boot reversible, so flash-boot refuses to run without them.
+STOCK_DIR="$ROOT/out/device-dump-root/stock"
+
+cmd_flash_boot() {
+	need_boot_images
+	read_slot
+	for f in "boot_$slot.img" "vendor_boot_$slot.img"; do
+		[ -f "$STOCK_DIR/$f" ] || die "missing $STOCK_DIR/$f, which is the way back.
+       Run scripts/device-collect.sh from recovery, where adb has root,
+       before writing anything here."
+	done
+
+	echo "Writing boot and vendor_boot on slot $slot. Nothing else is touched:"
+	echo "  userdata keeps its data, dtbo keeps the parrot-qrd overlay that"
+	echo "  turns our base parrot.dtb into this device's tree, and vbmeta is"
+	echo "  left alone because an unlocked bootloader does not enforce it."
+	echo
+	echo "  boot:        $BOOT_IMG"
+	echo "  vendor_boot: $VENDOR_BOOT_IMG"
+	echo
+	echo "To undo:  scripts/flash.sh restore-boot"
+	echo
+	printf 'Type FLASH to continue: '
+	read -r reply
+	[ "$reply" = "FLASH" ] || die "aborted"
+
+	fastboot flash boot "$BOOT_IMG" || die "flashing boot failed"
+	fastboot flash vendor_boot "$VENDOR_BOOT_IMG" || die "flashing vendor_boot failed"
+
+	echo
+	echo "Done. 'fastboot reboot' to try it, with scripts/console.sh running."
+	echo "If nothing comes up, 'scripts/flash.sh restore-boot' puts stock back."
+}
+
+cmd_restore_boot() {
+	command -v fastboot >/dev/null || die "fastboot not found"
+	fastboot devices | grep -q . || die "no device in fastboot mode"
+	read_slot
+	for f in "boot_$slot.img" "vendor_boot_$slot.img"; do
+		[ -f "$STOCK_DIR/$f" ] || die "missing $STOCK_DIR/$f - nothing to restore from"
+	done
+	echo "Restoring stock boot and vendor_boot on slot $slot."
+	fastboot flash boot "$STOCK_DIR/boot_$slot.img" || die "restoring boot failed"
+	fastboot flash vendor_boot "$STOCK_DIR/vendor_boot_$slot.img" || die "restoring vendor_boot failed"
+	echo
+	echo "Done. 'fastboot reboot' should bring the installed system back."
 }
 
 cmd_flash() {
@@ -124,7 +185,9 @@ cmd_flash() {
 }
 
 case "${1:-}" in
-	ramboot) shift; cmd_ramboot "$@" ;;
-	flash)   shift; cmd_flash "$@" ;;
-	*)       die "usage: $0 ramboot | $0 flash <stock-backup-dir>" ;;
+	ramboot)      shift; cmd_ramboot "$@" ;;
+	flash-boot)   shift; cmd_flash_boot "$@" ;;
+	restore-boot) shift; cmd_restore_boot "$@" ;;
+	flash)        shift; cmd_flash "$@" ;;
+	*)            die "usage: $0 flash-boot | $0 restore-boot | $0 ramboot | $0 flash <stock-backup-dir>" ;;
 esac

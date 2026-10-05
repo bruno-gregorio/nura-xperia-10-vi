@@ -280,11 +280,16 @@ closed every gap the unprivileged pass left open.
   Verified. `postmarketos-initramfs/init_functions.sh`:
   `telnetd -b "${HOST_IP}:23"`, `acm.usb0`, `ncm.usb0` with `rndis.usb0`
   fallback.
-- **RAM boot reaches the debug shell with no rootfs** — Reasoned.
-  `pmos.debug-shell` is handled in `init_2nd.sh` before root is looked for, and
-  `boot_gki` (`fastboot stage vendor_boot.img` then `fastboot boot boot.img`)
-  stages the v4 ramdisk correctly. Untested, and some Qualcomm bootloaders
-  refuse `fastboot boot` outright.
+- **RAM boot is impossible on this device** — Verified 2026-10-05, both ways.
+  Sony's bootloader (`6450-0001_X_Boot_SM6450_LA2.0_U_19`) answers `not
+  supported` to `fastboot boot`, and fastbootd answers `Unrecognized command
+  boot` because userspace fastboot does not implement it. The image uploads
+  fine in both, 29788 KB OKAY; it is only the boot command that is refused,
+  and staging `vendor_boot` first changes nothing. `scripts/flash.sh
+  flash-boot` is what replaces it.
+- **The debug shell itself is still only Reasoned.** `pmos.debug-shell` is
+  handled in `init_2nd.sh` before root is looked for, so it should not need a
+  rootfs, but nothing has reached it yet.
 - **The host side of the debug shell is ready and tested** — Verified. Fedora
   ships no `telnet`, `nc` or `socat`, and this project may not install onto the
   host, so `scripts/telnet.py` is the fallback: tested against a stub that
@@ -324,12 +329,12 @@ closed every gap the unprivileged pass left open.
   granted either. The host has android-tools 37.0.0 and the owner has
   authorised using it. `flash.sh` calls `fastboot` directly with
   project-relative paths, so it runs on the host unchanged.
-- **Some bootloaders of this generation ignore a ramdisk given to `fastboot
-  boot`** — Guess, and the main risk to `ramboot`. Documented for Pixel 7/8,
-  where the bootloader uses the on-device `vendor_boot` instead of the staged
-  one; if this bootloader does the same it would quietly run the stock kernel
-  and look like a boot failure. `scripts/console.sh` lists it as one of the
-  three reasons the gadget might not appear.
+- **This bootloader refuses `fastboot boot` outright** — Verified 2026-10-05,
+  superseding the guess that it might silently ignore the staged ramdisk and
+  run the stock kernel. An explicit refusal is the better of the two
+  outcomes: there is no ambiguity about what ran. The consequence is that
+  every kernel test costs a flash, which is why `flash-boot` and
+  `restore-boot` exist and touch nothing but the two boot partitions.
 - **Backing up stock by dumping partitions needs root, which a stock Xperia
   has not got** — Verified by construction: unlocking the bootloader does not
   grant root, so the `dd` recipe only applies to an already-rooted phone. The
@@ -386,11 +391,14 @@ closed every gap the unprivileged pass left open.
    kernel command line, the debugfs clock and regulator summaries, and a real
    `dd` backup of the boot partitions readable. Everything in step 3 and the
    device tree gap above falls out of that one toggle.
-2. **Run `scripts/flash.sh ramboot`**, with `scripts/console.sh` in a second
-   terminal. The bootloader is already unlocked, so this needs nothing else —
-   no backups, no rootfs image, no partition written. It answers the only
-   question that matters right now, and there is nothing to undo if the answer
-   is no.
+2. **Run `scripts/flash.sh flash-boot`**, with `scripts/console.sh` in a
+   second terminal. `ramboot` was the intended step here and this device
+   refuses it, so the smallest equivalent is flashing the two boot partitions
+   on the active slot: userdata, dtbo and vbmeta stay as they are, and
+   `restore-boot` puts the stock kernel back from the dumps in step 3. Flash
+   the active slot, never the other one - slot a's rollback index is
+   1772323200 against slot b's 1777593600, so making the older slot active
+   risks the bootloader refusing it on anti-rollback.
 3. **Take the backups** in [04-flashing.md](04-flashing.md) step 1, for both
    slots. Do this before anything is flashed, not before the RAM boot. With
    the "Rooted debugging" toggle on, `scripts/device-collect.sh` does this by

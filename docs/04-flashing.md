@@ -20,15 +20,20 @@ Read it fully before connecting the phone, and take the backups.
 
 In order. Step 1 is the one that makes every later step recoverable.
 
-1. **Back up every partition you are about to touch.** From a booted stock
-   system with root, or from the stock recovery. Without these you have no way
-   back; `stock/vbmeta_a.img` in particular is what makes step 4 safe.
+1. **Back up every partition you are about to touch, on both slots.** From a
+   booted stock system with root, or from the stock recovery. Without these you
+   have no way back; the `vbmeta` dump for the slot you flash is what makes
+   step 4 safe. Both slots, because a device that has taken an OTA does not
+   have identical ones, and `scripts/flash.sh` picks the backup matching
+   whichever slot is active.
 
    ```sh
    # with the device booted and adb root available
-   for p in boot vendor_boot dtbo vbmeta vbmeta_system; do
-       adb shell su -c "dd if=/dev/block/by-name/${p}_a of=/sdcard/${p}_a.img"
-       adb pull /sdcard/${p}_a.img stock/
+   for s in a b; do
+       for p in boot vendor_boot dtbo vbmeta vbmeta_system; do
+           adb shell su -c "dd if=/dev/block/by-name/${p}_${s} of=/sdcard/${p}_${s}.img"
+           adb pull /sdcard/${p}_${s}.img stock/
+       done
    done
    ```
 
@@ -55,7 +60,8 @@ In order. Step 1 is the one that makes every later step recoverable.
    from a stock pmOS install.
 
    ```sh
-   fastboot --disable-verity --disable-verification flash vbmeta stock/vbmeta_a.img
+   slot=$(fastboot getvar current-slot 2>&1 | sed -n 's/^current-slot: *//p' | head -1)
+   fastboot --disable-verity --disable-verification flash vbmeta "stock/vbmeta_${slot}.img"
    ```
 
 5. **Flash the images.** `scripts/flash.sh` does exactly this with the backup
@@ -161,9 +167,9 @@ A device in the AVB red state can still reach fastboot, so this is recoverable
 as long as you have the backups from step 1.
 
 ```sh
-fastboot --set-active=b        # boot the untouched slot
-# or restore the slot you flashed:
-fastboot flash boot        stock/boot_a.img
-fastboot flash vendor_boot stock/vendor_boot_a.img
-fastboot flash vbmeta      stock/vbmeta_a.img
+fastboot --set-active=b        # boot the untouched slot ('a' if you flashed b)
+# or restore the slot you flashed, substituting its letter for $slot:
+fastboot flash boot        "stock/boot_${slot}.img"
+fastboot flash vendor_boot "stock/vendor_boot_${slot}.img"
+fastboot flash vbmeta      "stock/vbmeta_${slot}.img"
 ```

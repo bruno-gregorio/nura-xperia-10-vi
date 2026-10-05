@@ -41,6 +41,23 @@ checkout that pmbootstrap actually reads.
    distrobox enter pmport -- ./scripts/sync-aports.sh --back
    ```
 
+3. **Force a rebuild after changing an APKBUILD without bumping `pkgrel`.**
+   pmbootstrap decides a package is up to date from its `pkgver-pkgrel`, so an
+   edited `depends=` or `package()` is silently ignored and the stale apk in
+   `.pmb/work/packages/` is installed instead. `--force` is cheaper than
+   bumping `pkgrel` on every iteration of a port that has no users yet.
+
+   ```sh
+   distrobox enter pmport -- ./scripts/pmb build --force device-sony-pdx246
+   ```
+
+   To check what a built apk actually declares:
+
+   ```sh
+   tar -xzOf .pmb/work/packages/edge/aarch64/device-sony-pdx246-0.1-r0.apk \
+       .PKGINFO | grep ^depend
+   ```
+
 ## Kernel
 
 The aport fetches two tarballs — the kernel and Sony's device tree release —

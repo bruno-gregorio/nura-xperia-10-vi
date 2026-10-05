@@ -19,12 +19,6 @@ die() { echo "error: $*" >&2; exit 1; }
 [ -n "$STOCK" ] || die "usage: $0 <stock-backup-dir>   (see docs/04-flashing.md)"
 [ -d "$STOCK" ] || die "$STOCK is not a directory"
 
-# The vbmeta we patch has to be the device's own: an avbtool-generated empty
-# one carries rollback index 0 and the bootloader enforces anti-rollback in
-# hardware, red-stating the device regardless of the disable flags.
-for f in boot_a.img vendor_boot_a.img vbmeta_a.img; do
-	[ -f "$STOCK/$f" ] || die "missing backup $STOCK/$f - do not flash without it"
-done
 
 BOOT="$OUT/sony-pdx246-boot.img"
 VENDOR_BOOT="$OUT/sony-pdx246-vendor_boot.img"
@@ -36,10 +30,26 @@ done
 command -v fastboot >/dev/null || die "fastboot not found"
 fastboot devices | grep -q . || die "no device in fastboot mode"
 
+# Bare 'fastboot flash boot' writes the active slot, so the backups we check
+# for and the vbmeta we send back have to be that slot's, not slot a's. On a
+# device that has taken an OTA the two slots are not interchangeable.
 slot=$(fastboot getvar current-slot 2>&1 | sed -n 's/^current-slot: *//p' | head -1)
-echo "active slot: ${slot:-unknown}"
+case "$slot" in
+	a) other=b ;;
+	b) other=a ;;
+	*) die "could not read current-slot from fastboot (got '${slot:-}')" ;;
+esac
+echo "active slot: $slot   (fallback slot: $other)"
+
+# The vbmeta we patch has to be the device's own: an avbtool-generated empty
+# one carries rollback index 0 and the bootloader enforces anti-rollback in
+# hardware, red-stating the device regardless of the disable flags.
+for f in "boot_$slot.img" "vendor_boot_$slot.img" "vbmeta_$slot.img"; do
+	[ -f "$STOCK/$f" ] || die "missing backup $STOCK/$f - do not flash without it"
+done
+
 echo
-echo "About to flash boot, vendor_boot, vbmeta and userdata on this slot."
+echo "About to flash boot, vendor_boot, vbmeta and userdata on slot $slot."
 echo "The dtbo partition is deliberately NOT touched: its stock parrot-qrd"
 echo "overlay is what turns our base parrot.dtb into this device's tree."
 echo
@@ -48,7 +58,7 @@ read -r reply
 [ "$reply" = "FLASH" ] || die "aborted"
 
 # Patch the flags in the device's own vbmeta rather than replacing it.
-fastboot --disable-verity --disable-verification flash vbmeta "$STOCK/vbmeta_a.img"
+fastboot --disable-verity --disable-verification flash vbmeta "$STOCK/vbmeta_$slot.img"
 fastboot flash boot "$BOOT"
 fastboot flash vendor_boot "$VENDOR_BOOT"
 fastboot flash userdata "$ROOTFS"
@@ -56,4 +66,4 @@ fastboot flash userdata "$ROOTFS"
 echo
 echo "Done. 'fastboot reboot' to try it."
 echo "If it does not come up, see docs/04-flashing.md - and remember"
-echo "'fastboot --set-active=${slot:-b}' gets you back to the other slot."
+echo "'fastboot --set-active=$other' boots the slot this did not touch."

@@ -573,6 +573,30 @@ pmstage_reset
 # there is no sanctioned place to put this. Patching /init as the image is
 # built is honest about what it is and keeps it in our tree rather than in a
 # fork of someone else's package.
+# Armed before load_modules, because that is where the real init can die. It
+# has no watchdog of its own: load_modules is a single modprobe -a, and a
+# module that never returns takes the whole boot with it, in silence, for
+# ever. Nothing resets the phone, so the bootloader never begins another
+# attempt and the retry counter never moves - the one failure mode that cannot
+# be recovered without someone pressing buttons.
+USB_WATCHDOG = """
+# --- pdx246: make a hung boot recoverable ----------------------------------
+echo 1  > /proc/sys/kernel/sysrq
+echo 1  > /proc/sys/kernel/hung_task_panic
+echo 20 > /proc/sys/kernel/hung_task_timeout_secs
+(
+	# A working boot has USB up in about five seconds, so four minutes is
+	# far longer than this needs and far shorter than waiting for a person.
+	sleep 240
+	[ -e /pmusbok ] && exit 0
+	[ -w /proc/sysrq-trigger ] && echo b > /proc/sysrq-trigger
+	reboot -f
+	sleep 90
+	reboot -f
+) &
+# ---------------------------------------------------------------------------
+"""
+
 USB_QUIRK = """
 # --- pdx246: ask dwc3 for a role, or no UDC is ever created ----------------
 # msm-dwc3 probes a600000.ssusb, registers a role switch, and then stays in
@@ -603,6 +627,8 @@ while [ "$_w" -lt 12 ]; do
 	sleep 1
 done
 echo "[pdx246] udc after ${_w}s: ${_real:-none}"
+# Tell the watchdog to stand down: from here a person can get in and look.
+[ -n "$_real" ] && touch /pmusbok
 # ---------------------------------------------------------------------------
 """
 
@@ -626,7 +652,13 @@ def usbquirk(src, dst):
     if anchor not in text:
         sys.exit("error: could not find setup_usb_network in init - has "
                  "mkinitfs changed?")
-    init[2] = text.replace(anchor, "\n" + USB_QUIRK + anchor, 1).encode()
+    text = text.replace(anchor, "\n" + USB_QUIRK + anchor, 1)
+
+    wd = "mount_proc_sys_dev\n"
+    if wd not in text:
+        sys.exit("error: could not find mount_proc_sys_dev in init")
+    text = text.replace(wd, wd + USB_WATCHDOG.lstrip("\n"), 1)
+    init[2] = text.encode()
 
     newrd = gzip.compress(cpio_build(entries), 6)
     open(dst, "wb").write(_rebuild(d, s, newrd))
@@ -634,6 +666,7 @@ def usbquirk(src, dst):
     print(f"  out  {dst}")
     print("  /init now writes peripheral to *.ssusb/mode before"
           " setup_usb_network")
+    print("  and arms a 240s watchdog before load_modules, so a hang resets")
     print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
     print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
 

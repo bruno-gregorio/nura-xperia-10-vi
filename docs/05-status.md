@@ -756,6 +756,31 @@ made the first week of bring-up slow. The findings below are what closed it.
   `/init` as the image is built and `try-kernel.sh` applies it to every
   real-init flash. If this port is ever upstreamed the quirk needs a proper
   home.
+- **The real init hangs before `setup_usb_network`** — Verified by absence.
+  The 19:42 round flashed a correct image - the quirk is at line 54 of the
+  patched `/init` and the bootlog hook at line 36 - and three minutes later
+  the host had no USB interface at all, where the staged probe had one in
+  sixteen seconds. Everything between is `load_modules`, which in the real
+  init is a single `modprobe -a` over all 90 modules. The staged probe loads
+  the same 90 in two passes and finishes, so no single module hangs on its
+  own; the difference is either the order or the fact that one `modprobe`
+  process owns all of them.
+- **A hung real init needed a person, and no longer does** — Reasoned, not yet
+  tested. `load_modules` wedging is the one failure mode that cannot recover
+  on its own: nothing resets the phone, so the bootloader never begins another
+  attempt and the retry counter never moves. `bootlog.py usbquirk` now also
+  arms a watchdog after `mount_proc_sys_dev` and before `load_modules`, which
+  resets the phone after 240 s unless `/pmusbok` exists - a file the quirk
+  touches once a real UDC is bound. Seven hung attempts then come to about 31
+  minutes before the fallback to Android, hands-free.
+- **The rootfs goes on the SD card** — Decided, 2026-10-05, by the owner. The
+  phone has a 477 GiB SDXC card in it, already detected as `mmcblk1`, and
+  writing there leaves stock Android on slot b intact - which is what the
+  recovery loop depends on. `deviceinfo_flash_fastboot_partition_rootfs` still
+  says `userdata`, the conventional target; using it would wipe Android's data
+  and cost us that fallback. The card can be partitioned and written from the
+  initramfs debug shell over the USB network link, so this needs nobody to
+  open the phone.
 - **`blkid` kills the debug shell** — Verified, twice is not needed. Running
   it over telnet dropped the connection; the device stayed up and pingable, so
   it is `blkid` scanning every loop and ram device against a 4096-byte-sector

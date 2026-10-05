@@ -145,38 +145,61 @@ initramfs for the modules and the binaries the debug shell needs.
 python3 scripts/verify-bootimg.py
 ```
 
-### The rootfs image needs loop devices, which this container has not got
+### The rootfs image, without loop devices
 
-`pmb install` gets as far as building the rootfs and both fastboot images, then
-fails:
+`pmb install` cannot finish in this container. It gets as far as building the
+rootfs and both fastboot images, then dies at step 3:
 
 ```
 *** (3/4) PREPARE INSTALL BLOCKDEVICE ***
-ERROR: Command failed (exit code 1): % sudo modprobe loop
+losetup: cannot find an unused loop device: Permission denied
 ```
 
-pmbootstrap builds the rootfs image by allocating a file, attaching it to a
-loop device, partitioning, formatting and copying into the mount. Loading a
-kernel module needs privileges the rootless container does not have, and
-mounting a loop device needs `CAP_SYS_ADMIN` in the *initial* user namespace,
-which it cannot get either. Nothing inside this project can work around it.
+pmbootstrap builds the image by allocating a file, attaching it to a loop
+device, partitioning, formatting and copying into the mount. Two separate
+things stop that here, and fixing the first does not fix the second:
 
-What this costs, and what it does not:
+- `modprobe loop` needs privileges a rootless container has not got. Running
+  it on the host clears this one.
+- `/dev/loop-control` is `root:disk` mode 0660, and the container has no
+  `/dev/loopN` nodes at all. Attaching a loop device would mean adding the
+  owner to `disk`, which grants raw read/write to every block device on the
+  machine — not a reasonable price for building a phone image.
 
-- `boot.img` and `vendor_boot.img` are finished and verified. They are built in
-  step 2, before the failure.
-- `scripts/flash.sh ramboot` needs nothing else. It boots from RAM, and
-  `pmos.debug-shell` stops in the initramfs before any root filesystem is
-  looked for, so the whole first round of debugging works without a rootfs.
-- The run leaves a `sony-pdx246.img` behind that is the right size and
-  completely empty — allocated, never formatted. `flash.sh` and
-  `verify-bootimg.py` both refuse it by checking for a GPT at offset 512.
-  Flashing it would write zeros over `userdata`.
-- Only `flash.sh flash`, the install to internal storage, is actually blocked.
+`scripts/make-rootfs-img.sh` avoids loop devices entirely:
 
-Unblocking it means `sudo modprobe loop` on the **host**, which is outside what
-this project is allowed to touch, so it is the owner's call rather than
-something the scripts do.
+```sh
+distrobox enter pmport -- ./scripts/make-rootfs-img.sh
+```
+
+`mkfs.ext4 -d <dir>` populates a filesystem from a directory tree without
+mounting anything, so the rootfs chroot can be turned into an image directly.
+The script:
+
+1. Generates a UUID and writes `/etc/fstab` with it, then re-runs `mkinitfs`
+   **before** making the image, so boot-deploy bakes `pmos_root_uuid=` into
+   the vendor_boot cmdline. Get this order wrong and the initramfs will not
+   know which partition to mount.
+2. Runs `pmb shutdown`, because `pmb chroot` leaves bind mounts behind — one of
+   them over `usr/bin/qemu-aarch64-static`, which otherwise cannot be removed
+   and would end up inside the image.
+3. Removes pmbootstrap's own artifacts (`/in-pmbootstrap`, the qemu stub, the
+   `/mnt/pmbootstrap` bind mounts, `/dev`), installs the apk keys and drops the
+   local build repo from `/etc/apk/repositories`.
+4. Sets the password for `user`, which `pmb install` would otherwise have asked
+   for interactively. Default `147147`; override with `PMOS_PASSWORD=`.
+5. Formats at 125% of the tree size plus 128 MiB, then checks the result with
+   `dumpe2fs`, `e2fsck -fn` and `debugfs`.
+
+The result is a **bare ext4 filesystem with no partition table**, which is what
+gets flashed to `userdata`. `pmb install`'s own image would have had a GPT;
+both shapes are accepted by `flash.sh` and `verify-bootimg.py`, and both refuse
+an image that holds neither, since a failed install leaves behind a correctly
+sized file full of zeros that would wipe `userdata` if flashed.
+
+Note that `flash.sh ramboot` needs none of this: it boots from RAM, and
+`pmos.debug-shell` stops inside the initramfs before any root filesystem is
+looked for, so the first round of debugging works without a rootfs image at all.
 
 ## Housekeeping
 

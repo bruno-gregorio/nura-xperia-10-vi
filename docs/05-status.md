@@ -52,7 +52,9 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 | The cmdline drop-in reaches the image | **Verified** | Read back out of `vendor_boot.img`: `quiet splash plymouth.ignore-serial-consoles plymouth.prefer-fbcon console=ttyMSM0,115200n8 earlycon loglevel=7 printk.devkmsg=on pmos.debug-shell`. Our `50-` options all present and after `00-base.conf`'s `quiet`, so `loglevel=7` is the one that applies |
 | `--split` is the wrong invocation for this device | **Verified** | pmbootstrap's `flashers` dict: the plain `fastboot` flasher's `flash_rootfs` is `fastboot flash $PARTITION_ROOTFS $IMAGE`, the *combined* image. Only `fastboot-bootpart` sets `"split": True` and uses the split images |
 | The fastboot images come from the rootfs chroot's `/boot` | **Verified** | `flash_kernel` is `$BOOT/boot.img` and `flash_vendorboot` is `$BOOT/vendor_boot.img`, where `$BOOT` is that chroot. `home/pmos/rootfs/sony-pdx246-boot.img` is a boot *partition* filesystem, a different thing |
-| The rootfs image cannot be built in this container | **Verified** | `pmb install` dies at `*** (3/4) PREPARE INSTALL BLOCKDEVICE ***` on `sudo modprobe loop`. Loading a module needs privileges the rootless container has not got, and loop-mounting needs `CAP_SYS_ADMIN` in the initial userns, which it cannot obtain. Only `flash.sh flash` is blocked by this; `ramboot` is not |
+| The rootfs image is built, and the UUID chain is intact | **Verified** | `pmb install` cannot finish here (see below), so `scripts/make-rootfs-img.sh` builds it with `mkfs.ext4 -d`, which populates a filesystem from a directory tree without mounting it. Result: 1,020,264,448 bytes, bare ext4 (magic `0xef53`, no partition table), labelled `pmOS_root`, 249,088 blocks × 4,096 = exactly the file size, `e2fsck -fn` clean, `/sbin/init`, `/etc/fstab`, `/etc/apk/keys` and `/usr/lib/modules` all present, no pmbootstrap leftovers and `/dev` empty. `verify-bootimg.py` checks that the `pmos_root_uuid=` in the vendor_boot cmdline equals the filesystem's own UUID — the one thing that silently breaks if `/etc/fstab` is written after `mkinitfs` instead of before |
+| `pmb install` itself cannot run in this container | **Verified** | Two independent blockers. `modprobe loop` needs privileges a rootless container has not got (cleared by running it on the host), and after that `losetup` still fails with `cannot find an unused loop device: Permission denied`: `/dev/loop-control` is `root:disk` 0660 and the container has no `/dev/loopN` nodes. Joining `disk` would grant raw access to every block device on the machine, so `make-rootfs-img.sh` sidesteps loop devices instead |
+| The image's login password is known | **Verified** | `pmb install` sets it interactively, so an image built any other way inherits whatever an earlier run left in `/etc/shadow`. `make-rootfs-img.sh` sets it from `PMOS_PASSWORD`, default `147147`, and the hash read back out of the finished image verifies against that. `root` is `!` (locked), which is pmOS's normal arrangement |
 | The initramfs carries everything the debug shell needs | **Verified** | 478 entries; all 89 `modules-initfs` names present as `.ko`; `usr/bin/busybox`, `usr/bin/busybox-extras` (which is where the `telnetd` applet lives), `usr/bin/unudhcpd`, `init` and `init_functions.sh` all in. `init` runs `busybox --install -s` and `busybox-extras --install -s`, which is what makes the bare `telnetd` call in `init_functions.sh` resolve |
 | `initramfs.load` is `modules-initfs`, order intact | **Verified** | The file installed at `usr/lib/modules/initramfs.load` is ours verbatim; the 89 module names match exactly, in stock's dependency order |
 | RAM boot reaches the debug shell with no rootfs | Reasoned | `pmos.debug-shell` is handled in `init_2nd.sh` before root is looked for, and `boot_gki` (`fastboot stage vendor_boot.img` then `fastboot boot boot.img`) stages the v4 ramdisk correctly. Untested, and some Qualcomm bootloaders refuse `fastboot boot` outright |
@@ -83,12 +85,13 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
   redistributable and is not packaged here.
 - **No `soc-qcom-sm6450` package.** pmOS has no SoC package for this chip; the
   device package carries everything.
-- **The rootfs image.** `pmb install` cannot finish inside a rootless
-  container, because partitioning and formatting go through a loop device. The
-  fastboot boot images are complete; only the install to internal storage is
-  blocked. A failed run leaves a correctly sized, wholly empty
-  `sony-pdx246.img` behind, which `flash.sh` and `verify-bootimg.py` both
-  refuse by requiring a GPT at offset 512.
+- **`pmb install` cannot finish inside a rootless container**, because
+  partitioning and formatting go through a loop device.
+  `scripts/make-rootfs-img.sh` works around it with `mkfs.ext4 -d` and produces
+  a bare ext4 image instead of a partitioned one, so this is no longer a
+  blocker. A failed `pmb install` does still leave a correctly sized, wholly
+  empty `sony-pdx246.img` behind; `flash.sh` and `verify-bootimg.py` both
+  refuse an image that holds neither a GPT nor an ext4 superblock.
 - **Mainline is not attempted, and the reason is ordering, not difficulty.**
   Every per-SoC driver exists as GPL source in the tarballs the kernel aport
   already downloads, and the sibling SoC SM4450 is upstream and derived from
@@ -112,7 +115,7 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
    DTB we build, `PSTORE_RAM` is builtin, and 256K of console ring survives a
    reboot. Serial on `0x98c000` is the fallback and needs physical access to
    the USB-C SBU pins that nobody has yet.
-5. Decide what to do about the rootfs image. It needs `sudo modprobe loop` on
-   the host, which is outside what this project may touch, so it is the owner's
-   call. Steps 1-4 do not depend on it.
+5. Flash the rootfs and try a real boot, once steps 1-4 say the kernel runs.
+   The image exists and verifies; what is untested is whether the initramfs
+   finds and mounts it on the device. Steps 1-4 do not depend on it.
 6. Only then: build `sm6450-modules` for display.

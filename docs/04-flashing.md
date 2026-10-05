@@ -146,6 +146,13 @@ pmos_continue_boot           # carry on into the real rootfs
 writes `pmOS_init.txt`, `dmesg.txt`, `blkid.txt`, `cmdline.txt` and
 `partitions.txt` to a FAT image and exposes it as a USB drive.
 
+If `pmos_continue_boot` gets as far as a login prompt, the account is **`user`**
+with password **`147147`** — set by `scripts/make-rootfs-img.sh`, overridable
+with `PMOS_PASSWORD=` at build time. `root` has no password and cannot be
+logged into directly; use `sudo`. The initramfs finds the rootfs by the
+`pmos_root_uuid=` baked into the vendor_boot cmdline, which
+`scripts/verify-bootimg.py` checks against the image's actual filesystem UUID.
+
 This works because `USB_DWC3` is builtin and in dual-role mode and the ACM,
 NCM, RNDIS and mass-storage gadget functions are all `=y`; `dwc3-msm` and the
 two PHYs load from `modules-initfs`. The part that is *not* confirmed is Type-C

@@ -17,6 +17,7 @@ import io
 import struct
 import sys
 import tarfile
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -42,11 +43,14 @@ KERNEL_APK = ROOT / ".pmb/work/packages/edge/aarch64"
 fails = []
 
 
-def check(ok, msg, detail=""):
+def check(ok, msg, detail="", hint=""):
+    """detail is a fact worth printing either way; hint only explains a failure."""
     print(f"{'  ok  ' if ok else ' FAIL '} {msg}")
     if detail:
         print(f"        {detail}")
     if not ok:
+        if hint:
+            print(f"        {hint}")
         fails.append(msg)
     return ok
 
@@ -117,6 +121,25 @@ def dtb_from_kernel_apk():
     return None, apks[-1].name
 
 
+def ext4_superblock(path):
+    """Read the bits of an ext4 superblock we care about.
+
+    Done by hand rather than by shelling out to dumpe2fs, so this script stays
+    runnable on the host with nothing but python3.
+    """
+    with path.open("rb") as f:
+        f.seek(1024)
+        sb = f.read(1024)
+    if struct.unpack_from("<H", sb, 0x38)[0] != 0xEF53:
+        return None
+    return {
+        "uuid": str(uuid.UUID(bytes=sb[0x68:0x78])),
+        "label": sb[0x78:0x88].rstrip(b"\0").decode("utf-8", "replace"),
+        "block_size": 1024 << struct.unpack_from("<I", sb, 0x18)[0],
+        "blocks": struct.unpack_from("<I", sb, 0x04)[0],
+    }
+
+
 def initramfs_entries(path):
     """Names in the gzip-compressed cpio initramfs, without extracting it."""
     names = []
@@ -159,16 +182,25 @@ def main():
         # a failed install leaves a correctly sized, completely empty sparse
         # file behind. Flashing that would write zeros over userdata, so insist
         # on a GPT rather than merely on the file existing.
+        # Two shapes are valid: pmbootstrap's own image carries a GPT, while
+        # make-rootfs-img.sh writes a bare ext4 (superblock magic 0xef53 at
+        # offset 1080).
         with rootfs.open("rb") as fh:
             fh.seek(512)
             gpt = fh.read(8)
-        if gpt == b"EFI PART":
-            print(f"  ok   {rootfs.name} has a GPT"
+            fh.seek(1080)
+            ext4 = fh.read(2)
+        shape = ("a GPT" if gpt == b"EFI PART"
+                 else "a bare ext4 filesystem" if ext4 == b"\x53\xef"
+                 else None)
+        if shape:
+            print(f"  ok   {rootfs.name} holds {shape}"
                   f"\n        {rootfs.stat().st_size:,} bytes")
         else:
-            check(False, f"{rootfs.name} is partitioned",
-                  f"{rootfs.stat().st_size:,} bytes but no GPT at offset 512 - "
-                  "allocated and never filled, do not flash it")
+            check(False, f"{rootfs.name} holds a filesystem",
+                  f"{rootfs.stat().st_size:,} bytes, but neither a GPT at 512 nor "
+                  "an ext4 superblock at 1080 - allocated and never filled, "
+                  "do not flash it")
     else:
         print(f"  --   {rootfs.name} absent - ramboot does not need it, "
               f"'flash.sh flash' does")
@@ -259,6 +291,36 @@ def main():
         check(w in cmdline.split(), f"cmdline has {w}")
     check("quiet" not in cmdline.split() or "loglevel=7" in cmdline.split(),
           "loglevel=7 is there to override base's quiet")
+
+    print("\n-- rootfs image --")
+    img = IMAGES / "sony-pdx246.img"
+    if not img.exists():
+        check(False, f"{img.name} exists",
+              hint="run scripts/make-rootfs-img.sh")
+    else:
+        # An image of the right size that is all zeros is the dangerous case:
+        # flashing it would wipe userdata and boot nothing. Check for a real
+        # filesystem, not just for a file.
+        sb = ext4_superblock(img)
+        check(sb is not None, "is a bare ext4 filesystem (no partition table)",
+              hint="no ext4 superblock at offset 1024 - is the image all zeros?")
+        if sb:
+            check(sb["label"] == "pmOS_root", "labelled pmOS_root",
+                  f"got {sb['label']!r}")
+            # The whole reason /etc/fstab is written before mkinitfs runs: the
+            # UUID has to reach the vendor_boot cmdline, or the initramfs will
+            # not know which partition to mount.
+            want = next((a.split("=", 1)[1] for a in cmdline.split()
+                         if a.startswith("pmos_root_uuid=")), None)
+            check(want is not None, "cmdline carries pmos_root_uuid",
+                  hint="/etc/fstab must exist before mkinitfs runs")
+            check(want == sb["uuid"],
+                  "cmdline pmos_root_uuid matches the filesystem UUID",
+                  f"cmdline {want}, filesystem {sb['uuid']}")
+            size = sb["blocks"] * sb["block_size"]
+            check(size <= img.stat().st_size,
+                  "the filesystem fits inside the file",
+                  f"fs {size:,} bytes, file {img.stat().st_size:,} bytes")
 
     print()
     if fails:

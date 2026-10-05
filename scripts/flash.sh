@@ -69,12 +69,23 @@ cmd_flash() {
 	[ -f "$ROOTFS_IMG" ] || die "missing $ROOTFS_IMG - see docs/03-build.md on the rootfs image"
 	# pmbootstrap allocates this file before it loop-mounts it, so a failed
 	# install leaves a correctly sized but completely empty sparse file. Check
-	# for the GPT, not just for the file: flashing the empty one writes zeros
-	# over userdata.
-	if [ "$(dd if="$ROOTFS_IMG" bs=1 skip=512 count=8 2>/dev/null)" != "EFI PART" ]; then
-		die "$ROOTFS_IMG has no partition table - it was allocated but never
-       filled, probably by an install that failed at 'modprobe loop'.
-       Do not flash it. See docs/03-build.md on the rootfs image."
+	# that there is a filesystem in there, not just that the file exists:
+	# flashing the empty one writes zeros over userdata.
+	#
+	# Two shapes are valid. pmbootstrap's own image has a GPT ("EFI PART" at
+	# offset 512); make-rootfs-img.sh produces a bare ext4, whose superblock
+	# magic 0xef53 sits at offset 1080, little endian.
+	gpt=$(dd if="$ROOTFS_IMG" bs=1 skip=512 count=8 2>/dev/null)
+	ext4=$(dd if="$ROOTFS_IMG" bs=1 skip=1080 count=2 2>/dev/null | od -An -tx1 | tr -d ' \n')
+	if [ "$gpt" = "EFI PART" ]; then
+		echo "rootfs image: partitioned (GPT)"
+	elif [ "$ext4" = "53ef" ]; then
+		echo "rootfs image: bare ext4"
+	else
+		die "$ROOTFS_IMG holds neither a GPT nor an ext4 superblock - it was
+       allocated but never filled, probably by an install that failed at
+       'modprobe loop'. Do not flash it: it is all zeros and would wipe
+       userdata. See docs/03-build.md on the rootfs image."
 	fi
 
 	# Bare 'fastboot flash boot' writes the active slot, so the backups we

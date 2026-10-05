@@ -911,6 +911,29 @@ made the first week of bring-up slow. The findings below are what closed it.
   `nosplash=y` inside the initramfs, which turns both `setup_framebuffer`'s
   ten-second poll and the splash into no-ops. The console here is a serial
   port, so a framebuffer splash had nowhere to go in any case.
+- **The watchdog was armed too late to catch this** — Verified by reading the
+  patched image, and corrected. It went in after `mount_proc_sys_dev`, which
+  is itself somewhere stage 1 can die: that function modprobes `libcomposite`
+  and mounts configfs. So a wedge anywhere in the first thirty-five lines left
+  nothing to reset the phone, the bootloader never began another attempt, the
+  retry counter never moved, and the boot was indistinguishable from a dead
+  one - which is the state the 20:10 round sat in. It is now inserted directly
+  after `set -a` on line 5 and written to depend on nothing that has not
+  happened yet: absolute `/bin/busybox` paths, because `busybox --install -s`
+  has not run, and no `/proc`, because `mount_proc_sys_dev` has not either.
+  The reboot probe already established that a bare busybox `sleep` and
+  `reboot -f` work that early. This does not fix the hang; it converts a
+  silent hang into a reset loop that ends in Android with a log to read.
+- **A live shell can stop the reset timers** — Verified by reading the patched
+  image; the on-device half is untested. Every watchdog here resets the phone
+  on a timer measured in minutes, which is correct for a boot nobody is
+  watching and wrong the moment something is mid-operation: a gigabyte of
+  rootfs onto the SD card outlasts the staged probe's patience, and being cut
+  off halfway leaves a partial filesystem. `pmstage_reset` and the real init's
+  watchdog now both wait while `/pmhold` exists. Nothing creates that file on
+  its own, so an unattended boot still resets itself on the same schedule;
+  `sdcard-install.sh` creates it before the first write and removes it from a
+  trap, so a crash or an interrupt hands the phone back.
 
 ## Flashing
 

@@ -44,15 +44,29 @@ scripts/flash.sh ramboot
 
 In order. Step 1 is the one that makes every later step recoverable.
 
-1. **Back up every partition you are about to touch, on both slots.** From a
-   booted stock system with root, or from the stock recovery. Without these you
-   have no way back, and the `vbmeta` dump for the slot you flash is what makes
-   step 4 safe. Both slots, because a device that has taken an OTA does not
-   have identical ones, and `scripts/flash.sh` picks the backup matching
-   whichever slot is active.
+Before any of it, with the phone booted normally and USB debugging on:
+
+```sh
+scripts/device-probe.sh
+```
+
+That writes nothing and needs no root. It confirms the phone really is a
+`pdx246` on `parrot` before you flash images built for one, reports which slot
+is active, and says whether OEM unlocking is enabled.
+
+1. **Get a copy of stock, both slots.** `scripts/flash.sh flash` needs
+   `stock/vbmeta_$slot.img` and will not run without it, because the `vbmeta`
+   for the slot being written is what keeps step 4 from tripping anti-rollback.
+   Both slots, because a device that has taken an OTA does not have identical
+   ones, and `flash.sh` picks the backup matching whichever slot is active.
+
+   There is a catch worth understanding before you start, because the obvious
+   approach does not work: **dumping the partitions needs root, and a stock
+   Xperia has none.** Unlocking the bootloader does not grant it either. So the
+   recipe below only applies if the phone is *already* rooted:
 
    ```sh
-   # with the device booted and adb root available
+   # only if 'adb shell su' actually works
    for s in a b; do
        for p in boot vendor_boot dtbo vbmeta vbmeta_system; do
            adb shell su -c "dd if=/dev/block/by-name/${p}_${s} of=/sdcard/${p}_${s}.img"
@@ -60,6 +74,16 @@ In order. Step 1 is the one that makes every later step recoverable.
        done
    done
    ```
+
+   Otherwise the backup is a **download, not a dump**: fetch the exact firmware
+   for your model and region with XperiFirm, and unpack the `.sin` files to get
+   `boot`, `vendor_boot`, `dtbo` and `vbmeta`. That is also the real recovery
+   path if a flash goes wrong — reflashing Sony's own firmware restores the
+   device regardless of what you wrote over it. Check the model string from
+   `scripts/device-probe.sh` against the firmware you download; the Xperia 10
+   VI ships as several variants and they are not interchangeable.
+
+   `scripts/flash.sh ramboot` needs none of this, which is why it comes first.
 
 2. **Unlock.** Sony's official unlock, which requires an unlock code from
    <https://developer.sony.com/open-devices/unlock-bootloader>.
@@ -132,10 +156,28 @@ The debug shell brings the gadget up and offers three ways in at once. No
 hardware modification, no UART cable.
 
 ```sh
+scripts/console.sh
+```
+
+That waits for the gadget to enumerate, checks the host actually got an address
+on `172.16.42.0/24`, and opens the shell. `scripts/console.sh watch` stops
+after the diagnosis instead of connecting. When the gadget never appears it
+prints the three candidate reasons in order of likelihood, which is the useful
+case — see *Why the gadget should come up* below.
+
+By hand, it is these three:
+
+```sh
 ip addr show                 # a new usb0 / enp*u* interface should appear
 telnet 172.16.42.1 23        # the initramfs debug shell
 screen /dev/ttyACM0 115200   # same shell on the CDC-ACM port
 ```
+
+Fedora ships no `telnet`, `nc` or `socat`, and this project may not install
+onto the host, so `console.sh` falls back to `scripts/telnet.py` — a small
+client that needs nothing but `python3` and refuses every option the server
+offers, which is what a debug shell wants. It prefers a real `telnet` if the
+host has one.
 
 ### The four commands that matter once you are in
 

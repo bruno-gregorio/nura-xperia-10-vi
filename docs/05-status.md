@@ -203,6 +203,16 @@ that is the only thing standing between this port and a bricked phone.
   `boot_gki` (`fastboot stage vendor_boot.img` then `fastboot boot boot.img`)
   stages the v4 ramdisk correctly. Untested, and some Qualcomm bootloaders
   refuse `fastboot boot` outright.
+- **The host side of the debug shell is ready and tested** — Verified. Fedora
+  ships no `telnet`, `nc` or `socat`, and this project may not install onto the
+  host, so `scripts/telnet.py` is the fallback: tested against a stub that
+  opens the way busybox `telnetd` does (`IAC WILL ECHO`, `IAC WILL SGA`,
+  `IAC DO NAWS`, an `SB`/`SE` subnegotiation, then a prompt), with the command
+  bytes stripped from the display and the typed line arriving byte-exact.
+  `scripts/console.sh` prefers a real client if one appears.
+- **The container shares the host network namespace** — Verified. `ip -o link
+  show` is identical inside and out, so the gadget is reachable from either
+  side once it enumerates.
 
 ## USB on the device
 
@@ -219,6 +229,30 @@ that is the only thing standing between this port and a bricked phone.
 
 - **The procedure in [04-flashing.md](04-flashing.md)** — Reasoned. Derived
   from AVB behaviour; **not executed**.
+- **The bootloader on this unit is already unlocked** — Owner-reported. Not
+  yet confirmed against `ro.boot.flash.locked`; `scripts/device-probe.sh`
+  reads it. This takes the wipe-and-lose-DRM decision off the critical path,
+  so the irreversible-steps warning in 04-flashing.md is background for this
+  unit rather than a pending choice.
+- **`adb` and `fastboot` have to run on the host, not in the container** —
+  Verified. `/dev/bus/usb` passes through, but the nodes are host `root:root`
+  0664 and appear as `nobody:nogroup` inside, so the container cannot get
+  write access and so cannot claim an interface. There are no android udev
+  rules on the host and nothing tags the device `uaccess`, so no ACL is
+  granted either. The host has android-tools 37.0.0 and the owner has
+  authorised using it. `flash.sh` calls `fastboot` directly with
+  project-relative paths, so it runs on the host unchanged.
+- **Some bootloaders of this generation ignore a ramdisk given to `fastboot
+  boot`** — Guess, and the main risk to `ramboot`. Documented for Pixel 7/8,
+  where the bootloader uses the on-device `vendor_boot` instead of the staged
+  one; if this bootloader does the same it would quietly run the stock kernel
+  and look like a boot failure. `scripts/console.sh` lists it as one of the
+  three reasons the gadget might not appear.
+- **Backing up stock by dumping partitions needs root, which a stock Xperia
+  has not got** — Verified by construction: unlocking the bootloader does not
+  grant root, so the `dd` recipe only applies to an already-rooted phone. The
+  realistic backup is a firmware download, which is also the true recovery
+  path. 04-flashing.md step 1 says so.
 - **Leaving the stock `dtbo` in place gives the right device tree** —
   Reasoned. This is what stock does; untested with *our* base.
 
@@ -255,21 +289,26 @@ that is the only thing standing between this port and a bricked phone.
 
 ## Next steps, in order
 
-1. **Run `scripts/flash.sh ramboot`.** Needs the bootloader unlocked and
-   nothing else — no backups, no rootfs image, no partition written. It answers
-   the only question that matters right now, and there is nothing to undo if
-   the answer is no.
-2. **Take the backups** in [04-flashing.md](04-flashing.md) step 1, for both
+1. **Run `scripts/device-probe.sh`**, with the phone booted normally and USB
+   debugging on. Read-only, no root, no unlock: it confirms the phone really is
+   a `pdx246` on `parrot` before anything built for one is sent to it, and
+   reports the active slot and the lock state.
+2. **Run `scripts/flash.sh ramboot`**, with `scripts/console.sh` in a second
+   terminal. The bootloader is already unlocked, so this needs nothing else —
+   no backups, no rootfs image, no partition written. It answers the only
+   question that matters right now, and there is nothing to undo if the answer
+   is no.
+3. **Take the backups** in [04-flashing.md](04-flashing.md) step 1, for both
    slots. Do this before anything is flashed, not before the RAM boot.
-3. **Look for a USB gadget.** That single observation splits the problem in
+4. **Look for a USB gadget.** That single observation splits the problem in
    half: if it appears, the kernel booted and the work moves to userspace; if
-   not, read ramoops.
-4. **Read `/sys/fs/pstore/console-ramoops*` after the next boot.** The cheapest
+   not, read ramoops. `scripts/console.sh` is this step.
+5. **Read `/sys/fs/pstore/console-ramoops*` after the next boot.** The cheapest
    instrument available and it needs no cable: the region is reserved in the
    DTB we build, `PSTORE_RAM` is builtin, and 256K of console ring survives a
    reboot. Serial on `0x98c000` is the fallback and needs physical access to
    the USB-C SBU pins that nobody has yet.
-5. **Flash the rootfs and try a real boot**, once steps 1-4 say the kernel
+6. **Flash the rootfs and try a real boot**, once steps 1-5 say the kernel
    runs. The image exists and verifies; what is untested is whether the
-   initramfs finds and mounts it on the device. Steps 1-4 do not depend on it.
-6. **Only then: build `sm6450-modules` for display.**
+   initramfs finds and mounts it on the device. Steps 1-5 do not depend on it.
+7. **Only then: build `sm6450-modules` for display.**

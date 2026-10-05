@@ -299,6 +299,26 @@ made the first week of bring-up slow. The findings below are what closed it.
   block device rather than giving up early, an all-zero partition means the
   kernel died before `ufs_qcom` probed. That puts the failure between the first
   instruction and roughly entry sixty of `initramfs.load`.
+- **The log hook itself may be what hangs the phone** — Guess, and the next
+  thing to settle. Every boot carrying the hook has hung: the 26-parameter
+  one, the 13-parameter one, and the freshly rebuilt 13-parameter one that
+  finally had `panic=5` baked in properly. The one boot with `panic=5` and no
+  hook panicked and reset itself five times. Three against one is not proof,
+  but it points one way, and the mechanism is there: the hook writes a
+  megabyte with `conv=fsync` from a background job the moment sysfs shows the
+  partition, which is in the middle of `load_modules`, with the rest of the
+  storage stack - `ufshcd-crypto-qti` among it, which `initramfs.load` notes
+  UFS refuses to probe without - still coming up. A write into a half-probed
+  controller is a plausible way to wedge the I/O path for good.
+  `BOOTLOG=0 scripts/try-kernel.sh` flashes without it, which is the control.
+- **A reboot loop and a hang are indistinguishable on this phone** — Verified
+  the hard way, three times, twice by me. Every boot attempt redraws the same
+  Sony logo, so a device working through seven retries at 54 seconds each
+  looks exactly like a device that has stopped. Twice somebody reached for the
+  buttons around the three minute mark and threw the run away. The only tells
+  are the logo visibly restarting, and `slot-retry-count` afterwards.
+  `wait_for_adb` now prints elapsed time and the likely attempt number so
+  nobody has to guess.
 - **Always clear `rddata` between runs** — a stale record is indistinguishable
   from a fresh one, and the uptime in the header is the only hint. `--log`
   wipes it after reading for this reason.

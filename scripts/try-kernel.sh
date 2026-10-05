@@ -63,6 +63,16 @@ getvar() { fastboot getvar "$1" 2>&1 | sed -n "s/^$1: *//p" | head -1; }
 
 # Waits for adb and says which slot answered, so a successful boot of our
 # kernel can be told apart from a fallback to the stock slot.
+# Waits for the device, printing progress to stderr so the caller can still
+# capture the slot from stdout.
+#
+# The progress matters more than it looks. A failed round is seven boot
+# attempts at roughly 54 seconds, and every one of them redraws the same Sony
+# logo, so a device working its way through the retry counter is visually
+# identical to a device that has hung. Three separate times during bring-up
+# somebody - me included - decided it was dead and reached for the buttons at
+# the three minute mark, which threw the run away and taught us nothing. A
+# line every fifteen seconds saying how long is left is what stops that.
 wait_for_adb() {
 	limit=${1:-180}
 	i=0
@@ -70,11 +80,18 @@ wait_for_adb() {
 		sleep 2
 		if adb devices | sed 1d | grep -qE 'device$|recovery$'; then
 			slot=$(adb shell getprop ro.boot.slot_suffix 2>/dev/null | tr -d '\r')
+			printf '\r   %-70s\n' "up after ${i}s on slot ${slot:-unknown}" >&2
 			echo "${slot:-unknown}"
 			return 0
 		fi
 		i=$((i + 2))
+		if [ $((i % 15)) -lt 2 ]; then
+			# ~54s an attempt, 7 attempts, then the fallback boots.
+			printf '\r   %ds elapsed, about attempt %d of 7 - the logo redrawing is normal, %ds left ' \
+				"$i" "$((i / 54 + 1))" "$((limit - i))" >&2
+		fi
 	done
+	printf '\r   %-70s\n' "nothing after ${limit}s" >&2
 	echo ""
 	return 1
 }
@@ -88,9 +105,17 @@ build_vendor_boot() {
 	# docs/05-status.md on what the bootloader actually rejects.
 	"$ROOT/scripts/swap-vendor-dtb.py" --extract "$STOCK/vendor_boot_b.img" "$WORK/sony-dtbs.bin" >/dev/null
 	"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/sony-dtbs.bin"
-	# ...and the only way to find out why a boot died.
-	"$ROOT/scripts/bootlog.py" install "$WORK/vendor_boot.img" "$WORK/vendor_boot-log.img"
-	mv "$WORK/vendor_boot-log.img" "$WORK/vendor_boot.img"
+	# ...and the only way to find out why a boot died. BOOTLOG=0 leaves it
+	# out, which is how you tell a kernel that fails on its own from one the
+	# hook broke: the hook writes to UFS from a background job while
+	# load_modules is still bringing the storage stack up, and a write into a
+	# half-probed controller is a plausible way to wedge the whole I/O path.
+	if [ "${BOOTLOG:-1}" = "0" ]; then
+		say "BOOTLOG=0: flashing without the log hook"
+	else
+		"$ROOT/scripts/bootlog.py" install "$WORK/vendor_boot.img" "$WORK/vendor_boot-log.img"
+		mv "$WORK/vendor_boot-log.img" "$WORK/vendor_boot.img"
+	fi
 }
 
 # vbmeta for the spare slot has to come from the slot the device last ran: its

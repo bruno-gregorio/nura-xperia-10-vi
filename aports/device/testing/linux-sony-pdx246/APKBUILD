@@ -81,6 +81,25 @@ prepare() {
 		clean-files := *.dtb *.dtbo
 	EOF
 
+	# Qualcomm's tracepoint headers say "#define TRACE_INCLUDE_PATH .", so
+	# include/trace/define_trace.h expands to #include "./trace-dcvs.h" and the
+	# compiler has to be told what "." is. Kbuild only passes -I$(srctree)/$(src)
+	# when building out of tree, and Google and Qualcomm always build this kernel
+	# with O=, so nobody upstream has ever hit this. In tree the include resolves
+	# against include/trace/ instead and the build dies:
+	#
+	#   include/trace/define_trace.h:95:10: fatal error:
+	#       './trace-dcvs.h' file not found
+	#
+	# 137 headers in this tree are written that way, so this is not a one-off.
+	# Rather than move the whole build out of tree, drop the condition: in tree
+	# $(srctree)/$(src) and $(objtree)/$(obj) are the same directory, and this is
+	# the include path upstream's own builds already run with.
+	grep -q '^ifdef building_out_of_srctree$' "$builddir/scripts/Makefile.lib" \
+		|| die "out-of-tree include guard moved, re-check scripts/Makefile.lib"
+	sed -i '/^ifdef building_out_of_srctree$/,/^endif$/ { /^ifdef building_out_of_srctree$/d; /^endif$/d; }' \
+		"$builddir/scripts/Makefile.lib"
+
 	# Qualcomm wraps $(CC) in scripts/basic/cc-wrapper, which reads the
 	# compiler's stderr and fails the build on any warning not in a
 	# three-entry allowlist. That only holds with the exact Clang Google

@@ -58,6 +58,46 @@ that is the only thing standing between this port and a bricked phone.
   on 2026-10-05, so this is stale and unconfirmed; re-check before acting on
   it.
 
+## Read off the live device
+
+First contact, 2026-10-05, over adb with the phone booted normally. The device
+is not running stock: it carries LineageOS 23.2 `VANILLA-EXT4-GSI` on top of
+Sony's stock pdx246 vendor and odm partitions. `scripts/device-collect.sh`
+captures everything below into `out/device-dump/`, read-only.
+
+- **It is the right phone** — Verified. `ro.product.odm.device = pdx246`,
+  `ro.board.platform = parrot`, bootimage fingerprint `Sony/pdx246/pdx246`.
+  `ro.product.device` reads `XQ-ES72`, which is the market model and not a
+  mismatch; `scripts/device-probe.sh` read that one and cried wolf, and now
+  reads the odm and vendor properties instead, which a GSI leaves alone.
+- **`soc_id` 537, machine `PARROT`, `hw_platform` QRD, revision 1.0** —
+  Verified. `/sys/devices/soc0`. 537 is `0x219`, which is the first word of the
+  `qcom,msm-id` in the `parrot.dtb` this repo builds, so the bootloader's DTB
+  matching will accept our tree.
+- **8 cores, 4x Cortex-A78 plus 4x Cortex-A55, 7.2 GiB RAM** — Verified.
+  `/proc/cpuinfo` CPU parts `0xd41` and `0xd05`, `/proc/meminfo`.
+- **Slot `_b` is active, 110 partitions by name** — Verified.
+  `ro.boot.slot_suffix`, `/dev/block/by-name`.
+- **The property-based lock check cannot be trusted on this device** —
+  Verified. The GSI reports `flash.locked=1`, `verifiedbootstate=green` and
+  `veritymode=enforcing`, which is property spoofing to pass Play Integrity:
+  `ro.keymaster.xxx.vbmeta_state` still reads `unlocked` and its
+  `verifiedbootstate` `orange`, and a GSI cannot be installed on a locked
+  device in the first place. `fastboot getvar unlocked` is the only authority,
+  and `scripts/device-probe.sh` now says so instead of reporting a lock.
+- **No root, so the live device tree and the partitions are out of reach** —
+  Verified. `ro.debuggable=0`, no `su`, SELinux enforcing.
+  `/sys/firmware/devicetree/base/*` and `/proc/cmdline` are denied to the
+  `shell` user even though the directories list.
+- **`adb root` is present on this build and gated by a toggle** — Verified.
+  `adb root` answers "ADB Root access is disabled by system setting - enable in
+  Settings -> System -> Developer options". Turning that on is the single
+  highest-value action still available, and it is what unblocks three of the
+  gaps below.
+- **pstore is empty and unreadable to `shell`** — Verified. `/sys/fs/pstore`
+  is denied, so reading ramoops after a failed boot needs root too. Step 5 of
+  the next steps assumed otherwise and no longer does.
+
 ## The build environment
 
 - **pmbootstrap runs rootless with the three patches** — Verified. The native
@@ -280,6 +320,13 @@ that is the only thing standing between this port and a bricked phone.
   blocker. A failed `pmb install` does still leave a correctly sized, wholly
   empty `sony-pdx246.img` behind; `flash.sh` and `verify-bootimg.py` both
   refuse an image that holds neither a GPT nor an ext4 superblock.
+- **Sony's board-level device tree, which nothing on disk has.** The device
+  tree release carries Qualcomm's `parrot-atp`, `-idp` and `-qrd` reference
+  boards but no pdx246 tree, so panel model, battery parameters and GPIO
+  assignment are unknown. Three routes to it, in order of cost: turn on
+  "Rooted debugging" and read the live tree plus `dtbo` over adb; dump `dtbo`
+  from the bootloader; or decompile it out of a firmware download. The first is
+  a toggle and a re-run of `scripts/device-collect.sh`.
 - **Mainline is not attempted, and the reason is ordering, not difficulty.**
   Every per-SoC driver exists as GPL source in the tarballs the kernel aport
   already downloads, and the sibling SoC SM4450 is upstream and derived from
@@ -289,24 +336,34 @@ that is the only thing standing between this port and a bricked phone.
 
 ## Next steps, in order
 
-1. **Run `scripts/device-probe.sh`**, with the phone booted normally and USB
-   debugging on. Read-only, no root, no unlock: it confirms the phone really is
-   a `pdx246` on `parrot` before anything built for one is sent to it, and
-   reports the active slot and the lock state.
+1. **Run `scripts/device-probe.sh`, then `scripts/device-collect.sh`**, with
+   the phone booted normally and USB debugging on. Both are read-only and
+   neither needs root. Done once already on 2026-10-05; see "Read off the live
+   device" above. Re-run the collector after turning on "Rooted debugging" in
+   Developer options, because that is what makes the live device tree, the
+   kernel command line, the debugfs clock and regulator summaries, and a real
+   `dd` backup of the boot partitions readable. Everything in step 3 and the
+   device tree gap above falls out of that one toggle.
 2. **Run `scripts/flash.sh ramboot`**, with `scripts/console.sh` in a second
    terminal. The bootloader is already unlocked, so this needs nothing else —
    no backups, no rootfs image, no partition written. It answers the only
    question that matters right now, and there is nothing to undo if the answer
    is no.
 3. **Take the backups** in [04-flashing.md](04-flashing.md) step 1, for both
-   slots. Do this before anything is flashed, not before the RAM boot.
+   slots. Do this before anything is flashed, not before the RAM boot. With
+   the "Rooted debugging" toggle on, `scripts/device-collect.sh` does this by
+   `dd` into `out/device-dump/stock/`, which is the backup that document said
+   had to be a firmware download.
 4. **Look for a USB gadget.** That single observation splits the problem in
    half: if it appears, the kernel booted and the work moves to userspace; if
    not, read ramoops. `scripts/console.sh` is this step.
-5. **Read `/sys/fs/pstore/console-ramoops*` after the next boot.** The cheapest
-   instrument available and it needs no cable: the region is reserved in the
-   DTB we build, `PSTORE_RAM` is builtin, and 256K of console ring survives a
-   reboot. Serial on `0x98c000` is the fallback and needs physical access to
+5. **Read `/sys/fs/pstore/console-ramoops*` after the next boot.** Still the
+   cheapest instrument and it needs no cable: the region is reserved in the DTB
+   we build, `PSTORE_RAM` is builtin, and 256K of console ring survives a
+   reboot. One correction, Verified 2026-10-05: `/sys/fs/pstore` is denied to
+   the `shell` user, so reading it from the installed Android needs the "Rooted
+   debugging" toggle from step 1. From a booted postmarketOS it is readable
+   anyway. Serial on `0x98c000` is the fallback and needs physical access to
    the USB-C SBU pins that nobody has yet.
 6. **Flash the rootfs and try a real boot**, once steps 1-5 say the kernel
    runs. The image exists and verifies; what is untested is whether the

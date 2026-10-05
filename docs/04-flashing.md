@@ -52,7 +52,26 @@ scripts/device-probe.sh
 
 That writes nothing and needs no root. It confirms the phone really is a
 `pdx246` on `parrot` before you flash images built for one, reports which slot
-is active, and says whether OEM unlocking is enabled.
+is active, and says what it can about the lock state. Read that last part with
+the caveat it prints: the lock properties are set by whatever is running as the
+system image, and a GSI rewrites them, so `fastboot getvar unlocked` is the
+only authority.
+
+Then collect the hardware description, which is what the mainline work in
+[06-mainline.md](06-mainline.md) is written against:
+
+```sh
+scripts/device-collect.sh
+```
+
+Also read-only. Without root it gets the device topology - every platform and
+I2C device with its address, the remote processors, the PMICs, the regulators,
+the stock kernel config and the vendor module inventory - into
+`out/device-dump/`. With root, meaning the "Rooted debugging" toggle in
+Developer options on a LineageOS build, it additionally gets the live device
+tree, the kernel command line, the debugfs clock and regulator summaries, and
+`dd` copies of the boot partitions into `out/device-dump/stock/`, which is
+exactly the backup step 1 below asks for.
 
 1. **Get a copy of stock, both slots.** `scripts/flash.sh flash` needs
    `stock/vbmeta_$slot.img` and will not run without it, because the `vbmeta`

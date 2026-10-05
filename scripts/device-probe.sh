@@ -41,12 +41,17 @@ for p in ro.product.model ro.product.name ro.product.device ro.board.platform \
 done
 
 say "does this match what the port assumes?"
-# docs/01-device.md claims pdx246 / SM6450 "parrot". If either of these is not
-# what we built for, stop: the images are for a different phone.
-dev=$(prop ro.product.device); plat=$(prop ro.board.platform)
-case "$dev" in
-	*pdx246*) echo "    device  $dev  (expected pdx246)" ;;
-	*) echo "    MISMATCH: device is '$dev', not pdx246. These images are not for this phone." ;;
+# docs/01-device.md claims pdx246 / SM6450 "parrot". Take the codename from the
+# odm and vendor properties rather than ro.product.device: that one carries the
+# market model (XQ-ES72 and its siblings), and when a GSI is installed the
+# system properties are replaced wholesale while odm and vendor stay Sony's.
+dev=$(prop ro.product.odm.device)
+[ -n "$dev" ] || dev=$(prop ro.product.vendor.device)
+[ -n "$dev" ] || dev=$(prop ro.product.device)
+model=$(prop ro.product.device); plat=$(prop ro.board.platform)
+case "$dev$(prop ro.bootimage.build.fingerprint)" in
+	*pdx246*) echo "    codename $dev  (expected pdx246), market model $model" ;;
+	*) echo "    MISMATCH: codename is '$dev', not pdx246. These images are not for this phone." ;;
 esac
 case "$plat" in
 	parrot|*6450*) echo "    platform $plat  (expected parrot / SM6450)" ;;
@@ -54,18 +59,40 @@ case "$plat" in
 esac
 
 say "lock and verified boot state"
-# sys.oem_unlock_allowed is the one that decides whether Sony's unlock can
-# even be attempted: it reflects the "OEM unlocking" toggle in Developer
-# options, which has to be on *before* rebooting to the bootloader.
+# Read this section as a claim, not as the state. Every property here is set by
+# whatever is running as the system image, and GSIs rewrite exactly these to
+# pass Play Integrity: a phh-based GSI reports flash.locked=1,
+# verifiedbootstate=green and veritymode=enforcing on a device that is in fact
+# unlocked. The only authority is the bootloader, via 'fastboot getvar
+# unlocked' - which is why flash.sh reads the slot from fastboot and not here.
 for p in ro.boot.flash.locked ro.boot.verifiedbootstate ro.boot.veritymode \
-         sys.oem_unlock_allowed ro.oem_unlock_supported ro.boot.slot_suffix; do
+         ro.boot.vbmeta.device_state sys.oem_unlock_allowed \
+         ro.oem_unlock_supported ro.boot.slot_suffix; do
 	printf '    %-38s %s\n' "$p" "$(prop "$p")"
 done
-case "$(prop sys.oem_unlock_allowed)" in
-	1) echo "    -> OEM unlocking is ENABLED. Sony's unlock can be attempted." ;;
-	0) echo "    -> OEM unlocking is OFF. Turn it on in Developer options first;
-       the bootloader will refuse the unlock without it." ;;
-	*) echo "    -> could not read the OEM unlock state" ;;
+# The keymaster HAL publishes its own copy from the real values, and property
+# spoofing tends to miss it, so a disagreement between the two is itself the
+# tell that the ro.boot.* ones have been rewritten.
+for p in ro.keymaster.xxx.vbmeta_state ro.keymaster.xxx.verifiedbootstate; do
+	v=$(prop "$p"); [ -n "$v" ] && printf '    %-38s %s\n' "$p" "$v"
+done
+
+gsi="$(prop ro.lineage.version) $(prop ro.build.flavor) $(prop ro.product.bootimage.name)"
+case "$gsi" in
+	*GSI*|*gsi*|*generic*)
+		echo "    -> a GSI is running ($(echo $gsi)), so the properties above"
+		echo "       describe the GSI, not the bootloader. A GSI cannot be"
+		echo "       installed on a locked device, so this device is unlocked"
+		echo "       whatever flash.locked says. Confirm in the bootloader:"
+		echo "       fastboot getvar unlocked" ;;
+	*)
+		case "$(prop sys.oem_unlock_allowed)" in
+			1) echo "    -> OEM unlocking is ENABLED. Sony's unlock can be attempted." ;;
+			0) echo "    -> OEM unlocking is OFF. If the device is still locked, turn
+       it on in Developer options first; the bootloader will refuse
+       the unlock without it." ;;
+			*) echo "    -> could not read the OEM unlock state" ;;
+		esac ;;
 esac
 
 say "kernel we are replacing"

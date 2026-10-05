@@ -130,11 +130,16 @@ the same thing as in [05-status.md](05-status.md).
   referenced in the QRD tree. Upstream, `pm7250b.dtsi` **is** there (the
   sm6350/sm6375 Sony devices use it) while `pm6450.dtsi` is **not** — new, but
   PMIC dtsi files are small and declarative.
-- **Wi-Fi/BT is WCN3990, not WCN6750** — Verified: our overlay chain includes
-  `parrot-wcn3990.dtsi`, and `wcn6750` exists only in board files we do not use
-  (`parrot-qrd-wcn6750*`). Upstream, this is very good news: WCN3990 is
-  **ath10k** over SNOC, mature since sdm845, and Bluetooth is `hci_qca`,
-  equally mature.
+- **Wi-Fi/BT is WCN6750, not WCN3990** — Verified on the device 2026-10-05,
+  and this reverses what this file said before. The live hardware has
+  `22800000.qcom,icnss` bound to `icnss2`, a dedicated WPSS remote processor at
+  `0x8a00000` on `qcom_q6v5_pas`, and `qcom,smp2p-wpss` beside it. WCN3990 has
+  no WPSS at all: it runs on SNOC under plain `icnss`. The earlier reading came
+  from Qualcomm's QRD board files, which describe reference boards and not
+  Sony's, and Sony's own board tree turns out not to be in the device tree
+  release. Upstream it is still good news, just a different driver:
+  `qcom,wcn6750-wifi` is in `ath11k` as `ATH11K_HW_WCN6750_HW10`, AHB and WPSS
+  based, and documented in `qcom,ath11k.yaml`. Bluetooth is still `hci_qca`.
 - **GPU is Adreno 710 (a7xx Gen1)** — Verified: Sony specs and
   `parrot-gpu.dtsi`. Upstream, Mesa's `freedreno_devices.py` has `FD710` at
   chip_id `0x07010000`, "A7XX Gen1 derived from A730", with both KGSL and
@@ -147,7 +152,11 @@ the same thing as in [05-status.md](05-status.md).
   board description is already close in shape to the `sm6450-qrd.dts` a
   mainline series would carry.
 - **No `sm6450.dtsi` or parrot drivers in mainline** — Verified 2026-10-05
-  against `torvalds/linux` master via the GitHub API.
+  against `torvalds/linux` master, and absent from Qualcomm's own CLO `ark-6`
+  6.12 kernel too: 454 files under its `arch/arm64/boot/dts/qcom` and not one
+  `sm6450` or `parrot` among them. The family upstream stops at sm4250,
+  sm4450, sm6115, sm6125, sm6350 and sm6375. So there is no tree to rebase
+  onto and no half-finished series to pick up, from Qualcomm or anyone else.
 - **Nothing on the mailing lists** — Unverified. `lore.kernel.org` was
   unreachable (Anubis challenge) when this was written, and
   [05-status.md](05-status.md) carries it as a stale guess; re-check before
@@ -163,6 +172,72 @@ dts.
 - **Xperia 10 III** — `sm6350-sony-xperia-lena-pdx213`
 - **Xperia 10 IV** — `sm6375-sony-xperia-murray-pdx225`
 - **Xperia 1 V** — `sm8550-sony-xperia-yodo-pdx234`
+
+## The SoC memory map, confirmed against the sibling
+
+Read off the live device on 2026-10-05 with `scripts/device-collect.sh`, which
+needs no root, and compared against upstream `sm4450.dtsi`. This upgrades the
+sibling claim from matching clock register offsets to matching register bases,
+and marks where the resemblance stops.
+
+- **Eight core blocks sit at identical addresses in both** — Verified. GCC at
+  `0x100000`, dispcc at `0xaf00000`, gpucc at `0x3d90000`, cpufreq-hw at
+  `0x17d91000`, RPMh RSC at `0x17a00000`, the arch timer at `0x17420000`, the
+  TCSR hwlock at `0x1f40000`, and GENI QUP_1 at `0xac0000`.
+- **TLMM does not match** — Verified. `0xf000000` here against `0xf100000`
+  upstream, so the pin controller base is per-SoC and `pinctrl-sm6450.c`
+  cannot inherit the sibling's.
+- **The cluster split does not match either** — Verified. 4+4 A78/A55 here
+  against upstream sm4450's 2 A78 plus 6 A55, so the CPU nodes, OPP tables and
+  cpufreq data are ours to write rather than to copy.
+- **Upstream sm4450 stops well short of the peripherals** — Verified. Its
+  `sm4450.dtsi` is 686 lines with no display, no UFS, no SMMU and no
+  remoteproc. The blocks it omits are exactly the ones listed next, so the
+  template covers phase 1 and runs out before phase 2.
+
+### Peripherals, with addresses and upstream status
+
+All Verified on the live device unless marked otherwise. The addresses are what
+an `sm6450.dtsi` has to declare, and they were obtained without root, so this
+list is cheap to re-derive and worth trusting.
+
+- **Four remote processors, all on `qcom_q6v5_pas`** — ADSP at `0x3000000`,
+  CDSP at `0x32300000`, MSS at `0x4080000`, WPSS at `0x8a00000`. The PAS loader
+  is the same driver mainline uses, so these want DT nodes and firmware names
+  rather than new code.
+- **A PMIC trio over SPMI at `0xc42d000`** — `pm6450` at SID 1, `pm7250b` at
+  SID 3 and `pm6150l` at SIDs 4 and 5, under `spmi_pmic_arb`. This corrects the
+  pair named earlier in this file: there are three. Upstream already has
+  `pm6150l.dtsi` and `pm7250b.dtsi`, so only `pm6450.dtsi` is new, and PMIC
+  trees are small and declarative.
+- **Display at `0xae00000`** — MDSS, DSI controller 0 at `0xae94000`, DSI PHY 0
+  at `0xae94400`, DisplayPort at `0xae90000`, three SDE CRTCs live. One DSI
+  link, so one panel.
+- **GPU at `0x3d00000`** — GMU at `0x3d68000`, its own SMMU at `0x3da0000`,
+  consistent with the Adreno 710 recorded above.
+- **UFS at `0x1d84000`**, PHY at `0x1d87000`.
+- **Two GENI QUP wrappers** — QUP_0 at `0x9c0000` with I2C at `0x980000` and
+  `0x988000`; QUP_1 at `0xac0000` with I2C at `0xa80000` and `0xa8c000`. The
+  debug UART at `0x98c000` in [05-status.md](05-status.md) is QUP_0's, whereas
+  upstream sm4450's only serial is QUP_1's at `0xa88000`.
+- **Touchscreen is FocalTech on I2C bus 3 at `0x38`** — downstream driver
+  `fts_ts`. Mainline has no driver for this part, so it joins the display long
+  pole rather than being free.
+- **Charging is firmware-mediated rather than register-level** — the battery
+  and USB power supplies come from `qcom,pmic_glink` with a UCSI endpoint
+  (`ucsi-source-psy-...:qcom,ucsi1`). Upstream that is `qcom_battmgr` plus
+  `ucsi_glink`, both already there, which deletes a whole class of charger
+  work from the long tail.
+- **NFC, LEDs and vibrator are conventional** — NXP NFC on I2C bus 2 at `0x28`
+  (`ro.hardware.nfc_nci = SNxxx`), tri-LED and LPG PWM on `pm6150l`, flash LED
+  likewise, vibrator on `pm7250b` through `qpnp-vibrator-ldo`. Mainline's
+  `leds-qcom-lpg` covers the first two.
+- **Sony's own board tree is the one input still missing** — Reasoned. The
+  device tree release carries Qualcomm's `parrot-atp`, `-idp` and `-qrd`
+  reference boards and nothing for pdx246, and the live tree that would settle
+  panel model, battery parameters and GPIO assignment is denied to the `shell`
+  user. One Developer options toggle fixes this; see
+  [05-status.md](05-status.md).
 
 ## Ordered plan
 

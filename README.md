@@ -44,7 +44,7 @@ Everything the build touches lives under this directory. Nothing is written to
 aports/device/testing/device-sony-pdx246/   device package (deviceinfo, initfs modules)
 aports/device/testing/linux-sony-pdx246/    kernel package
 patches/                                    fixes pmbootstrap needs to run rootless
-scripts/                                    bootstrap, pmbootstrap wrapper, aports sync, flashing
+scripts/                                    bootstrap, pmbootstrap wrapper, aports sync, device probe, flashing
 docs/                                       device facts, design, build, flashing, status
 out/                                        (gitignored) build and install logs
 .pmb/                                       (gitignored) venv, pmbootstrap, pmaports, chroots

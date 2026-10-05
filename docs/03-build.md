@@ -109,22 +109,71 @@ Things worth knowing before changing any of it:
 
 ## Images
 
-Build the flashable images. `--split` keeps boot and root separate, which is
-what a fastboot device wants; `--no-fde` skips full-disk encryption, one less
-thing to go wrong on a device that has never booted.
+Build the flashable images. `--no-fde` skips full-disk encryption, one less
+thing to go wrong on a device that has never booted. Do **not** pass `--split`:
+that produces separate boot and root partition images, which only the
+`fastboot-bootpart` flasher uses. This device is plain `fastboot`, which flashes
+the combined image.
 
 ```sh
-distrobox enter pmport -- ./scripts/pmb install --no-fde --split
+distrobox enter pmport -- ./scripts/pmb install --no-fde
 ```
 
-Output lands in `.pmb/work/chroot_native/home/pmos/rootfs/`:
+Two different kinds of file come out of this, in two different places, and
+conflating them is the easiest mistake to make here.
 
-- `sony-pdx246-boot.img` — kernel
-- `sony-pdx246-vendor_boot.img` — DTB + initramfs + cmdline
-- `sony-pdx246-root.img` — root filesystem
+- **The fastboot images**, written by boot-deploy into the rootfs chroot's
+  `/boot`. These are what the bootloader consumes.
+
+  ```sh
+  .pmb/work/chroot_rootfs_sony-pdx246/boot/boot.img          # kernel
+  .pmb/work/chroot_rootfs_sony-pdx246/boot/vendor_boot.img   # dtb + initramfs + cmdline
+  ```
+
+- **The partition images**, under `.pmb/work/chroot_native/home/pmos/rootfs/`.
+  `sony-pdx246.img` is the combined one, with `/boot` and `/` as subpartitions,
+  and it is what gets flashed to `userdata`. A `sony-pdx246-boot.img` here is a
+  512M *filesystem* for the boot partition, not a kernel.
 
 Both boot images matter: header v4 splits the kernel from the DTB and
-initramfs.
+initramfs. Check them before going near the device.
+
+```sh
+python3 scripts/verify-bootimg.py
+```
+
+### The rootfs image needs loop devices, which this container has not got
+
+`pmb install` gets as far as building the rootfs and both fastboot images, then
+fails:
+
+```
+*** (3/4) PREPARE INSTALL BLOCKDEVICE ***
+ERROR: Command failed (exit code 1): % sudo modprobe loop
+```
+
+pmbootstrap builds the rootfs image by allocating a file, attaching it to a
+loop device, partitioning, formatting and copying into the mount. Loading a
+kernel module needs privileges the rootless container does not have, and
+mounting a loop device needs `CAP_SYS_ADMIN` in the *initial* user namespace,
+which it cannot get either. Nothing inside this project can work around it.
+
+What this costs, and what it does not:
+
+- `boot.img` and `vendor_boot.img` are finished and verified. They are built in
+  step 2, before the failure.
+- `scripts/flash.sh ramboot` needs nothing else. It boots from RAM, and
+  `pmos.debug-shell` stops in the initramfs before any root filesystem is
+  looked for, so the whole first round of debugging works without a rootfs.
+- The run leaves a `sony-pdx246.img` behind that is the right size and
+  completely empty — allocated, never formatted. `flash.sh` and
+  `verify-bootimg.py` both refuse it by checking for a GPT at offset 512.
+  Flashing it would write zeros over `userdata`.
+- Only `flash.sh flash`, the install to internal storage, is actually blocked.
+
+Unblocking it means `sudo modprobe loop` on the **host**, which is outside what
+this project is allowed to touch, so it is the owner's call rather than
+something the scripts do.
 
 ## Housekeeping
 

@@ -4,6 +4,27 @@
 Sony's and Qualcomm's boot flow and from the LineageOS pdx246 port's notes.
 Read it fully before connecting the phone, and take the backups.
 
+## Try it from RAM first
+
+Before any of what follows, there is a way to find out whether this kernel
+boots at all that writes nothing to the device and so needs no backups, no
+unlock beyond step 2, and no rootfs image.
+
+```sh
+scripts/flash.sh ramboot
+```
+
+That is `fastboot stage vendor_boot.img` followed by `fastboot boot boot.img` —
+header v4 keeps the DTB and the initramfs in `vendor_boot`, so it has to be
+staged before the kernel is handed over. `pmos.debug-shell` stops the boot in
+the initramfs before a root filesystem is ever looked for, so everything under
+["Getting in, with no display"](#getting-in-with-no-display) works from a RAM
+boot. If the kernel is going to die early, this is where to find out.
+
+Some Qualcomm bootloaders refuse `fastboot boot` even when unlocked. If this
+one does, there is nothing to undo, and the flashing procedure below is the
+fallback rather than the starting point.
+
 ## Before anything: two irreversible things
 
 - **Unlocking the bootloader wipes the device and destroys Sony's DRM keys
@@ -45,10 +66,17 @@ In order. Step 1 is the one that makes every later step recoverable.
    fastboot oem unlock 0x<YOUR_CODE>
    ```
 
-3. **Build the images.** See [03-build.md](03-build.md). You end up with
-   `sony-pdx246-boot.img`, `sony-pdx246-vendor_boot.img` and
-   `sony-pdx246-root.img` under
-   `.pmb/work/chroot_native/home/pmos/rootfs/`.
+3. **Build the images.** See [03-build.md](03-build.md). The two fastboot
+   images land in the rootfs chroot's `/boot`; the combined partition image
+   lands under `.pmb/work/chroot_native/home/pmos/rootfs/`. Note that
+   `pmb install` currently fails before producing that last one — 03-build.md
+   explains why, and the RAM boot above does not need it.
+
+   ```sh
+   .pmb/work/chroot_rootfs_sony-pdx246/boot/boot.img
+   .pmb/work/chroot_rootfs_sony-pdx246/boot/vendor_boot.img
+   .pmb/work/chroot_native/home/pmos/rootfs/sony-pdx246.img
+   ```
 
 4. **Flash vbmeta the careful way.** pmbootstrap's `flasher flash_vbmeta`
    generates an *empty* vbmeta with `avbtool make_vbmeta_image --flags 2`. That
@@ -64,14 +92,15 @@ In order. Step 1 is the one that makes every later step recoverable.
    fastboot --disable-verity --disable-verification flash vbmeta "stock/vbmeta_${slot}.img"
    ```
 
-5. **Flash the images.** `scripts/flash.sh` does exactly this with the backup
-   checks.
+5. **Flash the images.** `scripts/flash.sh flash stock/` does exactly this,
+   with the backup and slot checks, and refuses a rootfs image that was
+   allocated but never filled.
 
    ```sh
-   cd .pmb/work/chroot_native/home/pmos/rootfs/
-   fastboot flash boot        sony-pdx246-boot.img
-   fastboot flash vendor_boot sony-pdx246-vendor_boot.img
-   fastboot flash userdata    sony-pdx246-root.img
+   ROOTFS=.pmb/work/chroot_rootfs_sony-pdx246/boot
+   fastboot flash boot        "$ROOTFS/boot.img"
+   fastboot flash vendor_boot "$ROOTFS/vendor_boot.img"
+   fastboot flash userdata    .pmb/work/chroot_native/home/pmos/rootfs/sony-pdx246.img
    fastboot reboot
    ```
 
@@ -89,7 +118,8 @@ The display driver is an out-of-tree module that this port does not build yet,
 so the first boots are blind. The images are built for that:
 `kernel-cmdline.conf` carries `pmos.debug-shell`, so **the boot deliberately
 stops in the initramfs** instead of continuing into a userspace nothing can
-draw. Expect that, and
+draw. Everything in this section applies equally to a RAM boot, because that
+stop happens before any root filesystem is looked for. Expect that, and
 expect the device to sit there looking dead.
 
 ### The USB-C cable you flashed with is the console

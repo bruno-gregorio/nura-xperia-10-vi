@@ -47,7 +47,13 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 | `pmos.config` satisfies `pmb kconfig check` | **Verified** | "kconfig check succeeded!" |
 | boot-deploy's v4 path builds the images the way this port needs | **Verified** | boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or 4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ... --vendor_ramdisk ... --vendor_cmdline "$(get_cmdline)" --vendor_boot "$_vendor_bootimg" -o "$_bootimg"`. So the DTB really goes into `vendor_boot.img`, and `android-tools` really is the right provider — that branch hardcodes `require_package "mkbootimg" "android-tools"` |
 | `deviceinfo_kernel_cmdline` and `kernel-cmdline.d` are alternatives, not merged | **Verified** | `get_cmdline()` is `if [ -n "$deviceinfo_kernel_cmdline" ]; then _ret="$deviceinfo_kernel_cmdline ..."; else _ret="$(generate-kernel-cmdline)"; fi`. Setting the deviceinfo variable discards every drop-in, so this device keeps its whole cmdline in `kernel-cmdline.conf` |
-| Both boot images are actually produced | Reasoned | Follows from the row above; not yet observed on disk |
+| Both boot images are actually produced, and are internally correct | **Verified** | `verify-bootimg.py` on the real files: `boot.img` 30,502,912 bytes, `ANDROID!`, header v4, `kernel_size` 30,497,280 (exactly our `vmlinuz`), `ramdisk_size` 0 as v4 requires. `vendor_boot.img` 13,008,896 bytes, `VNDRBOOT`, header v4, `page_size` 4096, `vendor_ramdisk_size` 12,689,309, `dtb_size` 308,591 and that DTB byte-identical to the kernel apk's `parrot.dtb` |
+| Load addresses match the board, not mkbootimg's defaults | **Verified** | `device/sony/columbia/PlatformConfig.mk` has `BOARD_KERNEL_BASE := 0x00000000`; mkbootimg defaults to `0x10000000` and boot-deploy's v4 branch passes no offsets, so the first build was 0x10000000 high on all four. With `deviceinfo_bootimg_custom_args="--base 0x00000000"` the header now reads `kernel_addr 0x00008000`, `ramdisk_addr 0x01000000`, `tags_addr 0x00000100`, `dtb_addr 0x01f00000`. Header v3+ keeps these in `vendor_boot`, and AOSP documents the bootloader as reading them from there |
+| The cmdline drop-in reaches the image | **Verified** | Read back out of `vendor_boot.img`: `quiet splash plymouth.ignore-serial-consoles plymouth.prefer-fbcon console=ttyMSM0,115200n8 earlycon loglevel=7 printk.devkmsg=on pmos.debug-shell`. Our `50-` options all present and after `00-base.conf`'s `quiet`, so `loglevel=7` is the one that applies |
+| `--split` is the wrong invocation for this device | **Verified** | pmbootstrap's `flashers` dict: the plain `fastboot` flasher's `flash_rootfs` is `fastboot flash $PARTITION_ROOTFS $IMAGE`, the *combined* image. Only `fastboot-bootpart` sets `"split": True` and uses the split images |
+| The fastboot images come from the rootfs chroot's `/boot` | **Verified** | `flash_kernel` is `$BOOT/boot.img` and `flash_vendorboot` is `$BOOT/vendor_boot.img`, where `$BOOT` is that chroot. `home/pmos/rootfs/sony-pdx246-boot.img` is a boot *partition* filesystem, a different thing |
+| The rootfs image cannot be built in this container | **Verified** | `pmb install` dies at `*** (3/4) PREPARE INSTALL BLOCKDEVICE ***` on `sudo modprobe loop`. Loading a module needs privileges the rootless container has not got, and loop-mounting needs `CAP_SYS_ADMIN` in the initial userns, which it cannot obtain. Only `flash.sh flash` is blocked by this; `ramboot` is not |
+| RAM boot reaches the debug shell with no rootfs | Reasoned | `pmos.debug-shell` is handled in `init_2nd.sh` before root is looked for, and `boot_gki` (`fastboot stage vendor_boot.img` then `fastboot boot boot.img`) stages the v4 ramdisk correctly. Untested, and some Qualcomm bootloaders refuse `fastboot boot` outright |
 | `deviceinfo_dtb="vendor/qcom/parrot"` resolves | **Verified** | boot-deploy's `find_dtb` runs `find /boot -path "/boot/dtbs*/$_filename.dtb"`, and the package really contains `boot/dtbs/vendor/qcom/parrot.dtb` (308,591 bytes) |
 | Leaving stock `dtbo` in place gives the right DT | Reasoned | This is what stock does; untested with *our* base |
 | Every name in `modules-initfs` was really built | **Verified** | `verify-build.sh` against the real package: all 89 present among the 294 `.ko` files. 89, not 90 — `dm-mod` is builtin because pmOS wants `CONFIG_BLK_DEV_DM=y`; the other 89 are stock's list unmodified |
@@ -56,6 +62,7 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 | USB gadget actually enumerates on the device | Guess | Config is necessary, not sufficient. The likely failure is Type-C role detection: `TYPEC_QCOM_PMIC` is not set, so the gadget depends on the PMIC/charger driver reporting over extcon |
 | `pmos.debug-shell` gives telnet on `172.16.42.1:23` and a CDC-ACM port | Verified | `postmarketos-initramfs/init_functions.sh`: `telnetd -b "${HOST_IP}:23"`, `acm.usb0`, `ncm.usb0` with `rndis.usb0` fallback |
 | Flashing procedure in `04-flashing.md` | Reasoned | Derived from AVB behaviour; **not executed** |
+| Boot images fit their partitions | **Verified** | `BOARD_BOOTIMAGE_PARTITION_SIZE` and `BOARD_VENDOR_BOOTIMAGE_PARTITION_SIZE` are both `0x06000000` (96 MiB); ours are 30.5 MiB and 13.0 MiB |
 
 ## Known gaps
 
@@ -74,6 +81,12 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
   redistributable and is not packaged here.
 - **No `soc-qcom-sm6450` package.** pmOS has no SoC package for this chip; the
   device package carries everything.
+- **The rootfs image.** `pmb install` cannot finish inside a rootless
+  container, because partitioning and formatting go through a loop device. The
+  fastboot boot images are complete; only the install to internal storage is
+  blocked. A failed run leaves a correctly sized, wholly empty
+  `sony-pdx246.img` behind, which `flash.sh` and `verify-bootimg.py` both
+  refuse by requiring a GPT at offset 512.
 - **Mainline is not attempted, and the reason is ordering, not difficulty.**
   Every per-SoC driver exists as GPL source in the tarballs the kernel aport
   already downloads, and the sibling SoC SM4450 is upstream and derived from
@@ -83,16 +96,21 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 
 ## Next steps, in order
 
-1. `pmb install --no-fde --split`, confirm both boot images are produced and
-   that `vendor_boot.img` actually contains the DTB
-   (`unpack_bootimg --boot_img ...`).
-2. Take the backups in `04-flashing.md` step 1. Do not skip this.
-3. Flash and look for a USB gadget. That single observation splits the problem
-   in half: if it appears, the kernel booted and the work moves to userspace;
-   if not, read ramoops.
-4. Read `/sys/fs/pstore/console-ramoops*` after the next boot. This is the
-   cheapest instrument we have and it needs no cable: the region is reserved in
-   the DTB we build, `PSTORE_RAM` is builtin, and 256K of console ring survives
-   a reboot. Serial on `0x98c000` is the fallback, and it needs hardware
-   access to the USB-C SBU pins that nobody has yet.
-5. Only then: build `sm6450-modules` for display.
+1. **`scripts/flash.sh ramboot`.** Needs the bootloader unlocked and nothing
+   else — no backups, no rootfs image, no partition written. It answers the
+   only question that matters right now, and there is nothing to undo if the
+   answer is no.
+2. Take the backups in [04-flashing.md](04-flashing.md) step 1, for both slots.
+   Do this before anything is flashed, not before the RAM boot.
+3. Look for a USB gadget. That single observation splits the problem in half:
+   if it appears, the kernel booted and the work moves to userspace; if not,
+   read ramoops.
+4. Read `/sys/fs/pstore/console-ramoops*` after the next boot. The cheapest
+   instrument available and it needs no cable: the region is reserved in the
+   DTB we build, `PSTORE_RAM` is builtin, and 256K of console ring survives a
+   reboot. Serial on `0x98c000` is the fallback and needs physical access to
+   the USB-C SBU pins that nobody has yet.
+5. Decide what to do about the rootfs image. It needs `sudo modprobe loop` on
+   the host, which is outside what this project may touch, so it is the owner's
+   call. Steps 1-4 do not depend on it.
+6. Only then: build `sm6450-modules` for display.

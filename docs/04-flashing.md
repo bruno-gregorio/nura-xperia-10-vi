@@ -80,9 +80,10 @@ Two rules for that last step:
 ## Getting in, with no display
 
 The display driver is an out-of-tree module that this port does not build yet,
-so the first boots are blind. The images are built for that: `deviceinfo`
-carries `pmos.debug-shell`, so **the boot deliberately stops in the initramfs**
-instead of continuing into a userspace nothing can draw. Expect that, and
+so the first boots are blind. The images are built for that:
+`kernel-cmdline.conf` carries `pmos.debug-shell`, so **the boot deliberately
+stops in the initramfs** instead of continuing into a userspace nothing can
+draw. Expect that, and
 expect the device to sit there looking dead.
 
 ### The USB-C cable you flashed with is the console
@@ -135,9 +136,9 @@ driver-related — the reason is in there.
 ### Serial, as a last resort
 
 The port is at `0x98c000` (`qcom,msm-geni-console`), `parrot.dtb` already asks
-for `console=ttyMSM0,115200n8` in `chosen/bootargs`, and `deviceinfo` adds a
-bare `earlycon` so the port is picked up from `stdout-path` before the driver
-registers. That works with `msm_geni_serial` left as a module because Qualcomm
+for `console=ttyMSM0,115200n8` in `chosen/bootargs`, and
+`kernel-cmdline.conf` adds a bare `earlycon` so the port is picked up from
+`stdout-path` before the driver registers. That works with `msm_geni_serial` left as a module because Qualcomm
 builds the early console as its own always-builtin object.
 
 Reaching it physically is the problem: on recent Xperias the UART comes out on

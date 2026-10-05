@@ -8,10 +8,16 @@ url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
 options="!check !archcheck"
+# No mkinitfs here. That bare name is Alpine's mkinitfs, which provides
+# cmd:mkinitfs and so conflicts with postmarketos-mkinitfs - the one
+# postmarketos-base actually pulls in, via postmarketos-initramfs. Only
+# archived device packages still list it, from before the rename.
+#
+# android-tools is what provides mkbootimg: boot-deploy's header v3/v4 path
+# hardcodes 'require_package "mkbootimg" "android-tools"'.
 depends="
 	android-tools
 	linux-sony-pdx246
-	mkinitfs
 	postmarketos-base
 "
 makedepends="devicepkg-dev"

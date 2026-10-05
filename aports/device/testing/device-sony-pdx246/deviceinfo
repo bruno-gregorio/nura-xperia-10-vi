@@ -46,3 +46,24 @@ deviceinfo_rootfs_image_sector_size="4096"
 # uses it *instead of* the /usr/lib/kernel-cmdline.d/ drop-ins rather than as
 # well as them, so setting it here would throw away kernel-cmdline.conf. The
 # cmdline, and why each option is on it, lives there.
+
+# Load addresses. boot-deploy's header v3/v4 branch passes none of the offset
+# deviceinfo variables to mkbootimg, so mkbootimg's own defaults apply - and
+# its default --base is 0x10000000, which is not this board's:
+#
+#   device/sony/columbia/PlatformConfig.mk
+#     BOARD_KERNEL_BASE        := 0x00000000
+#     BOARD_KERNEL_PAGESIZE    := 4096
+#     BOARD_KERNEL_TAGS_OFFSET := 0x00000100
+#     BOARD_RAMDISK_OFFSET     := 0x01000000
+#     BOARD_BOOT_HEADER_VERSION := 4
+#
+# Sony sets no BOARD_KERNEL_OFFSET or BOARD_DTB_OFFSET, and the three offsets
+# above are already mkbootimg's defaults, so --base alone brings all four
+# addresses in the vendor_boot header into line with stock. Header v3+ moved
+# them out of boot.img and into vendor_boot.img, where the bootloader is
+# documented to read them from.
+#
+# bootimg_custom_args is the only hook for this: boot-deploy interpolates it
+# unquoted into the v4 mkbootimg call.
+deviceinfo_bootimg_custom_args="--base 0x00000000"

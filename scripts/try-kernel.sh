@@ -253,13 +253,20 @@ cmd_try() {
 
 	say "waiting. our kernel answering on slot _$spare is a win;"
 	echo "   slot _$cur answering means it crashed and fell back."
-	# Seven attempts at roughly 54 seconds each is already six minutes, and
-	# then the fallback slot still has to boot Android. 420 was not enough.
-	got=$(wait_for_adb "${WAIT:-660}") || true
+	# How long an attempt takes depends on which branch the staged probe's
+	# watchdog is in: 15s of stall when nothing bound the gadget, 600s when
+	# something did. Seven of the patient kind plus the fallback boot is
+	# about 72 minutes, which is why a quiet half hour means nothing.
+	waited=${WAIT:-2100}
+	got=$(wait_for_adb "$waited") || true
 	echo
 	if [ -z "$got" ]; then
-		echo "RESULT: nothing came up in 11 minutes."
-		echo "  The kernel hung rather than panicked, so nothing reset it."
+		echo "RESULT: nothing came up in $((waited / 60)) minutes."
+		echo "  That is not the same as dead, and it has fooled us before."
+		echo "  The bootloader only counts an attempt when it starts one, so"
+		echo "  seven slow attempts plus the fallback boot run to roughly 72"
+		echo "  minutes. Leave it alone and it lands on stock Android by"
+		echo "  itself. To stop waiting and read what it wrote instead:"
 		echo "  Hold Power+VolUp, then VolUp while plugging in USB, and run:"
 		echo "    scripts/try-kernel.sh --log"
 	elif [ "$got" = "fastboot" ]; then

@@ -682,6 +682,21 @@ made the first week of bring-up slow. The findings below are what closed it.
   necessary, not sufficient. The likely failure is Type-C role detection:
   `TYPEC_QCOM_PMIC` is not set, so the gadget depends on the PMIC/charger
   driver reporting over extcon.
+- **The display clock controller is a USB dependency on this SoC** — Reasoned,
+  from the stock device tree; not yet confirmed on the device. The chain, read
+  backwards from `dwc3-msm`: it wants a `ddr-usb` interconnect path through
+  `interconnect@19100000`, whose `qcom,bcm-voters = <0x13e 0x13f>` names two
+  voters; `0x13f` is `/soc/rsc@af20000/bcm_voter`, a child of the display RSC;
+  that RSC declares `clocks = <0x11f 0x42>`, and `0x11f` is
+  `clock-controller@af00000`, `qcom,parrot-dispcc`. With fw_devlink the RSC
+  cannot probe before dispcc does, so no voter is created, so the interconnect
+  provider never registers, so `dwc3-msm` defers for ever. Nothing in that
+  chain prints anything.
+- **Our staged probe was holding dispcc back, and so breaking its own USB** —
+  Verified against the source. `dispcc-parrot` sat in `STAGE_DEFER`, which
+  loads after the USB bring-up step, on the reasoning that display drivers are
+  a hang risk. It has been moved into the first pass. The real init never had
+  this problem, because it loads every module at once.
 
 ## Flashing
 

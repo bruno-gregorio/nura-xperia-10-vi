@@ -305,9 +305,18 @@ def probe(src, dst):
 # the Gunyah hypervisor drivers, crypto, display, and the SM4450 ("ravelin")
 # controllers this SoC has its own copy of. None of them is dropped - the
 # second pass loads them in exactly the order the real list has them.
+# Held back from the first pass. dispcc-parrot used to be in here, which was a
+# mistake that cost most of a day: the display RSC at af20000 declares
+# "clocks = <&dispcc 0x42>", so fw_devlink will not let it probe until the
+# display clock controller has. No RSC means no bcm_voter child, and gem_noc
+# lists that voter in qcom,bcm-voters, so interconnect@19100000 never
+# registers - and dwc3-msm, which wants a ddr-usb path through it, defers for
+# ever without printing a line. The display clock controller is a USB
+# dependency on this SoC, by way of two nodes that have nothing to do with
+# either.
 STAGE_DEFER = """
 gh_virt_wdt qcom-pmu-lib qcom_wdt_core dcvs_fp qcom-dcvs
-dispcc-parrot dispcc-ravelin gcc-ravelin pinctrl-ravelin qnoc-ravelin
+dispcc-ravelin gcc-ravelin pinctrl-ravelin qnoc-ravelin
 qcom-cpufreq-hw sched-walt qcom_tsens thermal_pause cpu_hotplug bcl_pmic5
 gh_msgq gh_rm_drv gh_arm_drv gh_ctrl gh_dbl
 icc-debug mem_buf_dev mem_buf mem-hooks memory_dump_v2

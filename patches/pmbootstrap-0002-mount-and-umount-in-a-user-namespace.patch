@@ -1,0 +1,42 @@
+--- a/pmb/helpers/mount.py
++++ b/pmb/helpers/mount.py
+@@ -50,8 +50,15 @@
+         else:
+             raise RuntimeError(f"Mount failed, folder does not exist: {path}")
+ 
+-    # Actually mount the folder
+-    pmb.helpers.run.root(["mount", "--bind", source, destination])
++    # Actually mount the folder.
++    # A plain --bind fails with EINVAL on a source that has submounts the
++    # caller may not traverse, which inside a rootless container includes
++    # /proc (podman masks parts of it with its own mounts). --rbind carries
++    # those submounts along and succeeds; for a source without submounts it is
++    # equivalent to --bind, so it is only used as a fallback to keep the
++    # normal case unchanged.
++    if pmb.helpers.run.root(["mount", "--bind", source, destination], check=False) != 0:
++        pmb.helpers.run.root(["mount", "--rbind", source, destination])
+ 
+     # Verify that it has worked
+     if not ismount(destination):
+@@ -102,8 +109,19 @@
+ 
+ def umount_all(folder: Path) -> None:
+     """Umount all folders that are mounted inside a given folder."""
+-    for mountpoint in umount_all_list(folder):
+-        pmb.helpers.run.root(["umount", mountpoint])
++    mountpoints = umount_all_list(folder)
++    for mountpoint in mountpoints:
++        # Inside a rootless container the submounts under /proc and /sys are
++        # locked to the container's user namespace: the kernel refuses to
++        # unmount them on their own with EINVAL, which umount(8) reports as
++        # the rather misleading "not mounted". They can only go away together
++        # with the mount they hang off, and detaching that one lazily takes
++        # the whole subtree with it. So let an individual umount fail here and
++        # only insist once the whole list has been walked - by then the
++        # parent, which sorts after its children, has taken them along.
++        if pmb.helpers.run.root(["umount", mountpoint], check=False) != 0:
++            pmb.helpers.run.root(["umount", "-l", mountpoint], check=False)
++    for mountpoint in mountpoints:
+         if ismount(mountpoint):
+             raise RuntimeError(f"Failed to umount: {mountpoint}")
+ 

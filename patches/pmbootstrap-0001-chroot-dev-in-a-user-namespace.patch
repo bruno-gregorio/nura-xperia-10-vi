@@ -1,0 +1,93 @@
+--- a/pmb/chroot/mount.py
++++ b/pmb/chroot/mount.py
+@@ -48,13 +48,37 @@
+     logging.info(f"({chroot}) mounted {chroot.name}")
+ 
+ 
++def in_user_namespace() -> bool:
++    """
++    Whether pmbootstrap runs inside a non-initial user namespace, i.e. in a
++    rootless container. Two kernel restrictions that apply only there change
++    how the chroot's /dev has to be set up; see the two callers.
++    """
++    try:
++        with open("/proc/self/uid_map") as handle:
++            return handle.read().split() != ["0", "0", "4294967295"]
++    except OSError:
++        return False
++
++
+ def create_device_nodes(chroot: Chroot) -> None:
+     """Create device nodes for null, zero, full, random, urandom in the chroot."""
+     try:
+         # Create all device nodes as specified in the config
+         for dev in pmb.config.chroot_device_nodes:
+             path = chroot / "dev" / str(dev[4])
+-            if not path.exists():
++            if in_user_namespace():
++                # mknod(2) refuses to create a device node inside a
++                # non-initial user namespace whatever capabilities are held,
++                # so bind-mount the node the container already has instead.
++                # stat() reports the same major and minor through the bind,
++                # so the verification below still holds, and reads and writes
++                # reach the same driver. These nodes are all mode 666
++                # already, so the chmod the mknod path needs is not wanted.
++                if not pmb.helpers.mount.ismount(path):
++                    pmb.helpers.run.root(["touch", path])
++                    pmb.helpers.run.root(["mount", "--bind", f"/dev/{dev[4]}", path])
++            elif not path.exists():
+                 pmb.helpers.run.root(
+                     [
+                         "mknod",
+@@ -111,26 +135,42 @@
+ 
+     # Create the $chroot/dev folder and mount tmpfs there
+     pmb.helpers.run.root(["mkdir", "-p", dev])
+-    pmb.helpers.run.root(["mount", "-t", "tmpfs", "-o", "size=1M,noexec,dev", "tmpfs", dev])
++    # The kernel sets SB_I_NODEV on every superblock mounted from a
++    # non-initial user namespace, and then refuses with EACCES any open() of
++    # a device node on it that resolves the last path component in the
++    # directory itself. O_CREAT does exactly that, and a plain
++    # "> /dev/null" in a shell passes O_CREAT, so a tmpfs mounted here would
++    # make every device node under it unusable however it was created. The
++    # flag does not show up in /proc/mounts and cannot be cleared, so leave
++    # /dev as a plain directory on the work filesystem instead: that one was
++    # mounted by the host and carries no such flag. Everything below then has
++    # to survive re-runs, because /dev is no longer a mountpoint and the
++    # early return above stops firing.
++    if not in_user_namespace():
++        pmb.helpers.run.root(["mount", "-t", "tmpfs", "-o", "size=1M,noexec,dev", "tmpfs", dev])
+ 
+     # Create /dev/{stdin,stdout,stderr}
+-    pmb.helpers.run.root(["ln", "-s", "/proc/self/fd/0", dev / "stdin"])
+-    pmb.helpers.run.root(["ln", "-s", "/proc/self/fd/1", dev / "stdout"])
+-    pmb.helpers.run.root(["ln", "-s", "/proc/self/fd/2", dev / "stderr"])
++    pmb.helpers.run.root(["ln", "-sfn", "/proc/self/fd/0", dev / "stdin"])
++    pmb.helpers.run.root(["ln", "-sfn", "/proc/self/fd/1", dev / "stdout"])
++    pmb.helpers.run.root(["ln", "-sfn", "/proc/self/fd/2", dev / "stderr"])
+ 
+     # Create pts, shm folders and device nodes
+     pmb.helpers.run.root(["mkdir", "-p", dev / "pts", dev / "shm"])
+-    pmb.helpers.run.root(
+-        ["mount", "-t", "tmpfs", "-o", "nodev,nosuid,noexec", "tmpfs", dev / "shm"]
+-    )
++    if not pmb.helpers.mount.ismount(dev / "shm"):
++        pmb.helpers.run.root(
++            ["mount", "-t", "tmpfs", "-o", "nodev,nosuid,noexec", "tmpfs", dev / "shm"]
++        )
+ 
+     # Mount devpts for PTY support
+-    pmb.helpers.run.root(["mount", "-t", "devpts", "-o", "ptmxmode=0666", "devpts", dev / "pts"])
++    if not pmb.helpers.mount.ismount(dev / "pts"):
++        pmb.helpers.run.root(
++            ["mount", "-t", "devpts", "-o", "ptmxmode=0666", "devpts", dev / "pts"]
++        )
+ 
+     create_device_nodes(chroot)
+ 
+     # Setup /dev/fd as a symlink
+-    pmb.helpers.run.root(["ln", "-sf", "/proc/self/fd", f"{dev}/"])
++    pmb.helpers.run.root(["ln", "-sfn", "/proc/self/fd", dev / "fd"])
+ 
+ 
+ def mount(chroot: Chroot) -> None:

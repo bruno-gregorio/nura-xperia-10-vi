@@ -159,11 +159,22 @@ build_vendor_boot() {
 		say "PROBE=1: replacing /init with the reboot probe"
 		"$ROOT/scripts/bootlog.py" probe "$WORK/vendor_boot.img" "$WORK/vendor_boot-probe.img"
 		mv "$WORK/vendor_boot-probe.img" "$WORK/vendor_boot.img"
-	elif [ "${BOOTLOG:-1}" = "0" ]; then
-		say "BOOTLOG=0: flashing without the log hook"
 	else
-		"$ROOT/scripts/bootlog.py" install "$WORK/vendor_boot.img" "$WORK/vendor_boot-log.img"
-		mv "$WORK/vendor_boot-log.img" "$WORK/vendor_boot.img"
+		# The real init needs one device quirk, and there is nowhere
+		# sanctioned to put it: mkinitfs calls load_modules and then
+		# setup_usb_network back to back, and run_hooks only happens in
+		# init_2nd.sh once the rootfs is mounted. Without it nothing
+		# ever asks dwc3 for a role, no UDC is created, and the gadget
+		# binds to the dummy controller and enumerates to nobody.
+		say "patching /init to ask dwc3 for peripheral mode"
+		"$ROOT/scripts/bootlog.py" usbquirk "$WORK/vendor_boot.img" "$WORK/vendor_boot-q.img"
+		mv "$WORK/vendor_boot-q.img" "$WORK/vendor_boot.img"
+		if [ "${BOOTLOG:-1}" = "0" ]; then
+			say "BOOTLOG=0: flashing without the log hook"
+		else
+			"$ROOT/scripts/bootlog.py" install "$WORK/vendor_boot.img" "$WORK/vendor_boot-log.img"
+			mv "$WORK/vendor_boot-log.img" "$WORK/vendor_boot.img"
+		fi
 	fi
 }
 

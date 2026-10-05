@@ -567,6 +567,77 @@ pmstage_reset
 """
 
 
+# The one device quirk the real init cannot do without. postmarketos-mkinitfs
+# calls load_modules and then setup_usb_network with nothing in between, and
+# run_hooks is only called from init_2nd.sh, after the rootfs is mounted - so
+# there is no sanctioned place to put this. Patching /init as the image is
+# built is honest about what it is and keeps it in our tree rather than in a
+# fork of someone else's package.
+USB_QUIRK = """
+# --- pdx246: ask dwc3 for a role, or no UDC is ever created ----------------
+# msm-dwc3 probes a600000.ssusb, registers a role switch, and then stays in
+# "none" mode: it only builds its dwc3@a600000 core child once something asks
+# for a role. The device tree says dr_mode = "otg" with usb-role-switch, and
+# on a stock boot the request comes from the charger and Type-C stack, which
+# an initramfs does not have. Without it /sys/class/udc holds nothing but
+# dummy_udc.0 - the emulator this kernel also builds - so the gadget binds to
+# that, enumerates perfectly inside the phone, and is invisible from outside.
+# Writing the driver's own "mode" attribute is the short way to ask. Measured
+# on the device: the UDC appears one second later.
+for _ssusb in /sys/bus/platform/devices/*.ssusb; do
+	[ -w "$_ssusb/mode" ] || continue
+	echo peripheral > "$_ssusb/mode" 2>/dev/null
+	[ -w "$_ssusb/usb_data_enabled" ] && echo 1 > "$_ssusb/usb_data_enabled"
+done
+_w=0
+while [ "$_w" -lt 12 ]; do
+	_real=""
+	for _u in /sys/class/udc/*; do
+		case "${_u##*/}" in
+		dummy_udc*|'*') ;;
+		*) _real="${_u##*/}" ;;
+		esac
+	done
+	[ -n "$_real" ] && break
+	_w=$((_w + 1))
+	sleep 1
+done
+echo "[pdx246] udc after ${_w}s: ${_real:-none}"
+# ---------------------------------------------------------------------------
+"""
+
+
+def usbquirk(src, dst):
+    """Rebuild a vendor_boot whose real /init asks dwc3 for peripheral mode."""
+    d = open(src, "rb").read()
+    s = sections(d)
+    o_rd, vr = s["ramdisk"]
+    entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
+
+    init = next((e for e in entries if e[1] == "init"), None)
+    if init is None:
+        sys.exit("error: no /init in the vendor ramdisk - wrong image?")
+    text = init[2].decode()
+
+    if "pdx246: ask dwc3 for a role" in text:
+        sys.exit("error: /init already carries the quirk - rebuild from a "
+                 "clean image rather than stacking patches")
+    anchor = "\nsetup_usb_network\n"
+    if anchor not in text:
+        sys.exit("error: could not find setup_usb_network in init - has "
+                 "mkinitfs changed?")
+    init[2] = text.replace(anchor, "\n" + USB_QUIRK + anchor, 1).encode()
+
+    newrd = gzip.compress(cpio_build(entries), 6)
+    open(dst, "wb").write(_rebuild(d, s, newrd))
+    print(f"  in   {src}")
+    print(f"  out  {dst}")
+    print("  /init now writes peripheral to *.ssusb/mode before"
+          " setup_usb_network")
+    print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
+    print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
+
+
 def stage(src, dst, skip=""):
     """Rebuild a vendor_boot whose /init is the staged module probe."""
     d = open(src, "rb").read()
@@ -714,6 +785,8 @@ if __name__ == "__main__":
         install(a[1], a[2])
     elif len(a) == 3 and a[0] == "probe":
         probe(a[1], a[2])
+    elif len(a) == 3 and a[0] == "usbquirk":
+        usbquirk(a[1], a[2])
     elif a[:1] == ["stage"] and len(a) in (3, 4):
         stage(a[1], a[2], a[3] if len(a) == 4 else "")
     elif a[:1] == ["stages"] and len(a) in (2, 3):

@@ -8,9 +8,11 @@
 # Everything below is built from the kernel tree itself, so no out-of-tree
 # module repository is needed to reach a root filesystem.
 #
-# Two names from stock's list are deliberately missing: msm-geni-se and
-# msm_geni_serial. We build the debug UART into vmlinux instead, because
-# earlycon cannot come from a module, so there is no .ko left to load.
+# Three names from stock's list are deliberately missing: msm-geni-se,
+# msm_geni_serial and qcom_ipc_logging. We build the debug UART into vmlinux
+# instead, because earlycon cannot come from a module, and the two GENI
+# drivers call into IPC logging everywhere, so that has to be builtin too.
+# None of the three leaves a .ko behind.
 
 # clocks, dcvs, watchdog
 gh_virt_wdt
@@ -34,7 +36,6 @@ sched-walt
 qnoc-parrot
 qnoc-ravelin
 icc-rpmh
-qcom_ipc_logging
 qcom-pdc
 qcom_tsens
 thermal_pause

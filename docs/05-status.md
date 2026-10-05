@@ -15,7 +15,11 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 | Fact | Confidence | Basis |
 |---|---|---|
 | Codename `pdx246`, SoC SM6450, platform `parrot` | Verified | `BoardConfig.mk`, `sonyxperiadev/device-sony-pdx246` |
-| SM6450 has no mainline support | Verified | No `sm6450.dtsi` in mainline; nothing on lore |
+| SM6450 has no mainline support | Verified | No `sm6450.dtsi` and no parrot clk/pinctrl/interconnect driver in `torvalds/linux` master, re-checked 2026-10-05 |
+| No SM6450 patches on the mailing lists | **Guess** | Was recorded as Verified from an earlier check. `lore.kernel.org` served an Anubis challenge on 2026-10-05, so this is stale and unconfirmed. Re-check before acting on it |
+| Wi-Fi/BT part is **WCN3990** | Verified | Our overlay chain: `parrot-qrd-overlay.dts` -> `parrot-wcn3990.dtsi`. `wcn6750` appears only in `parrot-qrd-wcn6750*` board files, which stock does not use. Means ath10k/SNOC + `hci_qca`, both mature upstream |
+| PMIC pair is `pm6450` (main) + `pm7250b` | Verified | `parrot-qrd-overlay.dts` includes `parrot-qrd-pm7250b.dtsi`; `pm6450` referenced in the QRD tree |
+| Touchscreen comes from `blair-touch.dtsi` | Verified | `#include` in `parrot-qrd.dts`. Shared with Qualcomm's `blair` platform, not parrot-specific |
 | Device runs Qualcomm's Parrot QRD reference DT | Verified | LineageOS port diffed built DTBs against stock blobs and booted it |
 | Base `parrot.dtb` in `vendor_boot`, `parrot-qrd` overlay in `dtbo` | Verified | Qualcomm boot flow + LineageOS port notes |
 | Boot header v4, pagesize 4096, kernel base 0 | Verified | `BoardConfig.mk` |
@@ -68,6 +72,12 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
   redistributable and is not packaged here.
 - **No `soc-qcom-sm6450` package.** pmOS has no SoC package for this chip; the
   device package carries everything.
+- **Mainline is not attempted, and the reason is ordering, not difficulty.**
+  Every per-SoC driver exists as GPL source in the tarballs the kernel aport
+  already downloads, and the sibling SoC SM4450 is upstream and derived from
+  the same vendor code. What is missing is a console on the real device to
+  debug against. [06-mainline.md](06-mainline.md) has the inventory and a
+  phased plan.
 
 ## Next steps, in order
 

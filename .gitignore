@@ -1,0 +1,4 @@
+# Local pmbootstrap state: venv, upstream checkouts, chroots, build artifacts.
+# Everything here is reproducible via scripts/bootstrap.sh.
+/.pmb/
+/out/

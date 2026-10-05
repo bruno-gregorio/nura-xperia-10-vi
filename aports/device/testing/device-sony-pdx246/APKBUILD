@@ -1,0 +1,36 @@
+# Reference: <https://postmarketos.org/devicepkg>
+maintainer="Bruno Gregorio <accounts@bruno.pw>"
+pkgname=device-sony-pdx246
+pkgdesc="Sony Xperia 10 VI"
+pkgver=0.1
+pkgrel=0
+url="https://postmarketos.org"
+license="MIT"
+arch="aarch64"
+options="!check !archcheck"
+depends="
+	android-tools
+	linux-sony-pdx246
+	mkinitfs
+	postmarketos-base
+"
+makedepends="devicepkg-dev"
+source="
+	deviceinfo
+	kernel-cmdline.conf
+	modules-initfs
+"
+
+build() {
+	devicepkg_build $startdir $pkgname
+}
+
+package() {
+	devicepkg_package $startdir $pkgname
+}
+
+sha512sums="
+a48048b6cf4c18bfb16b4a13d4af7fd7a124ef5761294ec9d2e88a0d80ff7934c0953254bd28694c3596cef7952302fdcb6ad7574fbc1c2b31c7a534a9f972a8  deviceinfo
+018a8c7c7a7017feee296e131fdfdfcd27ea7261131bcb88082d2f9167f5d4a461dde8ee5cefa14e0f93c4c992d8eb9d4924822209d79ff21267d339827cefdb  kernel-cmdline.conf
+c8ed626d924fc14b4d546ec5b52093000df8af34910224bf8a5a6a4f2cc7872948ca75c22fbf2d5dd2308a6be0e7c2066ee9647e0e33ba5ca73f2bb80c30617c  modules-initfs
+"

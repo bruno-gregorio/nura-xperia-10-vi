@@ -1,0 +1,118 @@
+# Modules the initramfs needs, in dependency order.
+#
+# Taken from the first-stage list the stock vendor_boot ramdisk loads
+# (device/sony/pdx246/modules.load in the LineageOS port), which is stock's own
+# order. Alphabetical order does not work here: clocks, pinctrl, regulators and
+# the SMMU have to probe before storage does.
+#
+# Everything below is built from the kernel tree itself, so no out-of-tree
+# module repository is needed to reach a root filesystem.
+
+# clocks, dcvs, watchdog
+gh_virt_wdt
+qcom-pmu-lib
+qcom_wdt_core
+dcvs_fp
+qcom-dcvs
+clk-dummy
+clk-rpmh
+clk-qcom
+dispcc-parrot
+gcc-parrot
+gcc-ravelin
+gdsc-regulator
+
+# pinctrl / cpufreq / interconnect
+pinctrl-parrot
+pinctrl-ravelin
+qcom-cpufreq-hw
+sched-walt
+qnoc-parrot
+qnoc-ravelin
+icc-rpmh
+qcom_ipc_logging
+qcom-pdc
+qcom_tsens
+thermal_pause
+cpu_hotplug
+
+# iommu, shared memory, scm, rpmh
+arm_smmu
+cmd-db
+gh_msgq
+gh_rm_drv
+icc-bcm-voter
+icc-debug
+iommu-logger
+mem_buf_dev
+mem_buf
+mem-hooks
+memory_dump_v2
+minidump
+msm_dma_iommu_mapping
+msm_geni_serial
+phy-generic
+pinctrl-msm
+qcom_cpu_vendor_hooks
+qcom-dload-mode
+qcom_dma_heaps
+qcom_hwspinlock
+qcom_iommu_util
+qcom_ipcc
+qcom_rpmh
+qcom-scm
+qnoc-qos
+qrtr
+secure_buffer
+smem
+qcom_aoss
+msm_qmp
+socinfo
+stub-regulator
+msm-geni-se
+nvmem_qfprom
+
+# storage: sdhci + UFS. Without these there is no root filesystem.
+sdhci-msm-scaling
+cqhci
+sdhci-msm
+phy-qcom-ufs
+phy-qcom-ufs-qrbtc-sdm845
+ufs_qcom
+phy-qcom-ufs-qmp-v4-parrot
+
+# regulators / PMIC / RTC
+debug-regulator
+gh_arm_drv
+gh_ctrl
+gh_dbl
+rpmh-regulator
+qti-fixed-regulator
+nvmem_qcom-spmi-sdam
+proxy-consumer
+qcom-spmi-pmic
+spmi-pmic-arb
+qcom-reboot-reason
+qti-regmap-debugfs
+regmap-spmi
+rtc-pm8xxx
+
+# inline crypto (UFS refuses to probe without it on this platform)
+crypto-qti-common
+crypto-qti-hwkm
+hwkm
+ufshcd-crypto-qti
+tmecom-intf
+bcl_pmic5
+dispcc-ravelin
+
+# USB gadget. Not in stock's first-stage list - Android brings USB up in second
+# stage - but this is the only way into a device with no working display, so it
+# has to be in the initramfs. dwc3 itself and the configfs gadget functions are
+# built in; these are the glue and the PHYs.
+phy-msm-snps-hs
+phy-msm-ssusb-qmp
+dwc3-msm
+
+# generic
+dm-mod

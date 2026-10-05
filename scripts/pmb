@@ -1,0 +1,23 @@
+#!/bin/sh
+# pmbootstrap wrapper: keeps every byte of state inside this project folder.
+#
+# pmbootstrap defaults to ~/.config/pmbootstrap_v3.cfg and ~/.local/var/pmbootstrap.
+# distrobox shares $HOME with the host, so those defaults would write outside the
+# project. Everything is redirected under .pmb/ instead.
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+PMB="$ROOT/.pmb"
+
+[ -x "$PMB/venv/bin/python3" ] || {
+	echo "error: $PMB/venv missing - run scripts/bootstrap.sh first" >&2
+	exit 1
+}
+
+# kpartx/losetup live in /usr/sbin, which is not on the user PATH in the
+# container; pmbootstrap looks them up with shutil.which().
+PATH="/usr/sbin:/sbin:$PATH"
+export PATH
+
+exec "$PMB/venv/bin/python3" "$PMB/pmbootstrap/pmbootstrap.py" \
+	-c "$PMB/pmbootstrap_v3.cfg" "$@"

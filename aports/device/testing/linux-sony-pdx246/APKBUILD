@@ -1,0 +1,102 @@
+# Reference: <https://postmarketos.org/vendorkernel>
+# Kernel config based on: gki_defconfig + vendor/parrot_GKI.config
+#                         + vendor/sony/columbia.config + pmos.config
+
+maintainer="Bruno Gregorio <accounts@bruno.pw>"
+pkgname=linux-sony-pdx246
+pkgver=5.10.269
+pkgrel=0
+pkgdesc="Sony Xperia 10 VI kernel fork"
+arch="aarch64"
+_carch="arm64"
+_flavor="sony-pdx246"
+url="https://github.com/johanneszab/android_kernel_sony_sm6450"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps pmb:cross-native"
+
+makedepends="
+	bash
+	bc
+	bison
+	clang
+	devicepkg-dev
+	findutils
+	flex
+	linux-headers
+	lld
+	llvm
+	openssl-dev
+	perl
+	python3
+	rsync
+	xz
+"
+
+# Sony's 5.10 release for this device, as carried by the LineageOS pdx246 port:
+# LineageOS's Sony sm8450 5.10 fork with pdx246's drivers and Sony's config on
+# top. The device trees are Sony's separate copyleft release and are a second
+# tarball because upstream keeps them in their own repository.
+_gh="https://github.com/johanneszab"
+_kernel_repo="android_kernel_sony_sm6450"
+_kernel_commit="03a594e6c40a35ee47791286e9e9eed91480add2"
+_dt_repo="android_kernel_sony_sm6450-devicetrees"
+_dt_commit="958dce5aaab6c58df7573843e85398b477d8dc62"
+
+source="
+	$pkgname-$_kernel_commit.tar.gz::$_gh/$_kernel_repo/archive/$_kernel_commit.tar.gz
+	$pkgname-dt-$_dt_commit.tar.gz::$_gh/$_dt_repo/archive/$_dt_commit.tar.gz
+	pmos.config
+"
+builddir="$srcdir/$_kernel_repo-$_kernel_commit"
+
+prepare() {
+	default_prepare
+
+	# arch/arm64/boot/dts/vendor is a symlink to a sibling checkout that only
+	# exists inside an Android repo tree, so it dangles here. Replace it with
+	# Sony's device tree release. arch/arm64/boot/dts/Makefile keys off
+	# vendor/Makefile: once it exists, only the vendor tree is built, which is
+	# what we want - the stock qcom/ directory has no parrot support.
+	rm -f "$builddir/arch/$_carch/boot/dts/vendor"
+	mv "$srcdir/$_dt_repo-$_dt_commit" "$builddir/arch/$_carch/boot/dts/vendor"
+
+	# Android builds this tree with a pinned Clang. Alpine's is newer and warns
+	# about constructs Google's did not, and -Werror turns each one fatal.
+	local i
+	for i in $(find "$builddir" -type f \( -name Makefile -o -name Kbuild \)); do
+		sed -i -e 's/-Werror-/-W/g' -e 's/-Werror//g' "$i"
+	done
+
+	make ARCH="$_carch" LLVM=1 gki_defconfig
+	./scripts/kconfig/merge_config.sh -m -O . .config \
+		"arch/$_carch/configs/vendor/parrot_GKI.config" \
+		"arch/$_carch/configs/vendor/sony/columbia.config" \
+		"$srcdir/pmos.config"
+	make ARCH="$_carch" LLVM=1 olddefconfig
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1))-postmarketOS" \
+		Image dtbs modules
+}
+
+package() {
+	install -Dm644 "$builddir/arch/$_carch/boot/Image" "$pkgdir/boot/vmlinuz"
+
+	make modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir/boot/" \
+		INSTALL_MOD_PATH="$pkgdir" \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir/boot/dtbs"
+
+	rm -f "$pkgdir"/lib/modules/*/build "$pkgdir"/lib/modules/*/source
+
+	install -D "$builddir/include/config/kernel.release" \
+		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
+}
+
+sha512sums=""

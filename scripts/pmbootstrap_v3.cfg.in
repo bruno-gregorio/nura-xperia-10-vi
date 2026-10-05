@@ -1,0 +1,12 @@
+# Template for .pmb/pmbootstrap_v3.cfg. scripts/bootstrap.sh substitutes @ROOT@
+# with the absolute path of this project and writes the result into .pmb/.
+#
+# Both paths deliberately point inside the project folder so that nothing lands
+# in $HOME, which distrobox shares with the host.
+[pmbootstrap]
+aports = @ROOT@/.pmb/pmaports
+work = @ROOT@/.pmb/work
+device = sony-pdx246
+kernel = downstream
+ui = console
+build_default_device_arch = True

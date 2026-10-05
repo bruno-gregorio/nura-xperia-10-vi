@@ -1,0 +1,43 @@
+# Reference: <https://postmarketos.org/deviceinfo>
+# Please use double quotes only. You can source this file in shell
+# scripts.
+
+deviceinfo_format_version="0"
+deviceinfo_name="Sony Xperia 10 VI"
+deviceinfo_manufacturer="Sony"
+deviceinfo_codename="sony-pdx246"
+deviceinfo_year="2024"
+deviceinfo_arch="aarch64"
+
+# Device related
+deviceinfo_chassis="handset"
+deviceinfo_keyboard="false"
+deviceinfo_external_storage="true"
+deviceinfo_screen_width="1080"
+deviceinfo_screen_height="2520"
+
+# The base SoC device tree. pdx246 runs Qualcomm's Parrot QRD reference tree:
+# stock ships parrot.dtb in vendor_boot and applies the parrot-qrd overlay from
+# the dtbo partition on top. We build and ship the same base here and leave the
+# stock dtbo partition alone, so the bootloader applies the same overlay it
+# always did. CONFIG_BUILD_ARM64_DT_OVERLAY=y (columbia.config) is what makes
+# the base carry the __symbols__ node that overlay application needs.
+deviceinfo_dtb="vendor/qcom/parrot"
+
+# Bootloader related
+deviceinfo_flash_method="fastboot"
+deviceinfo_generate_bootimg="true"
+# Boot image header v4: mkbootimg emits boot.img (kernel) plus vendor_boot.img
+# (dtb + our initramfs + cmdline). Both have to be flashed.
+deviceinfo_header_version="4"
+deviceinfo_flash_pagesize="4096"
+deviceinfo_flash_fastboot_partition_kernel="boot"
+deviceinfo_flash_fastboot_partition_vendor_boot="vendor_boot"
+deviceinfo_flash_fastboot_partition_rootfs="userdata"
+# Generates and flashes a vbmeta with verification flags cleared. Needed
+# because our boot images are unsigned; see docs/04-flashing.md for the
+# rollback-index caveat.
+deviceinfo_flash_fastboot_partition_vbmeta="vbmeta"
+
+# UFS on this device reports 4096-byte logical blocks.
+deviceinfo_rootfs_image_sector_size="4096"

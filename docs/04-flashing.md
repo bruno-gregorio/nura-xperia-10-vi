@@ -178,9 +178,22 @@ and `adb reboot bootloader` begins the next round.
 
 ```sh
 scripts/try-kernel.sh             # flash to the spare slot and boot it
-scripts/try-kernel.sh --pstore    # read the last boot's console from ramoops
+scripts/try-kernel.sh --log       # read the last boot's log back off flash
 scripts/try-kernel.sh --restore   # put the spare slot back to stock
 ```
+
+The other half is being able to read what happened, and on this device that
+took some finding. There is no console: the GENI UART is not brought out to a
+pad, USB only enumerates in fastboot, and ramoops is wiped between boots - see
+`05-status.md`. So the log goes to flash instead. Every image `try-kernel.sh`
+builds carries the hook from `scripts/bootlog.py`, which writes the kernel ring
+buffer to the unused `rddata` partition once storage comes up, and rewrites it
+every second afterwards.
+
+The ring buffer being retroactive is what makes that work. The write happens
+late, well after the interesting part, but what it writes still starts at the
+first line of kernel output. A `dmesg` captured the instant UFS appears
+contains the whole boot.
 
 ### What makes it work, and where it stops working
 
@@ -199,11 +212,22 @@ scripts/try-kernel.sh --restore   # put the spare slot back to stock
 - **Recovery only works from a stock slot.** It borrows its device tree, its
   command line and a prepended vendor ramdisk from `vendor_boot`, so our
   `vendor_boot` stops TWRP from coming up even though `recovery_a` and
-  `recovery_b` are untouched. `--pstore` switches to the stock slot before
+  `recovery_b` are untouched. `--log` switches to the stock slot before
   rebooting into recovery for this reason.
-- **None of this helps a hang.** If the kernel stops without panicking,
-  nothing resets it and the button combo is still the only way out. Only a
-  crash becomes hands-free.
+- **A hang still needs the button combo, but it is no longer silent.** If the
+  kernel stops without panicking, nothing resets the phone and getting back to
+  fastboot is still a trip to the desk. The log is there either way, since the
+  hook rewrites it every second rather than only on the way down, so the trip
+  buys an answer instead of another guess. `softlockup_panic=1` turns the
+  commonest kind of hang into a panic, which does reset.
+- **Seven attempts is the bootloader's maximum, and fastboot cannot lower it.**
+  The counter is three bits of the GPT partition attributes - bits 51 to 53,
+  alongside priority at 48, active at 50, successful at 54 and unbootable at
+  55 - so seven is as high as it goes, and `fastboot --set-active` always
+  resets it to the maximum. Lowering it would mean writing the partition table
+  by hand, and there is no firmware image here to recover a corrupt one, so it
+  is left alone. At roughly 54 seconds an attempt a failed round takes about
+  six minutes, unattended.
 
 ## Getting in, with no display
 
@@ -280,20 +304,27 @@ pmos_continue_boot           # carry on into the real rootfs
   rather than a host runs through the PMIC driver and extcon. If nothing
   enumerates at all, suspect that before suspecting the gadget stack.
 
-### pstore / ramoops, if nothing enumerates
+### The boot log, if nothing enumerates
 
-This needs no cable and no working USB, only a reboot. `parrot.dtb` reserves
-`ramoops_region@ffd00000`: 768K, of which 256K is the console ring and 256K is
-pmsg. Its `compatible` is plain `"ramoops"`, so the builtin `PSTORE_RAM` binds
-to it with no help from us, early in boot. The previous boot's console
-therefore survives a reboot and can be read from stock, from a recovery, or
-from a later boot that does work — and if the kernel died after
-`postcore_initcall`, which is almost anything driver-related, the reason is in
-there.
+This needs no cable and no working USB, only a reboot. Every image
+`scripts/try-kernel.sh` flashes carries the hook from `scripts/bootlog.py`,
+which writes the kernel ring buffer to the unused `rddata` partition as soon as
+storage comes up and rewrites it every second after that. Reading it means
+getting into recovery, where adb runs as root:
 
 ```sh
-cat /sys/fs/pstore/console-ramoops-0
+scripts/try-kernel.sh --log
 ```
+
+That reboots into recovery by itself, switching to a stock slot first if it
+has to, and decodes the record. An `rddata` that is still all zeros is a result
+too: it means the kernel never reached the point where UFS works.
+
+Do **not** reach for ramoops here. It looks like the obvious answer and it does
+not work on this device - the region binds, the kernel writes to it, and the
+contents are gone by the next boot, because the bootloader scrubs that DRAM.
+`05-status.md` has the evidence. `scripts/grab-pstore.sh` is kept only so the
+dead end stays documented.
 
 ### Serial, as a last resort
 

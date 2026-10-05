@@ -238,6 +238,59 @@ does the AVB side offline, from the dumps, without touching the phone.
   means the kernel never ran, so there was no console to capture; this is
   consistent with the complete absence of USB activity.
 
+## Seeing what a blind boot did
+
+This device has no console we can reach, and that - not any one bug - is what
+made the first week of bring-up slow. The findings below are what closed it.
+
+- **ramoops does not survive a reboot here** — Verified 2026-10-05, and this
+  overturns what this document said before. The binding works: TWRP's own
+  kernel reserves the region, prints `printk: console [ramoops-1] enabled` and
+  `pstore: Registered ramoops as persistent store backend`, and writes to it.
+  Recovery is what fails. Reboot TWRP into TWRP - a clean warm reboot with
+  nothing of ours anywhere in it - and `/sys/fs/pstore` is empty, with the
+  records from seconds earlier gone. The only thing placed to do that is the
+  bootloader scrubbing DRAM, so every RAM-backed log channel dies with it.
+- **No other RAM or vendor channel helps either** — Verified. `rddata` holds a
+  single non-zero line in its first 4 MB, so no Qualcomm ramdump is being
+  collected, which the SoC's fuses would have to permit anyway. `logfs` is a
+  FAT12 filesystem whose `UEFILOG1TXT` contains the partition table as text,
+  not kernel output. The GENI UART at `0x98c000` is not brought out to a pad.
+  `fastboot fetch` is a fastbootd command; the real bootloader refuses it.
+- **`pstore_blk` cannot be used on this kernel** — Verified by configuration.
+  It would write pstore zones to flash rather than DRAM, which is exactly what
+  is wanted, but it binds at `late_initcall` and `ufs_qcom` is a module loaded
+  about eighty entries into `initramfs.load`. The block device does not exist
+  when `pstore_blk` looks for it. Making UFS builtin would mean dragging the
+  clock, pinctrl, regulator and SMMU chain in with it, which stock keeps
+  modular on purpose.
+- **The ring buffer is retroactive, which is what makes a late write enough** —
+  Verified, and it is the observation the log channel rests on. We cannot write
+  to flash early, but we do not need to: `dmesg` taken the moment storage
+  appears still contains every message since the first line of kernel output.
+  So the dumper is armed as soon as `/proc` is mounted, blocks until the block
+  device shows up, and then writes the whole history in one go.
+- **`rddata` is the place to put it** — Verified. 20 MiB, and all 20971520
+  bytes read back as zero on this device, so nothing is being lost by using it.
+  It is Qualcomm ramdump staging, written only by a debug-fused SoC collecting
+  a dump, which ours cannot. `appslog` was the other candidate and is rejected:
+  it is nearly full of real Android logs. Both are backed up under
+  `out/device-dump-root/stock/`.
+- **The GPT on this device has 4096-byte logical sectors** — Verified, and it
+  is an easy half-hour to lose. The protective MBR sits at byte 0 as usual, but
+  the `EFI PART` header is at byte 4096, not 512, and the entry array at 8192.
+  97 entries. A parser that assumes 512 reads zeros and concludes the disk has
+  no partition table.
+- **The log partition is identified by geometry, not by name** — Reasoned, and
+  deliberate. `rddata` is `/dev/block/sda97`, starting at LBA 31228923 and
+  running 5120 LBAs, which sysfs reports in 512-byte units as start 249831384
+  and size 40960. The hook refuses to write unless both match, because the cost
+  of a wrong guess is overwriting a real partition.
+- **Whether the log actually comes back is still open** — the hook is installed
+  in every image `scripts/try-kernel.sh` flashes, but nothing has returned a
+  record yet. An empty `rddata` after a failed boot is itself a result: it
+  means the kernel died before UFS probed.
+
 ## The build environment
 
 - **pmbootstrap runs rootless with the three patches** — Verified. The native

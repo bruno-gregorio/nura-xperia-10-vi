@@ -1,18 +1,30 @@
 #!/bin/sh
 # Read the previous boot's kernel console out of ramoops.
 #
-# This device has no usable serial console - the GENI port the kernel logs to
-# is not exposed on the outside of the phone - but it does reserve a ramoops
-# region, and the merged device tree declares it:
+# This does not work on this device. It is kept because proving that took a
+# while and the next person should not have to repeat it.
+#
+# The theory was sound. The GENI port the kernel logs to is not exposed on the
+# outside of the phone, but the merged device tree reserves a ramoops region:
 #
 #   ramoops_region@ffd00000 { compatible = "removed-dma-pool", "ramoops";
 #                             console-size = <0x40000>; reg = <0 0xffd00000 0 0xc0000>; }
 #
-# PSTORE_CONSOLE writes the kernel log into that DRAM, and DRAM keeps its
-# contents across a warm reboot. So a kernel that dies silently still leaves
-# its console behind, and the way to read it is to reboot into recovery -
-# which is its own partition and runs adbd as root - and look in
-# /sys/fs/pstore. Nothing else on this device gives a first boot a voice.
+# PSTORE_CONSOLE writes the kernel log into that DRAM, DRAM is supposed to keep
+# its contents across a warm reboot, and recovery runs adbd as root and can
+# read /sys/fs/pstore.
+#
+# Every step of that is true except the one that matters. TWRP's own kernel
+# binds the region and says so - "printk: console [ramoops-1] enabled",
+# "pstore: Registered ramoops as persistent store backend" - and yet reboot
+# TWRP into TWRP, which is as clean and warm as a reboot gets and involves
+# nothing of ours, and /sys/fs/pstore is empty. The records written seconds
+# before are gone. The only thing positioned to do that is the bootloader
+# scrubbing DRAM, and nothing on the kernel side can stop it.
+#
+# What to use instead: scripts/bootlog.py, which has the initramfs write the
+# ring buffer to the unused 'rddata' partition, where it survives. Verified
+# 2026-10-05.
 #
 #   scripts/grab-pstore.sh            from fastboot: reboot to recovery, then read
 #   scripts/grab-pstore.sh --read     already in recovery: just read

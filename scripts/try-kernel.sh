@@ -2,7 +2,7 @@
 # Try a kernel on the device without needing to touch the device.
 #
 #   scripts/try-kernel.sh            flash our kernel to the spare slot and boot it
-#   scripts/try-kernel.sh --pstore   read the last boot's console out of ramoops
+#   scripts/try-kernel.sh --log      read the last boot's log back off flash
 #   scripts/try-kernel.sh --restore  put the spare slot back to stock
 #
 # The problem this solves: a kernel that dies leaves the phone on a black
@@ -18,8 +18,15 @@
 # next round. kernel-cmdline.conf carries panic=5 to make a panic reset rather
 # than hang, which is what feeds the counter.
 #
-# What this does NOT fix: a kernel that hangs without panicking. Nothing
-# resets that, and it still needs the button combo. Verified 2026-10-05.
+# The other half is the log. There is no console on this device - no exposed
+# UART, no USB outside fastboot, and ramoops is scrubbed by the bootloader - so
+# every image flashed here carries scripts/bootlog.py's hook, which writes the
+# kernel ring buffer to the unused 'rddata' partition once storage comes up.
+# That makes a dead boot readable instead of merely counted.
+#
+# What this does NOT fix: a kernel that hangs without panicking still needs the
+# button combo to get back to fastboot. It does now leave a log behind, because
+# the hook rewrites it every second rather than only on the way down.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -81,6 +88,9 @@ build_vendor_boot() {
 	# docs/05-status.md on what the bootloader actually rejects.
 	"$ROOT/scripts/swap-vendor-dtb.py" --extract "$STOCK/vendor_boot_b.img" "$WORK/sony-dtbs.bin" >/dev/null
 	"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/sony-dtbs.bin"
+	# ...and the only way to find out why a boot died.
+	"$ROOT/scripts/bootlog.py" install "$WORK/vendor_boot.img" "$WORK/vendor_boot-log.img"
+	mv "$WORK/vendor_boot-log.img" "$WORK/vendor_boot.img"
 }
 
 # vbmeta for the spare slot has to come from the slot the device last ran: its
@@ -131,32 +141,57 @@ cmd_try() {
 		echo "RESULT: nothing came up in 7 minutes."
 		echo "  The kernel hung rather than panicked, so nothing reset it."
 		echo "  Hold Power+VolUp, then VolUp while plugging in USB, and run:"
-		echo "    scripts/try-kernel.sh --pstore"
+		echo "    scripts/try-kernel.sh --log"
 	elif [ "$got" = "_$spare" ]; then
 		echo "RESULT: OUR KERNEL BOOTED. adb answers on slot $got."
 	else
 		echo "RESULT: it crashed and the bootloader fell back to slot $got."
-		echo "  Read what happened, no hands needed:"
-		echo "    scripts/try-kernel.sh --pstore"
+		echo
+		cmd_log
 	fi
 }
 
-cmd_pstore() {
-	need_fastboot
-	cur=$(getvar current-slot)
-	ok=$(getvar "slot-successful:$cur")
-	if [ "$ok" != "yes" ]; then
-		# Recovery borrows its device tree, command line and a prepended
-		# ramdisk from vendor_boot, so it only works on a stock slot.
-		for s in a b; do
-			if [ "$(getvar "slot-successful:$s")" = "yes" ]; then
-				say "switching to stock slot $s so recovery works"
-				fastboot --set-active="$s"
-				break
-			fi
-		done
+# Read the log the initramfs wrote to flash. Hands-free from any state the
+# device can be in: Android can be told to reboot into recovery, and recovery
+# is where adb has the root needed to read a raw partition.
+cmd_log() {
+	if adb devices | sed 1d | grep -qE 'recovery$'; then
+		say "already in recovery"
+	elif adb devices | sed 1d | grep -qE 'device$'; then
+		say "in Android; rebooting to recovery, where adb has root"
+		adb reboot recovery || die "could not reboot to recovery"
+		sleep 5
+		wait_for_adb 120 >/dev/null || die "recovery never came up"
+	elif fastboot devices | grep -q .; then
+		cur=$(getvar current-slot)
+		if [ "$(getvar "slot-successful:$cur")" != "yes" ]; then
+			# Recovery borrows its device tree, command line and a
+			# prepended ramdisk from vendor_boot, so it only works
+			# on a slot that still has Sony's.
+			for s in a b; do
+				if [ "$(getvar "slot-successful:$s")" = "yes" ]; then
+					say "switching to stock slot $s so recovery works"
+					fastboot --set-active="$s"
+					break
+				fi
+			done
+		fi
+		fastboot reboot recovery || die "could not reboot to recovery"
+		sleep 5
+		wait_for_adb 120 >/dev/null || die "recovery never came up"
+	else
+		die "no device in adb or fastboot"
 	fi
-	exec "$ROOT/scripts/grab-pstore.sh"
+
+	[ "$(adb shell id -u 2>/dev/null | tr -d '\r')" = "0" ] \
+		|| die "adb is not root here - this needs recovery, not Android"
+
+	mkdir -p "$WORK"
+	say "reading rddata"
+	adb exec-out 'dd if=/dev/block/by-name/rddata bs=65536 count=16 2>/dev/null' \
+		> "$WORK/bootlog.bin"
+	echo
+	"$ROOT/scripts/bootlog.py" decode "$WORK/bootlog.bin"
 }
 
 cmd_restore() {
@@ -174,8 +209,8 @@ cmd_restore() {
 }
 
 case "${1:-}" in
-	--pstore)  shift; cmd_pstore "$@" ;;
+	--log)     shift; cmd_log "$@" ;;
 	--restore) shift; cmd_restore "$@" ;;
 	"")        cmd_try ;;
-	*)         die "usage: $0 [--pstore | --restore]" ;;
+	*)         die "usage: $0 [--log | --restore]" ;;
 esac

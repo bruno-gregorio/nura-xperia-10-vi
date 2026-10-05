@@ -292,13 +292,16 @@ made the first week of bring-up slow. The findings below are what closed it.
   geometry, wrote its record, and 199649 bytes read back. So the find-and-write
   path is not in doubt, and that is what makes the negative result below mean
   something.
-- **Our kernel does not reach the point where UFS works** — Verified
-  2026-10-05, and it is the sharpest thing we know about the failure. Two boots
-  with the hook installed left `rddata` all zeros. Since the hook demonstrably
-  writes when the kernel is healthy, and since it waits two minutes for the
-  block device rather than giving up early, an all-zero partition means the
-  kernel died before `ufs_qcom` probed. That puts the failure between the first
-  instruction and roughly entry sixty of `initramfs.load`.
+- **Withdrawn: "our kernel does not reach the point where UFS works"** — this
+  said two boots had left `rddata` all zeros, that the hook waits two minutes
+  for the block device, and so the kernel must have died before `ufs_qcom`
+  probed. The inference was sound and the conclusion was wrong. The hook is
+  sourced by the real init in `load_modules`, and the real init was sitting in
+  the debug shell waiting for a telnet connection that could not arrive, so it
+  had not got as far as arming the hook at all. UFS works. It always did:
+  `scsi`, `/dev/sda`, a mounted SD card and a steady `ufshcd` interrupt count
+  are all in the log of 2026-10-05. An all-zero `rddata` means the hook never
+  ran, which is not the same as the kernel never getting there.
 - **The log hook is not what hangs the phone** — Verified 2026-10-05, and it
   retires the guess that replaced it. A control run with `BOOTLOG=0`, the same
   image with the hook left out, hung exactly the same way: nothing in eleven
@@ -320,7 +323,9 @@ made the first week of bring-up slow. The findings below are what closed it.
   an attempt: about 18 of bootloader, 8 of sleep. So the arm64 `Image` is
   loaded and entered, Sony's device trees are accepted, the vendor ramdisk
   decompresses, and `/init` executes. None of that is in question any more.
-  The failure is further in - in `load_modules` or past it.
+  Where this went on to guess - that the failure must therefore be in
+  `load_modules` - it guessed wrong; see the flash log further down. Module
+  loading was never the problem.
 - **A hang leaves exactly one attempt on the counter, not seven** — Verified.
   After eleven minutes of hanging, `slot-retry-count` had gone from 7 to 6.
   The counter advances when the bootloader begins an attempt, so a kernel that
@@ -334,14 +339,64 @@ made the first week of bring-up slow. The findings below are what closed it.
   that dies first burns one and stops. One bit per round, four minutes a
   round, hands-free. `PROBE=1 scripts/try-kernel.sh` is the mechanism, and
   bisecting `initramfs.load` with it is the way to find what actually hangs.
-- **A hang cannot be recovered without touching the phone, and that is final**
-  — Verified by elimination. The A/B retry counter only advances when the
-  bootloader starts an attempt, so a kernel that stops without panicking never
-  feeds it. Nothing enumerates on USB during a normal boot, so the host cannot
-  reach the device either. Power and Volume Up is a hardware force-off and
-  there is no software equivalent. The loop is therefore hands-free exactly
-  when the kernel panics, and costs one button press when it hangs. No amount
-  of scripting changes that, and the earlier claim that it would is withdrawn.
+- **A hang does recover without touching the phone - it takes about 72
+  minutes** — Verified 2026-10-05, and it replaces a flat claim here that it
+  could never happen. A round was left alone after the loop had given up, and
+  the phone came back on its own: `slot-retry-count:a` 0, `slot-unbootable:a`
+  yes, Android up on the fallback slot. Seven attempts across 4337 seconds is
+  about 620 seconds each. Nothing was wrong with the reasoning that produced
+  the old claim - the retry counter really does only advance when the
+  bootloader begins an attempt - only with the assumption that an attempt is
+  short. We had never waited more than eleven minutes before reaching for the
+  buttons, so we had never seen the eighth minute of one. The loop is
+  hands-free in both cases; it only has to be patient, and `WAIT=` is how.
+- **The kernel boots, and has been booting for some time** — Verified by the
+  flash log, which is the single most useful thing this port has produced. All
+  89 modules load. UFS comes up, `/dev/sda` and friends appear, the SD card is
+  found and mounted (`mmcblk1`, 477 GiB), interrupts keep flowing, and the
+  system idled for 603 seconds before resetting itself on purpose. There was
+  never a hang, and most of the things this file once blamed - the Qualcomm
+  command line, the log hook, module loading - were never involved. The phone
+  was sitting in the initramfs with no way to tell anyone.
+- **The gadget was binding to an emulated controller** — Verified, and this is
+  what made a healthy boot look dead. This kernel builds `dummy_hcd`, a
+  software USB host and gadget emulator, which registers `dummy_udc.0`.
+  `get_usb_udc()` takes the first entry in `/sys/class/udc`, the real
+  controller was not in there, and so the gadget came up perfectly against the
+  phone's own emulated host: `cdc_ncm` registered at `usb-dummy_hcd.0-1`,
+  `cdc_acm` giving `ttyACM0`, `usb0` with a MAC and an address,
+  `android_work: sent uevent USB_STATE=CONFIGURED`. All of it inches from the
+  USB-C port and invisible through it. The host's own kernel log is the other
+  half of the proof: between the fastboot device disconnecting and Android's
+  gadget appearing 76 minutes later it recorded no enumeration attempt at all,
+  not even a failed one. `deviceinfo_usb_network_udc` now names
+  `a600000.dwc3`, and `pmos.config` drops `dummy_hcd` for the next kernel
+  build, so a gadget either lands on the hardware or fails loudly.
+- **`dwc3-msm` was deferring forever on two providers, silently** — a driver
+  waiting on a provider prints nothing, which is how this hid for a day. Both
+  come from `ssusb@a600000` in the live tree. Verified: it carries
+  `extcon = <&eud>`, and nothing registers an extcon on
+  `qcom,msm-eud@88e0000` because `eud` was missing from `modules-initfs` -
+  stock loads `eud.ko`, we build `eud.ko`, and we had never loaded it. Now
+  fixed. Also verified but not yet fixed: its `ddr-usb` interconnect path goes
+  through `interconnect@19100000` (`qcom,parrot-gem_noc`), which logged
+  `failed to register ICC provider` seventeen times, so `of_icc_get()` defers
+  forever too.
+- **The failing interconnect providers are exactly the ones needing the second
+  bcm_voter** — Verified, and it is a clean pattern rather than a guess. Every
+  provider whose `qcom,bcm-voters` lists only `rsc@17a00000`'s voter
+  registered: `interconnect@0`, `1500000`, `1502000`, `1680000`, `16e0000`.
+  Both that also list `rsc@af20000`'s failed: `1740000`
+  (`qcom,parrot-mmss_noc`) and `19100000` (`qcom,parrot-gem_noc`). So
+  `rsc@af20000`'s `bcm_voter` never registers. Guess, for the next round to
+  settle: that node is `qcom,rpmh-rsc`, the same driver as the APPS RSC, and
+  its children are created by that driver, so either `af20000.rsc` does not
+  probe or its child device is never populated. On stock, `af20000.rsc` binds
+  `rpmh` and `af20000.rsc:bcm_voter` binds `bcm_voter`.
+- **The flash log now carries what a deferral needs** — the probe's own
+  progress, `/sys/kernel/debug/devices_deferred`, `/sys/class/udc` and every
+  platform device with the driver bound to it. `dmesg` alone cannot show a
+  silent deferral, and that omission is what cost the time.
 - **`wait_for_adb` was blind to fastboot** — fixed. The bootloader can give up
   into fastboot instead of booting the fallback, and a wait that only polled
   adb reported that as a dead phone, throwing the round away while the device
@@ -375,11 +430,11 @@ made the first week of bring-up slow. The findings below are what closed it.
   grounds that a virtual framebuffer would claim `fb0` ahead of the real panel.
   Stock sets it anyway.
 - **The real init loads all 89 modules in one `modprobe -a`** — Verified by
-  reading `load_modules` out of the shipped initramfs. That is why a hang here
-  has been so opaque: one module that wedges takes the single `modprobe`
-  process with it, and nothing reports which one. `STAGE=1
+  reading `load_modules` out of the shipped initramfs. `STAGE=1
   scripts/try-kernel.sh` replaces `/init` with a probe that loads them one at
-  a time instead.
+  a time instead. That was built to find a module that wedges, and it found
+  that none of them does - every one loads. It earned its keep anyway, because
+  it is what got a log onto flash and so told us the kernel was healthy.
 - **The USB gadget needs eleven of those modules, and no storage** — Verified
   from `modules.dep`: the symbol closure of `dwc3-msm` and the two PHYs is
   `clk-qcom`, `debug-regulator`, `gdsc-regulator`, `minidump`,

@@ -140,39 +140,70 @@ closed every gap the unprivileged pass left open.
 - **TWRP exists for this device** — Verified. It identifies as `twrp_pdx246`,
   `device:pdx246`.
 
-### The first flash attempt, and why it failed
+### What the bootloader actually rejects
 
-Two flashes on 2026-10-05, both rejected by the bootloader, both fully undone.
-The device was restored to stock `vbmeta`, `boot` and `vendor_boot` on slot b
-and boots normally; `userdata`, `super` and `dtbo` were never written.
+Five flashes on 2026-10-05, all reversible and all reversed. The first two were
+blind; the last three were single-variable experiments against a known-good
+image, which is what finally separated the causes. `scripts/avb-inspect.py`
+does the AVB side offline, from the dumps, without touching the phone.
 
-- **The bootloader red-states our boot image** — Verified, twice. "Your device
-  is corrupt, it can't be trusted and it won't boot", and no USB device of any
-  kind appears afterwards, not even a failed enumeration. Unlocked gives the
-  *orange* state, which boots unverified images with a warning; red is a
-  refusal, so our kernel never executed.
-- **Patching vbmeta is necessary but not sufficient** — Verified. The first
-  attempt wrote only `boot` and `vendor_boot`, on the assumption that an
-  unlocked bootloader stops enforcing vbmeta. It does not. The second attempt
-  re-flashed the device's own `vbmeta_b` with `--disable-verity
-  --disable-verification`, fastboot confirmed "Rewriting vbmeta struct at
-  offset: 0", and the device still red-stated. So something beyond the AVB
-  disable flags is rejecting the image.
-- **`os_version` in our boot header is zero, stock's is not** — Verified, and
-  the leading suspect. Ours reads `0x00000000`, stock `boot_b` reads
-  `0x1800063c`, which unpacks to OS 12.0.0 with a packed patch level of
-  `0x63c`. A bootloader that enforces a minimum OS patch level would reject a
-  zero outright, and this is the only structural difference found between the
-  two headers: both are header version 4 with header size 1584, and our empty
-  ramdisk is normal for v4, where the ramdisk lives in `vendor_boot`.
-  `mkbootimg` sets this with `--os_version` and `--os_patch_level`, reachable
-  from `deviceinfo_bootimg_custom_args`. Untested.
+- **The red state is not AVB** — Verified, and this reverses the earlier
+  reading. `vbmeta_b` was re-flashed with the two disable flags set and a
+  signature that `avb-inspect.py` proves is invalid, and the device booted
+  normally. An unlocked bootloader here really does allow verification errors:
+  it comes up *orange*, which `ro.keymaster.xxx.verifiedbootstate` confirms
+  while the GSI spoofs `ro.boot.verifiedbootstate` to `green`.
+- **Nor is it the `boot` hash descriptor** — Verified. Stock `boot_b` was
+  re-flashed with a single byte of inter-image *padding* inverted, which breaks
+  the hash `vbmeta` records for the partition while leaving the kernel, the
+  ramdisk and the GKI boot signature byte-identical. It booted. So with the
+  disable flags set, the bootloader does not check what `vbmeta` says about
+  `boot`.
+- **Nor is it `os_version`** — Verified, and this retracts the lead recorded
+  earlier the same day. Stock `boot_b` was re-flashed with `os_version` zeroed
+  and nothing else changed, and it booted. Ours reading `0x00000000` against
+  stock's `0x1800063c` is real but harmless, so `--os_version` and
+  `--os_patch_level` are not worth adding on this evidence.
+- **Patching the disable flags cannot help but break the signature** —
+  Verified, by construction rather than by experiment. `flags` sits at offset
+  120 of the 256-byte vbmeta header, and libavb hashes that whole header
+  followed by the auxiliary block before signing the result, so any flag change
+  invalidates the hash. `fastboot --disable-verity --disable-verification` does
+  not re-sign. This is why it only works on an unlocked device, and the first
+  experiment above is what shows this one is unlocked enough.
+- **Stock `vbmeta` and `vbmeta_system` are untouched** — Verified. Both are
+  `SHA256_RSA4096` with `flags = 0x00000000`, both verify against their own
+  embedded key, and both describe Sony's stock builds. The GSI install never
+  patched either of them. `vbmeta_b` holds hash descriptors for `boot`
+  (48316416 bytes), `dtbo`, `recovery` and `vendor_boot`, hashtree descriptors
+  for `odm`, `vendor` and `vendor_dlkm`, and a chain descriptor handing
+  `vbmeta_system` off to its own key at rollback location 2.
+- **Stock `boot` carries a GKI boot signature and ours does not** — Verified,
+  and the strongest remaining structural difference. Stock `boot_b` sets
+  `signature_size = 4096` in its header-v4 footer and holds an `AVB0` structure
+  at offset 48312320; that offset plus 4096 is exactly the 48316416 that
+  `vbmeta` records for the partition. Ours sets `signature_size = 0` and has no
+  such structure. Whether this bootloader verifies it is untested.
+- **Both kernels are valid arm64 images** — Verified. Ours and stock both carry
+  `ARM\x64` at offset 0x38 of the Image header with `text_offset = 0` and
+  `flags = 0xa`, so nothing about the kernel binary itself is malformed.
+- **Our `vendor_boot` is structurally identical to stock** — Verified. Header
+  version 4, 4096-byte pages, `header_size` 2128, and the same four load
+  addresses: kernel `0x00008000`, ramdisk `0x01000000`, tags `0x00000100`, dtb
+  `0x01f00000`. What differs is content: one 308591-byte FDT where stock
+  concatenates 4887468 bytes of them, `bootconfig_size` 0 against 119, and an
+  entirely different command line.
+- **`fastboot fetch` belongs to fastbootd, not the bootloader** — Verified. The
+  real bootloader answers "Device does not support fetch command" for `logfs`,
+  `appslog`, `xbl_sc_logs` and `rddata` alike, so the bootloader's own logs
+  cannot be read back over fastboot. The earlier note that `fetch` worked for
+  `vendor_boot` was from fastbootd.
 - **Recovery survives a bad boot flash** — Verified. `recovery_a` and
   `recovery_b` are their own partitions on this device, so TWRP stayed intact
   throughout and remains the way back to a root shell.
-- **ramoops held nothing from the attempts** — Reasoned. The red state means
-  the kernel never ran, so there was no console to capture; this is consistent
-  with the complete absence of USB activity.
+- **ramoops held nothing from the attempts** — Reasoned. A bootloader refusal
+  means the kernel never ran, so there was no console to capture; this is
+  consistent with the complete absence of USB activity.
 
 ## The build environment
 

@@ -161,11 +161,12 @@ build_vendor_boot() {
 		mv "$WORK/vendor_boot-probe.img" "$WORK/vendor_boot.img"
 	else
 		# The real init needs one device quirk, and there is nowhere
-		# sanctioned to put it: mkinitfs calls load_modules and then
-		# setup_usb_network back to back, and run_hooks only happens in
-		# init_2nd.sh once the rootfs is mounted. Without it nothing
-		# ever asks dwc3 for a role, no UDC is created, and the gadget
-		# binds to the dummy controller and enumerates to nobody.
+		# sanctioned to put it. run_hooks /hooks does run early enough -
+		# it is four lines before debug_shell and well before the rootfs
+		# is touched - but it is also after setup_usb_network, which is
+		# the call that needs the quirk to have happened already. So the
+		# patch goes in at image-build time instead. Without it nothing
+		# asks dwc3 for a role and no UDC is ever created.
 		say "patching /init to ask dwc3 for peripheral mode"
 		"$ROOT/scripts/bootlog.py" usbquirk "$WORK/vendor_boot.img" "$WORK/vendor_boot-q.img"
 		mv "$WORK/vendor_boot-q.img" "$WORK/vendor_boot.img"

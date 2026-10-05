@@ -407,6 +407,7 @@ pmstage_reset() {
 	$B sleep "$n"
 	pmstage_reset
 ) &
+PMWD1=$!
 
 # A backstop under the backstop, in case the watchdog above cannot run - if a
 # wedged driver holds something the shell needs to fork, every loop in this
@@ -420,6 +421,7 @@ pmstage_reset() {
 	$B sleep 600
 	pmstage_reset
 ) &
+PMWD2=$!
 
 LOG=/pmprobe.log
 mark() {
@@ -565,6 +567,31 @@ mark 99 "all modules loaded"
 	echo "--- block devices ---"
 	ls /sys/block 2>/dev/null
 } >> "$LOG" 2>&1
+
+# Hand the boot back to the stock second stage, if asked to.
+#
+# This probe exists because loading ninety modules at once was a hang risk,
+# and the order in here is the one that is known to work on this phone. Stock
+# stage 2 starts by having udev load everything, which by now has nothing left
+# to do, and then goes on to the debug shell and switch_root. So handing over
+# here is the shortest route to a real boot that does not depend on knowing
+# where stock stage 1 wedges - and it is only reached after the gadget is
+# bound and telnet is listening, so it is never a step taken blind.
+#
+# The watchdogs are retired rather than left running. Both would fire minutes
+# from now into a session somebody is using, or worse, into a system that has
+# already switched root - init_2nd.sh's "kill $(pidof sh)" will not find them,
+# because this script runs as busybox ash and not as sh. Nothing is armed in
+# their place on purpose: by this point there is a live link in, which is the
+# thing a watchdog exists to recover.
+if [ -e /pmhandoff ] && [ -e /init_2nd.sh ]; then
+	mark 100 "handing off to the stock second stage"
+	kill $PMWD1 $PMWD2 2>/dev/null
+	# setup_usb_network and start_unudhcpd both refuse to run twice, and
+	# debug_shell rebinds the UDC after adding ACM, so the gadget this
+	# probe brought up survives the handover.
+	exec /init_2nd.sh
+fi
 
 # Nothing left to find out on its own. Hold still while anyone connected has
 # a look, then hand the phone back to the loop by resetting it.
@@ -730,6 +757,14 @@ def stage(src, dst, skip=""):
     entries.append([[0, 0o100755, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
                     "bootlog.sh", BOOTLOG_SH.encode()])
 
+    # A file rather than a baked-in variable, so the staged init reads the
+    # same on every build and the choice is visible by listing the archive.
+    entries = [e for e in entries if e[1] != "pmhandoff"]
+    handoff = os.environ.get("HANDOFF", "0") == "1"
+    if handoff:
+        entries.append([[0, 0o100644, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+                        "pmhandoff", b"1\n"])
+
     newrd = gzip.compress(cpio_build(entries), 6)
     open(dst, "wb").write(_rebuild(d, s, newrd))
 
@@ -740,6 +775,8 @@ def stage(src, dst, skip=""):
     print(f"  out  {dst}")
     print(f"  /init replaced with the staged probe ({len(init[2])} bytes)")
     print(f"  {held} modules held back for the second pass")
+    if handoff:
+        print("  HANDOFF=1: execs /init_2nd.sh once the gadget is up")
     print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
     print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
 

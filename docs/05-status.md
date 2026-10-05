@@ -43,12 +43,12 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 | `pmos.config` survives `olddefconfig` intact | **Verified** | Every `=y`, `=n` and "is not set" in it was read back out of the generated `.config` |
 | `earlycon` works with the serial driver left modular | **Verified** | `msm_geni_serial_earlycon.o` is built by `CONFIG_SERIAL_MSM_GENI_EARLY_CONSOLE`, which is a *bool*, so it is always in `vmlinux`; it carries `OF_EARLYCON_DECLARE(..., "qcom,msm-geni-console", ...)`, the compatible on the port in `parrot.dtb`. Building the GENI drivers in instead pulls IPC logging, then minidump, then SMEM — stock keeps that cluster modular on purpose |
 | This tree expects an `O=` build; we build in tree | **Verified** | Qualcomm's 137 tracepoint headers use `TRACE_INCLUDE_PATH .` and need `-I$(srctree)/$(src)`, which `scripts/Makefile.lib` adds only `ifdef building_out_of_srctree`. `prepare()` drops that condition. Expect more in-tree assumptions of this shape |
-| Kernel builds with Alpine clang | Unverified | In progress; `-Werror` stripped, `cc-wrapper` removed, LTO/CFI off |
-| `pmos.config` satisfies `pmb kconfig check` | Unverified | Written against `kconfigcheck.toml`, not yet run |
+| Kernel builds with Alpine clang | **Verified** | Builds clean in ~4 min: `boot/vmlinuz` 30,497,280 bytes, 294 modules, `kernel.release` `5.10.269-gki`. Needed `cc-wrapper` removed, `-Werror` stripped, a list of `-Wno-error=` flags, and the per-directory include path made unconditional |
+| `pmos.config` satisfies `pmb kconfig check` | **Verified** | "kconfig check succeeded!" |
 | boot-deploy emits usable `boot.img` + `vendor_boot.img` | Reasoned | boot-deploy's v4 path does exactly this |
-| `deviceinfo_dtb="vendor/qcom/parrot"` resolves | Reasoned | `dtbs_install` path vs boot-deploy's `find_dtb` glob |
+| `deviceinfo_dtb="vendor/qcom/parrot"` resolves | **Verified** | The package really contains `boot/dtbs/vendor/qcom/parrot.dtb` (308,591 bytes), which is what boot-deploy's `find_dtb` glob looks for |
 | Leaving stock `dtbo` in place gives the right DT | Reasoned | This is what stock does; untested with *our* base |
-| The 90 first-stage modules are all in-tree | **Verified** | Every name matched to an `obj-$(CONFIG_...)` target in the kernel Makefiles. The list is stock's, unmodified |
+| Every name in `modules-initfs` was really built | **Verified** | `verify-build.sh` against the real package: all 89 present among the 294 `.ko` files. 89, not 90 — `dm-mod` is builtin because pmOS wants `CONFIG_BLK_DEV_DM=y`; the other 89 are stock's list unmodified |
 | USB module names (`dwc3-msm`, `phy-msm-*`) | Verified | `drivers/usb/{dwc3,phy}/Makefile`: `CONFIG_USB_DWC3_MSM` -> `dwc3-msm.o`, `CONFIG_MSM_HSUSB_PHY` -> `phy-msm-snps-hs.o`, `CONFIG_USB_MSM_SSPHY_QMP` -> `phy-msm-ssusb-qmp.o`. `parrot_GKI.config` enables only these two PHYs (no eUSB2, no QUSB) |
 | Every kernel-side prerequisite for the USB gadget is present | **Verified** | `USB_DWC3=y` with `USB_DWC3_DUAL_ROLE=y` (not host-only), and `USB_CONFIGFS_{ACM,NCM,RNDIS,MASS_STORAGE}` all `=y`. The glue (`dwc3-msm`) and the two PHYs are modules and are in `modules-initfs` |
 | USB gadget actually enumerates on the device | Guess | Config is necessary, not sufficient. The likely failure is Type-C role detection: `TYPEC_QCOM_PMIC` is not set, so the gadget depends on the PMIC/charger driver reporting over extcon |
@@ -81,17 +81,16 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 
 ## Next steps, in order
 
-1. Finish the kernel build and run `pmb kconfig check`.
-2. `pmb install --no-fde --split`, confirm both boot images are produced and
+1. `pmb install --no-fde --split`, confirm both boot images are produced and
    that `vendor_boot.img` actually contains the DTB
    (`unpack_bootimg --boot_img ...`).
-3. Take the backups in `04-flashing.md` step 1. Do not skip this.
-4. Flash and look for a USB gadget. That single observation splits the problem
+2. Take the backups in `04-flashing.md` step 1. Do not skip this.
+3. Flash and look for a USB gadget. That single observation splits the problem
    in half: if it appears, the kernel booted and the work moves to userspace;
    if not, read ramoops.
-5. Read `/sys/fs/pstore/console-ramoops*` after the next boot. This is the
+4. Read `/sys/fs/pstore/console-ramoops*` after the next boot. This is the
    cheapest instrument we have and it needs no cable: the region is reserved in
    the DTB we build, `PSTORE_RAM` is builtin, and 256K of console ring survives
    a reboot. Serial on `0x98c000` is the fallback, and it needs hardware
    access to the USB-C SBU pins that nobody has yet.
-6. Only then: build `sm6450-modules` for display.
+5. Only then: build `sm6450-modules` for display.

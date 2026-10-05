@@ -3,13 +3,23 @@
 ## Downstream kernel, not mainline
 
 SM6450 has no mainline support: no `sm6450.dtsi`, no GCC/pinctrl/interconnect
-drivers, nothing on the lists. Starting there would mean writing SoC enablement
-from scratch before anything boots.
+drivers. Starting there would mean writing SoC enablement before anything
+boots — and, critically, debugging it with no console, because on a first
+mainline boot the console is part of what is being brought up.
+
+That ordering argument is the real reason, and it is the one that holds.
+"From scratch" was the original reason and it was wrong: every per-SoC driver
+exists as GPL source in the tarballs this port already downloads, and the
+sibling SoC SM4450 is upstream, which supplies a worked example of the
+downstream-to-mainline transformation. See [06-mainline.md](06-mainline.md).
 
 This port builds Sony's released 5.10 GKI kernel instead. Consequences, stated
 plainly so nobody is surprised later:
 
-- **It cannot be upstreamed.** None of this work goes anywhere.
+- **The kernel work cannot be upstreamed.** None of the 5.10 patching goes
+  anywhere. The *hardware facts* do carry over — the device tree finding, the
+  boot geometry, the AVB behaviour and whatever the first boots teach us are
+  exactly the inputs a mainline port needs.
 - **It rots.** Sony stops publishing sources when the device goes EOL, and 5.10
   leaves LTS eventually.
 - **Camera is out of reach.** libcamera has no SM6450 CAMSS support and the

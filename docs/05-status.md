@@ -38,7 +38,8 @@ Last updated: 2026-10-05. **The device has never been booted with any of this.**
 | Only `parrot.dtb` is built, not Qualcomm's whole DT release | **Verified** | `make dtbs` emits exactly one `DTC` line. The stock `audio/` and `camera/` trees cannot build at all without headers from the out-of-tree `sm6450-modules` repo |
 | `pmos.config` survives `olddefconfig` intact | **Verified** | Every `=y`, `=n` and "is not set" in it was read back out of the generated `.config` |
 | Debug UART is builtin, so `earlycon` can work | **Verified** | `MSM_GENI_SE`, `SERIAL_MSM_GENI`, `SERIAL_MSM_GENI_CONSOLE` all `=y` in the generated config |
-| Kernel builds with Alpine clang | Unverified | In progress; `-Werror` stripped, LTO/CFI off |
+| This tree expects an `O=` build; we build in tree | **Verified** | Qualcomm's 137 tracepoint headers use `TRACE_INCLUDE_PATH .` and need `-I$(srctree)/$(src)`, which `scripts/Makefile.lib` adds only `ifdef building_out_of_srctree`. `prepare()` drops that condition. Expect more in-tree assumptions of this shape |
+| Kernel builds with Alpine clang | Unverified | In progress; `-Werror` stripped, `cc-wrapper` removed, LTO/CFI off |
 | `pmos.config` satisfies `pmb kconfig check` | Unverified | Written against `kconfigcheck.toml`, not yet run |
 | boot-deploy emits usable `boot.img` + `vendor_boot.img` | Reasoned | boot-deploy's v4 path does exactly this |
 | `deviceinfo_dtb="vendor/qcom/parrot"` resolves | Reasoned | `dtbs_install` path vs boot-deploy's `find_dtb` glob |

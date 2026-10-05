@@ -16,15 +16,22 @@ is still a guess.
 
 ## Why downstream and not mainline
 
-SM6450 has **no mainline support at all** — there is no `sm6450.dtsi` in
-`arch/arm64/boot/dts/qcom`, no clock/pinctrl/interconnect drivers, and no
-patches on the lists. Sony's own mainline contributions stop at `sm8550`
-(Xperia 1 V) and `sm6375` (Xperia 10 IV). Writing that enablement is a
-multi-year project; this port instead builds Sony's released 5.10 kernel, which
-is the only way to a booting device in a useful timeframe.
+SM6450 has **no mainline support** — there is no `sm6450.dtsi` in
+`arch/arm64/boot/dts/qcom` and no clock/pinctrl/interconnect drivers. Sony's
+own mainline contributions stop at `sm8550` (Xperia 1 V) and `sm6375`
+(Xperia 10 IV). This port builds Sony's released 5.10 kernel instead, which is
+the fastest way to a booting device.
 
-That is a deliberate trade: this gets to a shell quickly and is a maintenance
-dead end. [docs/02-design.md](docs/02-design.md) spells out the consequences.
+That is a deliberate trade: it gets to a shell quickly and the kernel work is a
+maintenance dead end. [docs/02-design.md](docs/02-design.md) spells out the
+consequences.
+
+Mainline is not as far off as "write it all from scratch" suggests — every
+per-SoC driver exists as GPL source in the tarballs this port already
+downloads, and the sibling SoC SM4450 is upstream and derived from the same
+vendor code. The blocker is debuggability, not difficulty, which is why a
+console on the real device comes first.
+[docs/06-mainline.md](docs/06-mainline.md) works the whole question through.
 
 ## Layout
 

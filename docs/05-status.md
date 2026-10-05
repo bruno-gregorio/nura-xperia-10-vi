@@ -785,6 +785,21 @@ made the first week of bring-up slow. The findings below are what closed it.
   resets the phone after 240 s unless `/pmusbok` exists - a file the quirk
   touches once a real UDC is bound. Seven hung attempts then come to about 31
   minutes before the fallback to Android, hands-free.
+- **One ext4 partition on the SD card is the whole layout** — Reasoned from
+  stage 2, not yet tested. Stage 2 only looks for a boot partition when the
+  rootfs has no usable `/etc/fstab`:
+
+      if [ -z "$(cat /sysroot/etc/fstab | grep -v "#" | tr -d '[:space:]')" ]; then
+              wait_boot_partition
+              mount_boot_partition /sysroot/boot "rw"
+      fi
+
+  `make-rootfs-img.sh` writes `/etc/fstab`, so that branch is skipped. And
+  `extract_initramfs_extra` lives in stage 1 below the jump, so it never runs
+  either. That removes every reason to build a boot partition, a subpartition
+  image, an `initramfs-extra` archive, or to pass `pmos.stowaway`: one ext4
+  partition carrying the rootfs, found by the `pmos_root_uuid=` already on the
+  command line, is enough.
 - **The rootfs goes on the SD card** — Decided, 2026-10-05, by the owner. The
   phone has a 477 GiB SDXC card in it, already detected as `mmcblk1`, and
   writing there leaves stock Android on slot b intact - which is what the

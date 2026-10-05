@@ -140,6 +140,40 @@ closed every gap the unprivileged pass left open.
 - **TWRP exists for this device** — Verified. It identifies as `twrp_pdx246`,
   `device:pdx246`.
 
+### The first flash attempt, and why it failed
+
+Two flashes on 2026-10-05, both rejected by the bootloader, both fully undone.
+The device was restored to stock `vbmeta`, `boot` and `vendor_boot` on slot b
+and boots normally; `userdata`, `super` and `dtbo` were never written.
+
+- **The bootloader red-states our boot image** — Verified, twice. "Your device
+  is corrupt, it can't be trusted and it won't boot", and no USB device of any
+  kind appears afterwards, not even a failed enumeration. Unlocked gives the
+  *orange* state, which boots unverified images with a warning; red is a
+  refusal, so our kernel never executed.
+- **Patching vbmeta is necessary but not sufficient** — Verified. The first
+  attempt wrote only `boot` and `vendor_boot`, on the assumption that an
+  unlocked bootloader stops enforcing vbmeta. It does not. The second attempt
+  re-flashed the device's own `vbmeta_b` with `--disable-verity
+  --disable-verification`, fastboot confirmed "Rewriting vbmeta struct at
+  offset: 0", and the device still red-stated. So something beyond the AVB
+  disable flags is rejecting the image.
+- **`os_version` in our boot header is zero, stock's is not** — Verified, and
+  the leading suspect. Ours reads `0x00000000`, stock `boot_b` reads
+  `0x1800063c`, which unpacks to OS 12.0.0 with a packed patch level of
+  `0x63c`. A bootloader that enforces a minimum OS patch level would reject a
+  zero outright, and this is the only structural difference found between the
+  two headers: both are header version 4 with header size 1584, and our empty
+  ramdisk is normal for v4, where the ramdisk lives in `vendor_boot`.
+  `mkbootimg` sets this with `--os_version` and `--os_patch_level`, reachable
+  from `deviceinfo_bootimg_custom_args`. Untested.
+- **Recovery survives a bad boot flash** — Verified. `recovery_a` and
+  `recovery_b` are their own partitions on this device, so TWRP stayed intact
+  throughout and remains the way back to a root shell.
+- **ramoops held nothing from the attempts** — Reasoned. The red state means
+  the kernel never ran, so there was no console to capture; this is consistent
+  with the complete absence of USB activity.
+
 ## The build environment
 
 - **pmbootstrap runs rootless with the three patches** — Verified. The native

@@ -159,6 +159,52 @@ exactly the backup step 1 below asks for.
   which is the way back: `fastboot --set-active=b` (or `a`) returns you to
   Android, assuming that slot was healthy.
 
+## Iterating without touching the phone
+
+A kernel that dies leaves this phone on a black screen with no USB, and the
+only way back to fastboot by hand is holding Power and Volume Up until it
+vibrates, then Volume Up while plugging the cable in. That turns every attempt
+into a trip to the desk, so it is worth arranging things so the phone comes
+back on its own.
+
+The bootloader's own A/B logic is what makes that possible. It decrements a
+retry counter on each attempt at the active slot, resets it only when userspace
+reports the boot good, and when the counter runs out it marks the slot
+unbootable and falls back to the other slot.
+
+So the experiment goes on the **inactive** slot and the stock images stay on
+the active one. A crash then lands back in stock Android, where adb is waiting
+and `adb reboot bootloader` begins the next round.
+
+```sh
+scripts/try-kernel.sh             # flash to the spare slot and boot it
+scripts/try-kernel.sh --pstore    # read the last boot's console from ramoops
+scripts/try-kernel.sh --restore   # put the spare slot back to stock
+```
+
+### What makes it work, and where it stops working
+
+- **`panic=5` and `panic_on_oops=1`** are on the command line from
+  `kernel-cmdline.conf`. Without them a panic sits there forever and nothing
+  ever resets the phone, so the retry counter never runs down.
+- **The stock slot must be marked successful**, or it is not a fallback at all.
+  `try-kernel.sh` refuses to run otherwise. Booting it into Android once and
+  letting it settle is what sets the flag; `fastboot getvar slot-successful:b`
+  confirms it.
+- **The spare slot's own vbmeta cannot be used.** On a phone that has taken an
+  OTA the two slots carry different rollback indexes - here 1772323200 on a
+  against 1777593600 on b - and anti-rollback refuses the lower one. The script
+  takes the *active* slot's vbmeta, patches the two disable flags into it, and
+  flashes that.
+- **Recovery only works from a stock slot.** It borrows its device tree, its
+  command line and a prepended vendor ramdisk from `vendor_boot`, so our
+  `vendor_boot` stops TWRP from coming up even though `recovery_a` and
+  `recovery_b` are untouched. `--pstore` switches to the stock slot before
+  rebooting into recovery for this reason.
+- **None of this helps a hang.** If the kernel stops without panicking,
+  nothing resets it and the button combo is still the only way out. Only a
+  crash becomes hands-free.
+
 ## Getting in, with no display
 
 The display driver is an out-of-tree module that this port does not build yet,

@@ -979,6 +979,87 @@ made the first week of bring-up slow. The findings below are what closed it.
 - **Leaving the stock `dtbo` in place gives the right device tree** —
   Reasoned. This is what stock does; untested with *our* base.
 
+## The handoff into stage 2
+
+Run on 2026-10-05 with `HANDOFF=1 STAGE=1 ./scripts/try-kernel.sh`. The
+mechanism works; the boot past it did not, for a reason worth writing down.
+
+- **The handoff itself is sound** — Verified. `/pmstage` read 100,
+  `/proc/1/comm` read `init_2nd.sh`, and `/proc/1/environ` carried
+  `root_uuid=1e3e6bd0-...` and `debug_shell=y`. So the staged probe's module
+  order gets the SoC up, stock stage 2 inherits it, and `/sys/block` by then
+  lists `sda`, `sdb`, `sdc` and `mmcblk1` - both UFS and the card.
+- **Stage 2's debug shell is what kills the boot, and it is not subtle** —
+  Verified. `debug_shell` ends by unlinking the ACM function from a gadget that
+  is still bound and then calling `setup_usb_configfs_udc`, which clears
+  `g1/UDC` and writes it back. The rebind does not come back on this phone:
+  dwc3-msm drops out of peripheral mode and nothing in an initramfs asks it for
+  a role again, which is the same reason the probe has to write `peripheral` to
+  `*.ssusb/mode` in the first place. The host logged `usb 3-2: USB disconnect`
+  at 23:01:28, the instant the shell was released, and nothing re-enumerated.
+  The probe now sets `debug_shell=n` across the handoff.
+- **Nothing between the handoff and `switch_root` blocks** — Verified by
+  reading each function against the live initramfs. `resize_root_partition`
+  prints "Unable to resize root partition: failed to find qualifying partition"
+  and returns, because there are no subpartitions, no
+  `pmos.force-partition-resize` and no `deviceinfo_cgpt_kpart`.
+  `delete_old_install_partition` turns `/dev/mmcblk1p1` into itself (its `sed
+  s/2$/3/` finds no trailing 2) and finds no `pmOS_deleteme` label.
+  `wait_partition` gives up after thirty seconds rather than hanging.
+- **`setup_usb_network` is guarded by a file, not a variable** — Verified:
+  `/tmp/_setup_usb_network`. Files survive an exec, so the gadget the probe
+  built carries into stage 2 untouched. This is why the handoff does not need
+  to rebuild it.
+
+### The card, after the write
+
+- **The image is on the card and verified** — Verified. 1020264448 bytes at
+  2.9 MB/s, `dd_rc=0`, and `/dev/mmcblk1p1` reads back UUID
+  `1e3e6bd0-9170-4c79-a34b-64ece0ad2ca6`, type `ext4`, clean `e2fsck -fn`.
+- **The partition was shrunk from 476 GiB to 16 GiB on purpose** — Verified.
+  Stage 2 runs `resize2fs` unconditionally, and growing a 973 MiB filesystem
+  to fill the whole card would have written group metadata for ~3900 new block
+  groups and then left the kernel's `ext4lazyinit` thread zeroing gigabytes of
+  inode tables in the background. 16 GiB is ten times what the rootfs uses and
+  keeps `e2fsck` on every boot cheap. `resize_root_partition` returns without
+  touching parted, so nothing grows it back.
+- **`parted -s` does not cover the shrink warning** — Verified. `parted -s -f
+  ... resizepart` printed "Shrinking a partition can cause data loss, are you
+  sure you want to continue?" and exited 1, changing nothing. It needs
+  `---pretend-input-tty` with `yes` on stdin.
+- **`resize2fs` refuses while the phone's clock is at the epoch** — Verified,
+  and this one would have been baffling later. There is no RTC sync in the
+  initramfs, so the clock sits around 12 January 1970, while the image carries
+  2026 mount timestamps from the host that built it. `resize2fs` compares the
+  filesystem's last-checked time against its last-mounted time, sees the check
+  as older, and says "Please run 'e2fsck -f' first" - no matter how many times
+  `e2fsck -fy` is run, because each run stamps 1970. Setting the clock first
+  makes the same command resize 973 MiB to 16 GiB in one second. Stage 2 does
+  not set the clock, so on a boot where the filesystem still needs growing its
+  `resize2fs` will fail silently; the boot carries on, because `init_2nd.sh`
+  does not check the exit status.
+
+### Getting back to fastboot without touching the phone
+
+The loop needs the device in fastboot, and a live pmOS shell had no way to ask
+for it. This is now a two-minute step instead of an eleven-minute one.
+
+- **There is no shell route to fastboot on this kernel** — Verified. busybox
+  has no `devmem` applet and no way to call `reboot(2)` with
+  `LINUX_REBOOT_CMD_RESTART2`, which is how Android's init asks for
+  "bootloader". The restart reason itself was located - the `qcom,reboot-reason`
+  node's nvmem cell is `sdam@7100` (`spmi_sdam2`) at byte `0x48`, bits 1 to 7,
+  and that attribute is writable - but writing a PMIC register was not
+  authorised, so it stays unused and is recorded here only as a fact about the
+  hardware.
+- **Burning the bootloader's retry counter is the sanctioned route, and it is
+  fast if you do not wait** — Verified. Our slot never marks itself booted, so
+  every attempt decrements the counter; after enough of them the bootloader
+  gives up and boots the stock slot, where adb is waiting. The probe's own
+  patience is `sleep 600`, which makes a cycle eleven minutes - but resetting
+  the moment telnet answers makes it about twenty-six seconds. Four resets took
+  the phone from a probe shell to stock Android in two minutes.
+
 ## Known gaps
 
 - **Display.** The panel driver is in the out-of-tree `sm6450-modules`

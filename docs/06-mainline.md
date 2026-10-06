@@ -157,10 +157,16 @@ the same thing as in [05-status.md](05-status.md).
   `sm6450` or `parrot` among them. The family upstream stops at sm4250,
   sm4450, sm6115, sm6125, sm6350 and sm6375. So there is no tree to rebase
   onto and no half-finished series to pick up, from Qualcomm or anyone else.
-- **Nothing on the mailing lists** — Unverified. `lore.kernel.org` was
-  unreachable (Anubis challenge) when this was written, and
-  [05-status.md](05-status.md) carries it as a stale guess; re-check before
-  starting work.
+- **Nothing on the mailing lists, and nothing in anyone's tree** — Verified
+  2026-10-05, by a different route than intended. `lore.kernel.org` is still
+  behind an Anubis challenge and refuses every fetch, so the lists were checked
+  indirectly: mainline master's `arch/arm64/boot/dts/qcom/Makefile` names no
+  sm6450 and no parrot target, and a GitHub repository search for sm6450 and
+  parrot-mainline returns only vendor Android kernels — Sony's (the two this
+  port already builds from), Motorola's and Oppo's. There is no mainline SM6450
+  work in public anywhere, half-finished or otherwise. That makes this the
+  first such port rather than a contribution to one, which is the whole reason
+  the upstream-shape question matters from the first patch.
 
 ### Sony's own mainline history
 
@@ -249,20 +255,54 @@ list is cheap to re-derive and worth trusting.
   mainline panel driver for it needs `MIPI_DSI_MODE_` flags and a TE line, not
   the simpler video-mode path.
 
+## The base
+
+6.18, on the owner's instruction, and the calendar agrees with it. 6.18 was
+released 2025-11-30 and is a longterm kernel maintained by Greg Kroah-Hartman
+and Sasha Levin with a projected EOL of December 2028, so a port that lands on
+it has three years of stable branch under it rather than a ten-week window.
+
+The working tree is `out/linux`, a depth-1 clone of the `linux-6.18.y` stable
+branch. It is gitignored and disposable; nothing in this repo depends on it
+surviving.
+
+Two things follow from basing on a stable branch rather than mainline, and both
+matter for the upstream goal.
+
+- **Patches get written against 6.18 and rebased onto `next` to submit.** No
+  new driver is ever accepted into a stable branch, so 6.18 is where the device
+  boots and `linux-next` is where the series goes. Keeping that split explicit
+  from the first patch is cheaper than discovering it at submission time.
+- **Nothing may depend on a 6.18-only backport.** Stable carries fixes that
+  mainline already has, so this direction is safe — but a driver written against
+  a 6.18 API that `next` has since changed is a rebase conflict, and the
+  SM6450 work touches `clk`, `pinctrl` and `interconnect`, all of which see
+  churn.
+
 ## Ordered plan
 
 Each phase gates the next; the ordering is the whole point.
 
-0. **A console on the real device.** Not mainline work at all. Boot the
-   downstream 5.10 kernel this repo builds, confirm the flashing path and the
-   AVB rollback hazard in [04-flashing.md](04-flashing.md), and get ramoops or
-   UART output. The rationale is under "Effort and risk" below.
+0. **A console on the real device.** Done, 2026-10-05, and not by the route
+   this list expected. Ramoops turned out to be scrubbed by the bootloader and
+   the debug UART is not broken out, so the channel became a log written
+   straight to a flash partition plus — once modules load in a known order — a
+   USB network gadget with a shell on it. See [07-devloop.md](07-devloop.md).
+   What this buys phase 1 is the thing "Effort and risk" below says is the
+   dominant risk: a hand-written `sm6450.dtsi` that does not boot can now say
+   so in writing.
 1. **SoC base.** `sm6450.dtsi` plus dt-bindings; `gcc-sm6450.c` and
    `pinctrl-sm6450.c` transformed from the parrot sources against the
    ravelin/sm4450 template; RPMh (RSC, regulators, `pm6450.dtsi`); SMEM, SMP2P,
-   glink, PDC; GENI UART. Target: mainline boots to a serial console.
-   Everything here is compile- and `dt_binding_check`-verifiable without
-   hardware; only the boot is not.
+   glink, PDC; GENI UART. Everything here is compile- and
+   `dt_binding_check`-verifiable without hardware; only the boot is not.
+
+   Target: **mainline writes a log to flash**, not "boots to a serial console".
+   The usual phase-1 milestone assumes a UART, and this phone does not give us
+   one — `qupv3_se3_2uart` at `0x98c000` is `status = "disabled"` downstream and
+   its pins are not brought out. So the first mainline kernel has to carry the
+   same flash-log channel the downstream one does, and the first question it
+   answers is how far it got, not what it printed.
 2. **Storage and a shell.** SMMU, UFS plus phy, dwc3 plus the HS/SS phys. At
    this point there is a networked shell and the project has a real feedback
    loop.

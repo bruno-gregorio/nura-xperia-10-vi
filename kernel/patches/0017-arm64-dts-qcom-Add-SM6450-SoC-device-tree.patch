@@ -11,20 +11,22 @@ Cortex-A55 and four Cortex-A78) with their idle states and PSCI power
 domains, the carve-outs the firmware owns, GCC, TLMM, the GIC, PDC,
 IPCC, the TCSR mutex, the memory-mapped timer, the APSS watchdog, the
 RPMh RSC with its clock and power domain controllers, the EPSS CPU
-frequency controller, and the QUPv3 wrapper holding the debug UART.
+frequency controller, the QUPv3 wrapper holding the debug UART, the
+SPMI arbiter with both its buses, the AOSS side channel and its sleep
+stats, and SMEM with the four SMP2P edges that ride on it.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- arch/arm64/boot/dts/qcom/sm6450.dtsi | 897 +++++++++++++++++++++++++++
- 1 file changed, 897 insertions(+)
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 1032 ++++++++++++++++++++++++++
+ 1 file changed, 1032 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450.dtsi
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..71b3dd72d
+index 000000000..272cb420c
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,897 @@
+@@ -0,0 +1,1032 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -33,6 +35,7 @@ index 000000000..71b3dd72d
 +#include <dt-bindings/clock/qcom,rpmh.h>
 +#include <dt-bindings/clock/qcom,sm6450-gcc.h>
 +#include <dt-bindings/interrupt-controller/arm-gic.h>
++#include <dt-bindings/mailbox/qcom-ipcc.h>
 +#include <dt-bindings/power/qcom-rpmpd.h>
 +#include <dt-bindings/soc/qcom,rpmh-rsc.h>
 +
@@ -595,6 +598,124 @@ index 000000000..71b3dd72d
 +		};
 +	};
 +
++	smp2p-adsp {
++		compatible = "qcom,smp2p";
++		qcom,smem = <443>, <429>;
++		interrupts-extended = <&ipcc IPCC_CLIENT_LPASS
++					     IPCC_MPROC_SIGNAL_SMP2P
++					     IRQ_TYPE_EDGE_RISING>;
++		mboxes = <&ipcc IPCC_CLIENT_LPASS
++				IPCC_MPROC_SIGNAL_SMP2P>;
++
++		qcom,local-pid = <0>;
++		qcom,remote-pid = <2>;
++
++		smp2p_adsp_out: master-kernel {
++			qcom,entry-name = "master-kernel";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		smp2p_adsp_in: slave-kernel {
++			qcom,entry-name = "slave-kernel";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++	};
++
++	smp2p-cdsp {
++		compatible = "qcom,smp2p";
++		qcom,smem = <94>, <432>;
++		interrupts-extended = <&ipcc IPCC_CLIENT_CDSP
++					     IPCC_MPROC_SIGNAL_SMP2P
++					     IRQ_TYPE_EDGE_RISING>;
++		mboxes = <&ipcc IPCC_CLIENT_CDSP
++				IPCC_MPROC_SIGNAL_SMP2P>;
++
++		qcom,local-pid = <0>;
++		qcom,remote-pid = <5>;
++
++		smp2p_cdsp_out: master-kernel {
++			qcom,entry-name = "master-kernel";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		smp2p_cdsp_in: slave-kernel {
++			qcom,entry-name = "slave-kernel";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++	};
++
++	smp2p-modem {
++		compatible = "qcom,smp2p";
++		qcom,smem = <435>, <428>;
++		interrupts-extended = <&ipcc IPCC_CLIENT_MPSS
++					     IPCC_MPROC_SIGNAL_SMP2P
++					     IRQ_TYPE_EDGE_RISING>;
++		mboxes = <&ipcc IPCC_CLIENT_MPSS
++				IPCC_MPROC_SIGNAL_SMP2P>;
++
++		qcom,local-pid = <0>;
++		qcom,remote-pid = <1>;
++
++		smp2p_modem_out: master-kernel {
++			qcom,entry-name = "master-kernel";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		smp2p_modem_in: slave-kernel {
++			qcom,entry-name = "slave-kernel";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++
++		ipa_smp2p_out: ipa-ap-to-modem {
++			qcom,entry-name = "ipa";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		ipa_smp2p_in: ipa-modem-to-ap {
++			qcom,entry-name = "ipa";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++	};
++
++	smp2p-wpss {
++		compatible = "qcom,smp2p";
++		qcom,smem = <617>, <616>;
++		interrupts-extended = <&ipcc IPCC_CLIENT_WPSS
++					     IPCC_MPROC_SIGNAL_SMP2P
++					     IRQ_TYPE_EDGE_RISING>;
++		mboxes = <&ipcc IPCC_CLIENT_WPSS
++				IPCC_MPROC_SIGNAL_SMP2P>;
++
++		qcom,local-pid = <0>;
++		qcom,remote-pid = <13>;
++
++		smp2p_wpss_out: master-kernel {
++			qcom,entry-name = "master-kernel";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		smp2p_wpss_in: slave-kernel {
++			qcom,entry-name = "slave-kernel";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++
++		wlan_smp2p_out: wlan-ap-to-wpss {
++			qcom,entry-name = "wlan";
++			#qcom,smem-state-cells = <1>;
++		};
++
++		wlan_smp2p_in: wlan-wpss-to-ap {
++			qcom,entry-name = "wlan";
++			interrupt-controller;
++			#interrupt-cells = <2>;
++		};
++	};
++
 +	soc: soc@0 {
 +		#address-cells = <2>;
 +		#size-cells = <2>;
@@ -655,6 +776,22 @@ index 000000000..71b3dd72d
 +			#interrupt-cells = <2>;
 +			interrupt-parent = <&intc>;
 +			interrupt-controller;
++		};
++
++		aoss_qmp: power-management@c300000 {
++			compatible = "qcom,sm6450-aoss-qmp", "qcom,aoss-qmp";
++			reg = <0x0 0x0c300000 0x0 0x400>;
++			interrupts-extended = <&ipcc IPCC_CLIENT_AOP
++						     IPCC_MPROC_SIGNAL_GLINK_QMP
++						     IRQ_TYPE_EDGE_RISING>;
++			mboxes = <&ipcc IPCC_CLIENT_AOP IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++			#clock-cells = <0>;
++		};
++
++		sram@c3f0000 {
++			compatible = "qcom,rpmh-stats";
++			reg = <0x0 0x0c3f0000 0x0 0x400>;
 +		};
 +
 +		spmi: arbiter@c400000 {

@@ -16,6 +16,7 @@ dt-bindings: spmi: Add SM6450 SPMI PMIC arbiter
 dt-bindings: mfd: qcom,spmi-pmic: Add PM6450
 dt-bindings: regulator: qcom,rpmh-regulator: Add PM6450
 regulator: qcom-rpmh: Add support for PM6450
+dt-bindings: soc: qcom: aoss-qmp: Add SM6450
 dt-bindings: arm: qcom: Document SM6450 and Sony Xperia 10 VI
 arm64: dts: qcom: pmr735a: Allow the SID to be overridden
 arm64: dts: qcom: Add SM6450 SoC device tree

@@ -281,7 +281,7 @@ matter for the upstream goal.
 
 ## What has been written so far
 
-Eighteen patches against v6.18.55, exported to
+Nineteen patches against v6.18.55, exported to
 [../kernel/patches/](../kernel/patches/) by `scripts/sync-kernel-patches.sh`
 so the work does not live only in the gitignored `out/linux`. Nothing below
 has run on the device.
@@ -334,11 +334,12 @@ Then the device trees, and the binding lines they need to validate:
   enum additions in four existing bindings.
 - **`dt-bindings: arm: qcom: Document SM6450 and Sony Xperia 10 VI`** — the
   `sony,pdx246` / `qcom,sm6450` board compatible.
-- **`arm64: dts: qcom: Add SM6450 SoC device tree`** — `sm6450.dtsi`, 897
+- **`arm64: dts: qcom: Add SM6450 SoC device tree`** — `sm6450.dtsi`, 1032
   lines: the eight CPUs with their caches, idle states and PMUs, the
   38-region reserved-memory map, GCC, TLMM, TCSR, the GENI UART, PDC, IPCC,
   the GIC, the watchdog, the arch timer, the RSC with rpmhcc/rpmhpd/bcm-voter
-  under it, EPSS cpufreq, and the SPMI arbiter with both its buses.
+  under it, EPSS cpufreq, the SPMI arbiter with both its buses, the AOSS side channel
+  and its sleep stats, and SMEM with the four SMP2P edges that ride on it.
 - **`arm64: dts: qcom: Add Sony Xperia 10 VI`** — 351 lines: the four PMICs,
   all 45 RPMh regulators with the windows the board's own firmware uses, the
   power and volume keys, and the UART as `serial0`.
@@ -462,9 +463,9 @@ eleven boards that include that file are byte-identical before and after,
 checked by md5 across a `git stash` of just that one file.
 
 Everything compiles for arm64 at `W=1` with no warnings, the device trees
-build with `CHECK_DTBS=y` clean, all twelve touched bindings pass
+build with `CHECK_DTBS=y` clean, all thirteen touched bindings pass
 `dt_binding_check`, and `checkpatch --strict` reports zero errors across the
-eighteen patches. What it does report is shared with upstream's own files: 86
+nineteen patches. What it does report is shared with upstream's own files: 86
 "blank line after struct" checks and five `PINGROUP` rows past 100 columns,
 which `pinctrl-sm4450.c` and `pinctrl-milos.c` have too, and the "does
 MAINTAINERS need updating" notice, which `get_maintainer.pl` shows is already
@@ -514,7 +515,8 @@ Each phase gates the next; the ordering is the whole point.
 
    Written so far: both drivers, the RPMh clock and power-domain tables,
    `sm6450.dtsi` with the RSC, PDC, IPCC, SPMI and GENI UART in it, all four
-   PMICs, and all 45 regulators. Left: the SMEM, SMP2P and glink nodes.
+   PMICs, all 45 regulators, and the SMEM, SMP2P and AOSS glink nodes.
+   Phase 1 is done.
 
    Target: **mainline writes a log to flash**, not "boots to a serial console".
    The usual phase-1 milestone assumes a UART, and whether this phone gives us

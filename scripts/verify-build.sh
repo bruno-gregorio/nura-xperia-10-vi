@@ -90,7 +90,15 @@ else
 	# modprobe treats '-' and '_' as the same character, and stock's module
 	# list mixes the two freely (qcom-pmu-lib next to qcom_wdt_core), so
 	# compare on a normalised spelling or half the list looks missing.
-	find "$moddir" -name '*.ko' -exec basename {} .ko \; \
+	# Sony's 5.10 ships plain .ko; our mainline config has
+	# CONFIG_MODULE_COMPRESS_ZSTD, so the files are .ko.zst. Matching only
+	# '*.ko' made this print "0 modules built" and then "all present" for a
+	# package containing 427 of them - vacuously true, and exactly the kind of
+	# silent pass this script exists to prevent. modules.builtin below needs no
+	# such treatment: it always lists uncompressed names.
+	find "$moddir" -name '*.ko' -o -name '*.ko.gz' -o -name '*.ko.xz' \
+		-o -name '*.ko.zst' \
+		| sed 's|.*/||; s|\.\(gz\|xz\|zst\)$||; s|\.ko$||' \
 		| tr '-' '_' | sort -u > "$WORK/built.txt"
 	printf '    %s modules built\n' "$(wc -l < "$WORK/built.txt")"
 	grep -v '^[[:space:]]*#\|^[[:space:]]*$' \

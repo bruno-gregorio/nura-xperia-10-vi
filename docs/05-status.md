@@ -979,6 +979,54 @@ made the first week of bring-up slow. The findings below are what closed it.
 - **Leaving the stock `dtbo` in place gives the right device tree** —
   Reasoned. This is what stock does; untested with *our* base.
 
+## The port boots
+
+On 2026-10-05 at 23:15:54, `HANDOFF=1 STAGE=1 ./scripts/try-kernel.sh` ended
+with postmarketOS running on the phone. Everything in this section is Verified
+by logging in and asking.
+
+The handover is legible in five seconds of polling from the host, which is
+worth keeping as the signature of a good boot:
+
+```
+23:15:44 ping  -    telnet     still in the initramfs
+23:15:49 ping  -    -          switch_root: telnetd gone, sshd not up yet
+23:15:54 ping  SSH  -          systemd is up
+```
+
+- **`Nura edge`, kernel `5.10.269-gki #1-postmarketOS`, hostname
+  `sony-pdx246`** — reached over `scripts/ssh.py` as `user`.
+- **`graphical.target reached after 9.535s in userspace`**, 21.07s of that
+  kernel, 30.6s in total. 159 modules loaded, all 8 CPUs online.
+- **Root is the SD card** — `/dev/mmcblk1p1` on `/`, 15.7 G, 649 M used.
+- **UFS is intact and untouched** — `sda` at 119.1 G with its full Android
+  partition table visible. Nothing was written to it.
+- **The USB gadget survived `switch_root`** — `usb0` is UP with
+  `172.16.42.1/16`. This is the thing the whole handoff design turns on: the
+  gadget lives in configfs, which is kernel state, so it crosses `switch_root`
+  untouched and `unudhcpd@usb0.service` and `sshd.service` come up on the far
+  side of it. No persistence was added to the rootfs to make this work.
+- **Two units fail, both harmlessly** — `nftables.service` (no ruleset
+  shipped) and `systemd-firstboot.service` (the image is already seeded). That
+  is what `systemctl is-system-running` reporting `degraded` means here.
+- **The touchscreen controller is alive** — FocalTech `fts_ts` on i2c
+  `3-0038` is probing and polling its flow counter, so the part answers. It
+  wants `focaltech_ts_fw_.bin`, which we do not ship, and a `drm_panel`, which
+  cannot exist until there is a display driver.
+- **No battery or thermal readings** — `/sys/class/power_supply` is empty, so
+  the `pmic_glink`/`qcom_battmgr` path is not up.
+- **There is no RTC** — the clock comes up years out and nothing corrects it.
+  Harmless in itself, but see the `resize2fs` trap below: on this device a
+  wrong clock is not only cosmetic.
+
+### What this changes about the loop
+
+Userspace no longer needs a reflash. A kernel or initramfs change still costs a
+full `try-kernel.sh` round, but anything in the rootfs can now be edited in
+place over ssh, and `scripts/sdcard-install.sh` can rewrite the whole card from
+the initramfs shell when a clean slate is wanted. The sequence that gets from a
+booted phone back to a flashing state is in [07-devloop.md](07-devloop.md).
+
 ## The handoff into stage 2
 
 Run on 2026-10-05 with `HANDOFF=1 STAGE=1 ./scripts/try-kernel.sh`. The

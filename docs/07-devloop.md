@@ -172,27 +172,80 @@ What is known to work versus what the loop assumes, on the same scale as
   early enough to catch an early hang. Each is cheap to test and each has a
   documented fallback above.
 
-## Already done
+## Where the loop actually stands
 
-Both of these run with no device attached, and the first is what makes
-agent-speed transcription safe to trust.
+Written after the port first booted, on 2026-10-05. The tiers above were
+planned before any of this ran on hardware; this section is what the device
+actually does, and it corrects three of the guesses.
 
-- **The Tier 0 table-equivalence check** — `scripts/check-tables.sh`
-- **The Tier 0 package-shape check** — `scripts/verify-build.sh`
+### What is built and used every round
 
-## Next
+- **`scripts/try-kernel.sh`** — one command for a whole round: build the boot
+  images, flash the test slot, wait for the gadget, and save a harvest. This is
+  the loop driver that `## Next` below used to call for.
+- **`scripts/bootlog.py`** — generates the staged probe initramfs. Each stage
+  is a numbered mark, so a boot that dies reports *where*, and `HANDOFF=1`
+  makes the last stage `exec` into the stock second stage instead of stopping.
+- **`scripts/telnet.py`** — a shell in the initramfs, before `switch_root`.
+- **`scripts/ssh.py`** — a shell in the booted system, after it.
+- **`scripts/sdcard-install.sh`** — writes the rootfs to the SD card from the
+  phone's own initramfs shell, so the card never has to come out.
+- **`scripts/check-tables.sh`** and **`scripts/verify-build.sh`** — the two
+  Tier 0 checks, unchanged and still the first thing every round runs.
 
-The order to build the rest in, so that each step pays for itself immediately.
+### Three corrections to the plan above
 
-1. **Finish the interactive first boot** from
-   [04-flashing.md](04-flashing.md). Everything here depends on knowing the
-   device boots at all.
-2. **Add `panic=10` and an automated boot profile** alongside the interactive
-   one. Cheapest possible change, largest reduction in human waiting.
-3. **Test `fastboot boot` with a self-contained v2 image.** One experiment that
-   decides whether Tier 2 is fast or merely automatic.
-4. **Write the loop driver** once the device behaviour above is known, rather
-   than guessing at it now.
+- **ramoops was never the instrument.** Tier 2 assumed the previous boot's
+  console would survive a reset and be read back by the known-good system.
+  Nothing we tried produced a pstore entry on this device. What replaced it is
+  a probe that writes its own progress into a flash partition it is allowed to
+  write (`rddata`/`appslog`) and brings up a USB gadget as early as it can, so
+  the log is readable *during* the boot rather than after it. That is a better
+  instrument than ramoops anyway: it reports from a live kernel.
+- **There is no shell route to fastboot.** Neither `reboot bootloader` nor any
+  sysfs path gets this phone into the bootloader from a running system we
+  control, so step 3 of `## The loop` does not work as written. What does work
+  is the A/B retry counter: our test slot never marks itself booted, so each
+  attempt decrements it, and a probe that resets as soon as it is reachable
+  burns a retry in about 26 seconds instead of the probe's own 11-minute
+  patience. Four to six resets reach stock Android, two to two and a half
+  minutes apiece, hands-free. `fastboot --set-active` puts the counter back
+  to 7.
+- **The stock second stage's debug shell is fatal here, not merely
+  interactive.** Tier 2 called `pmos.debug-shell` "correct for the first boot";
+  on this phone its *exit* path tears the USB gadget down and nothing rebinds
+  it, so releasing that shell ends the boot in silence. The probe therefore
+  sets `debug_shell=n` across the handoff and keeps its own shell, which came
+  up forty marks earlier, as the inspection point. [05-status.md](05-status.md)
+  has the mechanism.
+
+### The round, as it is actually run
+
+1. `./scripts/try-kernel.sh` with `HANDOFF=1 STAGE=1`. Builds, flashes the test
+   slot, waits for the gadget, saves the harvest.
+2. If it boots: `scripts/ssh.py '<command>'`. Userspace is now editable in
+   place — no reflash, no card removal.
+3. If it does not: `scripts/telnet.py` into the probe shell and read the marks.
+   The last mark reached is the answer.
+4. To get back to a flashing state: burn the retry counter (reset from the
+   probe shell until stock Android comes up), then `fastboot --set-active` to
+   restore it.
+
+Steps 1, 3 and 4 need no hands. Step 2 is the new one, and it is the one that
+makes rootfs work cheap.
+
+### What is still missing
+
+- **Self-healing on panic.** `panic=5` is on the command line, but a kernel
+  that hangs without panicking still waits out a timeout. The in-memory
+  watchdog in the probe covers the stages it spans and nothing before them.
+- **Reboot-free iteration.** kexec is untested; see Tier 3.
+- **A verdict file.** Rounds are read by a human (or an agent) looking at the
+  harvest, not by a program. A machine-readable pass/fail/timeout per build is
+  still worth writing, and step 7 of `## The loop` describes it.
+- **UART.** Still the only thing that would diagnose a hang before the probe's
+  first mark — and on this SoC the console pins are not brought out at all, so
+  Tier 4 is harder here than it looks. See [06-mainline.md](06-mainline.md).
 
 ## Related
 

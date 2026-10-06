@@ -144,8 +144,18 @@ def parse_vendor_boot(path):
                 dtb=b[dtb_off:dtb_off + dtb_size], total=len(b))
 
 
+# Which package carries the device tree to compare against. Both kernels build
+# a .dtb and boot-deploy embeds whichever one deviceinfo_dtb names, so checking
+# the embedded copy against the wrong package reports a missing file rather than
+# a mismatch - which is what it did, every time, under the mainline kernel.
+KERNEL_PKG = {
+    "downstream": "linux-sony-pdx246",
+    "mainline": "linux-postmarketos-qcom-sm6450",
+}.get(KERNEL, "linux-sony-pdx246")
+
+
 def dtb_from_kernel_apk():
-    apks = sorted(KERNEL_APK.glob("linux-sony-pdx246-*.apk"))
+    apks = sorted(KERNEL_APK.glob(f"{KERNEL_PKG}-*.apk"))
     if not apks:
         return None, None
     want = deviceinfo().get("deviceinfo_dtb", "") + ".dtb"
@@ -272,8 +282,9 @@ def main():
           f"got {v['dtb'][:4].hex()}")
 
     want, apk = dtb_from_kernel_apk()
+    dtb_name = Path(deviceinfo().get("deviceinfo_dtb", "?")).name + ".dtb"
     if want is None:
-        check(False, "parrot.dtb found in the kernel apk", f"looked in {apk}")
+        check(False, f"{dtb_name} found in the kernel apk", f"looked in {apk}")
     else:
         check(hashlib.sha256(want).hexdigest() == hashlib.sha256(v["dtb"]).hexdigest(),
               "embedded DTB is byte-identical to the kernel package's",
@@ -299,11 +310,20 @@ def main():
         want = {ln.strip().replace("-", "_")
                 for ln in MODULES_INITFS.read_text().splitlines()
                 if ln.strip() and not ln.lstrip().startswith("#")}
-        got = {Path(e).name[:-3].replace("-", "_")
-               for e in entries if e.endswith(".ko")}
+        # Our mainline config has CONFIG_MODULE_COMPRESS_ZSTD, so these are
+        # .ko.zst. Matching only ".ko" reported "0 .ko in the image" for an
+        # initramfs holding fifteen of them, and then passed anyway because
+        # modules-initfs.mainline asks for none - a check that cannot fail.
+        got = set()
+        for e in entries:
+            name = Path(e).name
+            for ext in (".ko", ".ko.gz", ".ko.xz", ".ko.zst"):
+                if name.endswith(ext):
+                    got.add(name[: -len(ext)].replace("-", "_"))
+                    break
         missing = sorted(want - got)
         check(not missing, f"all {len(want)} modules-initfs names present",
-              f"{len(got)} .ko in the image"
+              f"{len(got)} modules in the image"
               + (f"; missing {', '.join(missing)}" if missing else ""))
 
         # The debug shell is only reachable if these are present. telnetd is an

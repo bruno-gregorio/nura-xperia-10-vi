@@ -435,6 +435,15 @@ $B --install -s
 mark 2 "busybox-extras --install"
 $B-extras --install -s 2>/dev/null
 
+# Everything below is exported, because the stock second stage expects it.
+# init.sh does this on its line 5 and init_2nd.sh's own comment relies on it:
+# nothing in init_2nd.sh parses the command line or reads deviceinfo, it just
+# uses root_uuid, debug_shell, nosplash and the deviceinfo_* keys as if they
+# were already there. They are plain shell variables unless something exports
+# them, and a plain variable does not survive the exec in the handoff below -
+# so without this, stage 2 would look for the rootfs with no UUID to look for
+# and skip the debug shell that is its only way back in.
+set -a
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 IN_CI=false
 LOG_PREFIX="[pmOS-rd]"
@@ -587,9 +596,30 @@ mark 99 "all modules loaded"
 if [ -e /pmhandoff ] && [ -e /init_2nd.sh ]; then
 	mark 100 "handing off to the stock second stage"
 	kill $PMWD1 $PMWD2 2>/dev/null
-	# setup_usb_network and start_unudhcpd both refuse to run twice, and
-	# debug_shell rebinds the UDC after adding ACM, so the gadget this
-	# probe brought up survives the handover.
+	# The 20s hung_task tripwire set above is right for modprobe, which
+	# should never block that long, and wrong for what comes next: e2fsck,
+	# resize2fs and switch_root all queue real I/O against an SD card that
+	# writes at 2.9 MB/s, and a task sitting in D state for twenty seconds
+	# there is ordinary. With panic=5 on the command line it would reset a
+	# boot that was merely slow.
+	echo 0 > /proc/sys/kernel/hung_task_panic
+	# setup_usb_network and start_unudhcpd refuse to run twice - their guard
+	# is /tmp/_setup_usb_network, a file, which survives the exec - so the
+	# gadget this probe brought up carries into stage 2 untouched.
+	#
+	# Stage 2's own debug shell is the one thing that does touch it, and on
+	# this phone it is fatal. Its exit path unlinks the ACM function from a
+	# still-bound gadget and then calls setup_usb_configfs_udc, which clears
+	# g1/UDC and writes it again - and the rebind does not come back here,
+	# because dwc3-msm falls out of peripheral mode and nothing in an
+	# initramfs asks it for a role again. Observed: the gadget vanished the
+	# moment the shell was released and never re-enumerated, which on a phone
+	# with no working display is a boot nobody can reach.
+	#
+	# Nothing is lost by refusing it. The probe opened its own shell forty
+	# marks earlier, before any of this, so the inspection point that
+	# pmos.debug-shell exists to provide is already there and already used.
+	debug_shell=n
 	exec /init_2nd.sh
 fi
 

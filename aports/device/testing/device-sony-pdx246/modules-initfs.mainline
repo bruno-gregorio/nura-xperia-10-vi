@@ -1,0 +1,19 @@
+# Modules the initramfs needs, in dependency order. There are none.
+#
+# This file exists to say that deliberately. modules-initfs.downstream is a
+# hundred lines long because the stock 5.10 tree builds its whole SoC support
+# as loadable modules and the initramfs has to name every one in probe order.
+# Our mainline config does the opposite: the clock controller, pinctrl, the
+# SPMI arbiter, the RPMh regulators, the SMMU, sdhci-msm, the GENI serial
+# console, dwc3 and the HS PHY are all CONFIG_*=y, so they are in vmlinux and
+# have probed before the initramfs runs at all.
+#
+# The USB gadget functions are modules (CONFIG_USB_CONFIGFS=m), but
+# postmarketos-initramfs already lists usb_f_acm, usb_f_ncm, usb_f_rndis and
+# usb_f_mass_storage in its own 00-default.modules, and mkinitfs follows
+# modinfo dependencies from there, so libcomposite, u_ether and u_serial come
+# along without being named. ext4 and the crypto it needs are on that list
+# too.
+#
+# If something here ever stops being builtin, it belongs in this file rather
+# than in the config.

@@ -24,9 +24,23 @@
 # kernel ring buffer to the unused 'rddata' partition once storage comes up.
 # That makes a dead boot readable instead of merely counted.
 #
+# That log is a downstream-only instrument. 'rddata' is on UFS, and the
+# mainline kernel has no UFS driver - the PHY register tables are the one thing
+# on this device not derivable from any source we hold, see docs/06-mainline.md
+# - so under mainline the hook has nothing to write to. What is left for a
+# mainline boot is the USB gadget if it comes up, and otherwise the retry
+# counter as a one-bit channel: PROBE=1 reboots on purpose from inside the
+# initramfs, so seven attempts and a fallback mean userspace was reached and
+# one attempt and a hang mean it was not.
+#
+# The two kernels also need opposite handling of the device tree and the dtbo
+# partition, which is read out of pmbootstrap's config rather than guessed; see
+# build_vendor_boot and the flash step.
+#
 # What this does NOT fix: a kernel that hangs without panicking still needs the
-# button combo to get back to fastboot. It does now leave a log behind, because
-# the hook rewrites it every second rather than only on the way down.
+# button combo to get back to fastboot. Downstream it does now leave a log
+# behind, because the hook rewrites it every second rather than only on the way
+# down.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -34,6 +48,14 @@ DEVICE=sony-pdx246
 BOOT="$ROOT/.pmb/work/chroot_rootfs_$DEVICE/boot"
 STOCK="$ROOT/out/device-dump-root/stock"
 WORK="$ROOT/out/try-kernel"
+
+# Which of the device package's two kernels is installed in the rootfs this
+# will flash. pmbootstrap's own config is the right place to ask: it is what
+# chose the kernel subpackage, so it is also what decided which device tree
+# boot-deploy put in vendor_boot. The two need opposite handling below.
+KERNEL=$(sed -n 's/^kernel *= *//p' "$ROOT/.pmb/pmbootstrap_v3.cfg" | head -1)
+KERNEL=${KERNEL:-downstream}
+MAINLINE_DTB="qcom/sm6450-sony-xperia-columbia-pdx246.dtb"
 
 die() { echo "error: $*" >&2; exit 1; }
 say() { echo; echo "== $*"; }
@@ -132,11 +154,28 @@ build_vendor_boot() {
 	mkdir -p "$WORK"
 	[ -f "$BOOT/vendor_boot.img" ] || die "missing $BOOT/vendor_boot.img - run 'pmb install' first"
 	[ -f "$STOCK/vendor_boot_b.img" ] || die "missing $STOCK/vendor_boot_b.img - run scripts/device-collect.sh from recovery"
-	# Sony's device trees, because ours does not define the labels the dtbo
-	# overlays reference and the bootloader rejects the result. See
-	# docs/05-status.md on what the bootloader actually rejects.
-	"$ROOT/scripts/swap-vendor-dtb.py" --extract "$STOCK/vendor_boot_b.img" "$WORK/sony-dtbs.bin" >/dev/null
-	"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/sony-dtbs.bin"
+	if [ "$KERNEL" = mainline ]; then
+		# Our own tree, which is the entire point of the mainline kernel -
+		# Sony's describes downstream compatibles no mainline driver matches,
+		# so carrying it here would boot a kernel that probes nothing.
+		#
+		# It does need the two bootloader properties stamped on, or the boot
+		# chain will not select it out of the dtb area at all. They are not
+		# device tree and do not belong in the source; see
+		# scripts/dtb-bootloader-ids.sh.
+		dtb="$BOOT/dtbs/$MAINLINE_DTB"
+		[ -f "$dtb" ] || die "missing $dtb - is linux-postmarketos-qcom-sm6450 installed in the rootfs?"
+		say "stamping the bootloader ids onto our own device tree"
+		"$ROOT/scripts/dtb-bootloader-ids.sh" "$dtb" "$WORK/pdx246-stamped.dtb"
+		"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/pdx246-stamped.dtb"
+	else
+		# Sony's device trees, because our downstream base does not define the
+		# labels the dtbo overlays reference and the bootloader rejects the
+		# result. See docs/05-status.md on what the bootloader actually
+		# rejects.
+		"$ROOT/scripts/swap-vendor-dtb.py" --extract "$STOCK/vendor_boot_b.img" "$WORK/sony-dtbs.bin" >/dev/null
+		"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/sony-dtbs.bin"
+	fi
 	# ...and the only way to find out why a boot died. BOOTLOG=0 leaves it
 	# out, which is how you tell a kernel that fails on its own from one the
 	# hook broke: the hook writes to UFS from a background job while
@@ -253,9 +292,22 @@ cmd_try() {
 	build_vendor_boot
 	build_vbmeta "$cur"
 
+	# The dtbo the spare slot carries. Downstream wants stock's, because the
+	# parrot-qrd overlay in it is where the board detail lives. Mainline wants
+	# none: our tree is complete on its own and has no __symbols__ for an
+	# overlay's __fixups__ to resolve against, so any overlay that matched
+	# would fail to apply and a failed overlay is what red-states this phone.
+	# scripts/empty-dtbo.py says more; --restore puts stock's back.
+	if [ "$KERNEL" = mainline ]; then
+		"$ROOT/scripts/empty-dtbo.py" "$WORK/dtbo-empty.img"
+		dtbo="$WORK/dtbo-empty.img"
+	else
+		dtbo="$STOCK/dtbo_$cur.img"
+	fi
+
 	say "flashing slot $spare"
 	fastboot flash "vbmeta_$spare"      "$WORK/vbmeta.img"
-	fastboot flash "dtbo_$spare"        "$STOCK/dtbo_$cur.img"
+	fastboot flash "dtbo_$spare"        "$dtbo"
 	fastboot flash "boot_$spare"        "$BOOT/boot.img"
 	fastboot flash "vendor_boot_$spare" "$WORK/vendor_boot.img"
 

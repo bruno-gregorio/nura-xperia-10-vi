@@ -557,6 +557,111 @@ are reasons not to copy a sibling blindly. None is copied here.
   straight through; so does ours. The clue is that SM8550's div2 CXO makes the
   identical-looking node come out at 19.2 MHz.
 
+## Building it
+
+### The whole series links into a kernel
+
+The first real build ran on 2026-10-06: `arm64` `defconfig` plus
+`SM_GCC_6450`, `PINCTRL_SM6450` and `PHY_QCOM_USB_SNPS_FEMTO_V2`, built with
+the container's `aarch64-linux-gnu-gcc` 14.2.0 out of tree into `out/kbuild`.
+It produced `vmlinux` and `Image` with no warning and no error, in four and a
+quarter hours of wall clock.
+
+That is worth stating plainly because up to that point the generated drivers
+had only ever been compiled as individual object files. `defconfig` is also a
+harsher test than the config we ship: it turns on every unrelated subsystem,
+so anything our patches did to a shared header or a Kconfig would have shown
+up as a failure somewhere else in the tree. Nothing did.
+
+What the link proves, from `nm vmlinux`:
+
+- `gcc_sm6450_probe`, `gcc_sm6450_desc`, `gcc_sm6450_clocks`,
+  `gcc_sm6450_resets`, `gcc_sm6450_gdscs` and the regmap config are all
+  present, registered through `__initcall__kmod_gcc_sm6450__..._init4` -
+  `subsys_initcall`, which is where a clock controller has to run.
+- `sm6450_tlmm_probe` and `sm6450_tlmm_of_match` likewise, at `init3`.
+- `pm6450_vreg_data` is linked into `qcom-rpmh-regulator`.
+
+It does not prove any of it is *correct*. A driver that registers 119 clocks
+at the wrong offsets links exactly as cleanly as one that does not. What it
+rules out is the whole class of mistake that would have made the next step
+impossible to interpret.
+
+### The kernel aport
+
+`aports/device/testing/linux-postmarketos-qcom-sm6450` is the package.
+Modelled on `linux-postmarketos-qcom-milos`, the newest mainline Qualcomm
+kernel in pmaports, with two deliberate differences.
+
+- **The source is a kernel.org tarball, not a fork.** milos and sm6350 both
+  point at a GitHub fork and a tag. There is no fork here; the work only
+  exists as patches in this repository. Keeping the base a released tarball,
+  `linux-6.18.55.tar.xz`, is what makes "based on 6.18.55" something a
+  stranger can check.
+- **One squashed patch, not twenty-three.** `scripts/sync-kernel-patches.sh`
+  now writes the branch out twice from the same range on the same run:
+  `kernel/patches/` as one patch per commit, which is the form the work is
+  reviewed and posted in, and `sm6450-mainline.patch` in the aport as a single
+  diff. An APKBUILD listing twenty-odd patch files would need its `source=`
+  and twenty-odd checksums rewritten on every kernel commit, and abuild does
+  not care how the diff is divided. The squashed file carries a header saying
+  which copy to read.
+
+Both forms were checked to apply to a pristine tree before the first build:
+`git apply -R --check` and `patch -p1 -R --dry-run` both accept the squashed
+diff against `HEAD`, which is the same question as applying it forward onto
+`v6.18.55`.
+
+The shipped config is not `defconfig`. It is
+`config-postmarketos-qcom-sm6350.aarch64` from pmaports - the pmOS-maintained
+config for the closest sibling SoC, already carrying everything postmarketOS
+needs and already passing its own `kconfigcheck` - with its eight
+SoC-specific symbols retargeted and then normalised by `olddefconfig` against
+6.18:
+
+- `PINCTRL_SM6350` and `SM_GCC_6350` became `PINCTRL_SM6450` and
+  `SM_GCC_6450`.
+- `SM_CAMCC_6350`, `SM_DISPCC_6350`, `SM_GPUCC_6350`, `SM_VIDEOCC_6350`,
+  `INTERCONNECT_QCOM_SM6350` and `PINCTRL_SM6350_LPASS_LPI` were dropped. We
+  have written no equivalent of any of them.
+- `PHY_QCOM_USB_SNPS_FEMTO_V2` was added, because SM6350 uses the older QUSB2
+  HS PHY and our `usb_1_hsphy` is `qcom,usb-snps-hs-7nm-phy`.
+
+Everything else the board needs was already on: the SPMI arbiter, the RPMh
+clocks, power domains and regulators, the SMMU, `sdhci-msm`, `dwc3-qcom`, the
+GENI serial console, `qcom-pon`, `nvmem-spmi-sdam` and `rtc-pm8xxx`. Notably
+`USB_DUMMY_HCD` is off, which removes the trap that cost a day on the
+downstream kernel.
+
+### The device package now offers a choice of kernel
+
+`device-sony-pdx246` grew two subpackages, `-kernel-downstream` and
+`-kernel-mainline`, selected in `pmbootstrap init`. They are not
+interchangeable, and every key that differs carries the suffix the mechanism
+keys off:
+
+- `deviceinfo_dtb_downstream` is `vendor/qcom/parrot`, the Qualcomm reference
+  tree that expects the stock dtbo overlay on top.
+  `deviceinfo_dtb_mainline` is `qcom/sm6450-sony-xperia-columbia-pdx246`, one
+  complete tree that wants nothing from the dtbo partition.
+- `deviceinfo_usb_network_udc_downstream` is `a600000.dwc3` and the mainline
+  one is `a600000.usb`, because a platform device is named after its device
+  tree node and the two trees name the dwc3 core differently.
+- `modules-initfs.downstream` is a hundred lines in probe order;
+  `modules-initfs.mainline` names nothing, because our config builds all of
+  it into `vmlinux`.
+- `kernel-cmdline.mainline.conf` asks for `earlycon=qcom_geni,mmio32,0x98c000`
+  rather than a bare `earlycon`. The bare form relies on `/chosen`'s
+  `stdout-path`, and the one the bootloader writes points at
+  `/soc/qcom,qup_uart@98c000`, a path that exists in the stock tree and not in
+  ours. If it overwrites the one our board file sets, `of_stdout` comes back
+  NULL and a bare `earlycon` does nothing, silently - the worst possible
+  failure for the only thing we can watch a first boot with.
+
+A deviceinfo key that has a suffixed form must not also exist unsuffixed;
+`devicepkg_subpackage_kernel` fails the build if it does, which is how the
+unsupported half-converted state is caught.
+
 ## Ordered plan
 
 Each phase gates the next; the ordering is the whole point.

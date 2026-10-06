@@ -8,21 +8,29 @@ deviceinfo_manufacturer="Sony"
 deviceinfo_codename="sony-pdx246"
 
 # Name the real USB controller rather than letting the initramfs pick. Without
-# this, get_usb_udc() takes the first entry in /sys/class/udc, and this kernel
-# also builds dummy_hcd, which registers dummy_udc.0 - a software host and
-# gadget emulator with no connection to the USB-C port. On 2026-10-05 the
-# gadget bound to it and enumerated beautifully: cdc_ncm, cdc_acm, ttyACM0,
-# usb0 with an IP, "USB_STATE=CONFIGURED", all of it inside the phone and
-# invisible from outside. Naming the controller means a gadget either lands on
-# the hardware or fails loudly. From the stock boot: a600000.ssusb is the
-# Qualcomm glue and a600000.dwc3 the core, and the core is what registers
-# the UDC.
-deviceinfo_usb_network_udc="a600000.dwc3"
+# this, get_usb_udc() takes the first entry in /sys/class/udc, and the
+# downstream kernel also builds dummy_hcd, which registers dummy_udc.0 - a
+# software host and gadget emulator with no connection to the USB-C port. On
+# 2026-10-05 the gadget bound to it and enumerated beautifully: cdc_ncm,
+# cdc_acm, ttyACM0, usb0 with an IP, "USB_STATE=CONFIGURED", all of it inside
+# the phone and invisible from outside. Naming the controller means a gadget
+# either lands on the hardware or fails loudly.
+#
+# The name is the dwc3 core's platform device, because that is what calls
+# usb_initialize_gadget(dwc->dev, ...), and a platform device is named after
+# its device tree node. The two trees name that node differently: stock has
+# dwc3@a600000 under ssusb@a600000, ours has usb@a600000 under usb@a6f8800.
+# Our config does not build dummy_hcd at all, so the mainline line is
+# belt-and-braces rather than a fix for anything.
+deviceinfo_usb_network_udc_downstream="a600000.dwc3"
+deviceinfo_usb_network_udc_mainline="a600000.usb"
 deviceinfo_year="2024"
 deviceinfo_arch="aarch64"
 
-# Nothing in the initramfs can draw on the panel: the display stack is dispcc
-# plus a DPU and a panel driver we do not build, so /dev/fb0 never appears.
+# Nothing in the initramfs can draw on the panel, under either kernel: the
+# display stack is dispcc plus a DPU and a panel driver we do not build
+# downstream and which mainline does not have for this SoC at all, so
+# /dev/fb0 never appears.
 # Saying so turns setup_framebuffer()'s ten-second poll for it, and splash with
 # it, into a no-op - the initramfs sets nosplash=y off this one key. Worth
 # having even though "splash" is on the cmdline, because the console is a
@@ -36,13 +44,21 @@ deviceinfo_external_storage="true"
 deviceinfo_screen_width="1080"
 deviceinfo_screen_height="2520"
 
-# The base SoC device tree. pdx246 runs Qualcomm's Parrot QRD reference tree:
-# stock ships parrot.dtb in vendor_boot and applies the parrot-qrd overlay from
-# the dtbo partition on top. We build and ship the same base here and leave the
-# stock dtbo partition alone, so the bootloader applies the same overlay it
-# always did. CONFIG_BUILD_ARM64_DT_OVERLAY=y (columbia.config) is what makes
-# the base carry the __symbols__ node that overlay application needs.
-deviceinfo_dtb="vendor/qcom/parrot"
+# The device tree, and the clearest difference between the two kernels.
+#
+# Downstream runs Qualcomm's Parrot QRD reference tree: stock ships parrot.dtb
+# in vendor_boot and applies the parrot-qrd overlay from the dtbo partition on
+# top. We build and ship the same base and leave the stock dtbo partition
+# alone, so the bootloader applies the same overlay it always did.
+# CONFIG_BUILD_ARM64_DT_OVERLAY=y (columbia.config) is what makes the base
+# carry the __symbols__ node that overlay application needs.
+#
+# Mainline ships one complete tree for this board and wants nothing from the
+# dtbo partition. The bootloader will still try to apply the stock overlay to
+# it and will fail to, because the phandles it fixes up are not there; that is
+# harmless, and docs/06-mainline.md says what was checked about it.
+deviceinfo_dtb_downstream="vendor/qcom/parrot"
+deviceinfo_dtb_mainline="qcom/sm6450-sony-xperia-columbia-pdx246"
 
 # Bootloader related
 deviceinfo_flash_method="fastboot"

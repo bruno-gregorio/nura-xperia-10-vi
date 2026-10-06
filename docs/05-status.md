@@ -1190,13 +1190,31 @@ up by `dd` under `out/device-dump/stock/`, the rootfs is on the SD card, the
 handoff into the stock second stage works, and **the port boots** - see "The
 port boots" above. What is left starts from there.
 
-1. **Build the mainline kernel and boot it.** Phase 1 is written: the
-   drivers, the SoC dtsi, the four PMICs, all 45 regulators, SMEM and SMP2P,
-   the SMMU, the SD card and USB at high speed. Nothing is left that a first
-   boot needs. The next thing is an aport to build it,
-   `linux-postmarketos-qcom-sm6450`, modelled on the sm6350 one, and then a
-   boot with the flash-log hook on it. UFS and USB3 wait on identifying their
-   PHY generations; neither is needed for a shell.
+1. **Boot the mainline kernel.** Everything up to the boot is now done.
+   Phase 1 is written and the whole series builds: `arm64` `defconfig` plus
+   our three symbols produced `vmlinux` and `Image` with no warning on
+   2026-10-06, and `nm` finds `gcc_sm6450_probe` at `subsys_initcall` and
+   `sm6450_tlmm_probe` at `arch_initcall`, so the generated drivers really
+   are linked and registered rather than merely compiling.
+   `linux-postmarketos-qcom-sm6450` is the aport, built from a kernel.org
+   6.18.55 tarball plus the squashed series, with a config derived from
+   pmaports' sm6350 one. `device-sony-pdx246` now has `-kernel-downstream`
+   and `-kernel-mainline` subpackages, so `pmbootstrap init` chooses which
+   kernel to install and `deviceinfo_dtb` follows the choice. See "Building
+   it" in [06-mainline.md](06-mainline.md).
+
+   What is left is the apk build itself - the first time this code meets
+   Alpine's clang rather than the container's gcc - and then a boot with the
+   flash-log hook on it. UFS and USB3 wait on identifying their PHY
+   generations; neither is needed for a shell, because the loop boots from
+   the SD card and `sdhc_2` is written.
+
+   The honest expectation for that boot is that it does not reach userspace.
+   It is the first time a hand-written device tree for this SoC has been given
+   to a kernel, and a wrong register offset in a clock controller produces a
+   hang with nothing printed. That is what `earlycon=qcom_geni,mmio32,0x98c000`
+   and `panic=5` in `kernel-cmdline.mainline.conf` are for, and why the
+   experiment goes on the inactive slot.
 2. **Find where stock stage 1 wedges.** Still unknown, and now diagnosable:
    the watchdog arms on line 5 instead of line 35, so a hang becomes a reset
    loop that ends in Android with a flash log to read. The log hook arms right

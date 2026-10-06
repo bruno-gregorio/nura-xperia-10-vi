@@ -1,0 +1,105 @@
+# Reference: <https://postmarketos.org/vendorkernel>
+# Our own mainline kernel for the SM6450. docs/06-mainline.md is the long
+# version: what each patch derives from and how it was checked.
+
+maintainer="Bruno Gregorio <accounts@bruno.pw>"
+_flavor="postmarketos-qcom-sm6450"
+pkgname=linux-$_flavor
+pkgver=6.18.55
+pkgrel=0
+pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
+arch="aarch64"
+_carch="arm64"
+url="https://kernel.org"
+license="GPL-2.0-only"
+options="!strip !check !tracedeps
+	pmb:cross-native
+	pmb:kconfigcheck-community
+	pmb:kconfigcheck-uefi
+	"
+makedepends="
+	bison
+	clang
+	elfutils-dev
+	findutils
+	flex
+	installkernel
+	linux-headers
+	lld
+	llvm
+	openssl-dev
+	pahole
+	perl
+	python3
+	zstd
+"
+
+_config="config-$_flavor.$arch"
+
+# A stock kernel.org tarball plus our series, rather than a fork on a git
+# host. There is no fork: the work only exists as patches here, and keeping
+# the base a released tarball is what makes "based on 6.18.55" checkable by
+# someone who has never seen this repository.
+#
+# sm6450-mainline.patch is the whole series squashed, written by
+# scripts/sync-kernel-patches.sh out of the sm6450 branch in out/linux.
+# kernel/patches/ in this repository has the same change as 23 reviewable
+# commits; that is the copy to read, and the one that goes to the lists.
+source="
+	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
+	$_config
+	sm6450-mainline.patch
+"
+builddir="$srcdir/linux-$pkgver"
+
+prepare() {
+	default_prepare
+	cp "$srcdir/$_config" .config
+}
+
+build() {
+	unset LDFLAGS
+	make ARCH="$_carch" LLVM=1 \
+		KBUILD_BUILD_VERSION="$((pkgrel + 1 ))-$_flavor"
+}
+
+package() {
+	# Two images, because two things might want to boot this kernel and they
+	# disagree about the format:
+	#
+	# - Image, uncompressed, is what goes in the Android boot.img. That is
+	#   the path this device actually boots today: aboot on pdx246 has never
+	#   been shown to unpack a gzipped kernel, and the stock boot.img carries
+	#   an uncompressed image, so this is the one that is known to work.
+	#   boot-deploy picks it up as /boot/vmlinuz.
+	# - vmlinuz.efi is the EFI zboot wrapper, for the day this boots through
+	#   an EFI loader instead. Costs nothing to ship.
+	install -Dm644 "$builddir/arch/$_carch/boot/Image" "$pkgdir/boot/vmlinuz"
+	install -Dm644 "$builddir/arch/$_carch/boot/vmlinuz.efi" \
+		"$pkgdir/boot/linux.efi"
+
+	# Alpine is usr-merged, so modules belong under /usr/lib/modules.
+	make modules_install dtbs_install \
+		ARCH="$_carch" \
+		LLVM=1 \
+		INSTALL_PATH="$pkgdir/boot/" \
+		INSTALL_MOD_PATH="$pkgdir/usr" \
+		INSTALL_MOD_STRIP=1 \
+		INSTALL_DTBS_PATH="$pkgdir/boot/dtbs"
+
+	rm -f "$pkgdir"/usr/lib/modules/*/build "$pkgdir"/usr/lib/modules/*/source
+
+	# deviceinfo_dtb_mainline points here. Fail the build rather than ship a
+	# boot image with no device tree in it, which is a silent black screen.
+	test -f "$pkgdir/boot/dtbs/qcom/sm6450-sony-xperia-columbia-pdx246.dtb" \
+		|| die "the pdx246 device tree was not installed"
+
+	install -D "$builddir/include/config/kernel.release" \
+		"$pkgdir/usr/share/kernel/$_flavor/kernel.release"
+}
+
+sha512sums="
+4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
+da7dc9aa27052c0fe46c7a1bb0403beeadf5f62eeb4bc724184e60a2f90b140b0cf9d05064625778944721c871d41af7532fc3e2f958035a6858a57ae0b6e765  config-postmarketos-qcom-sm6450.aarch64
+70c555aa2ec942710788a14373a755005b3f69fc4e74125843d8670bc5ff8494219a9752eccaa300cc922e92321e99755b9b7f0baeeaa7e3134a74dedd915c13  sm6450-mainline.patch
+"

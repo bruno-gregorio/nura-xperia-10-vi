@@ -15,16 +15,30 @@ options="!check !archcheck"
 #
 # android-tools is what provides mkbootimg: boot-deploy's header v3/v4 path
 # hardcodes 'require_package "mkbootimg" "android-tools"'.
+#
+# No kernel here. Which kernel to install is chosen in 'pmbootstrap init' and
+# each choice is a subpackage below, because the two disagree about more than
+# their version: the device tree to boot, the name the USB controller gets,
+# what the initramfs has to load and how to ask for an early console. Every
+# deviceinfo key and every file that differs carries a _downstream or
+# _mainline suffix, which is the mechanism devicepkg-dev and pmbootstrap both
+# key off:
+# https://wiki.postmarketos.org/wiki/Device_specific_package#Multiple_kernels
 depends="
 	android-tools
-	linux-sony-pdx246
 	postmarketos-base
 "
 makedepends="devicepkg-dev"
 source="
 	deviceinfo
-	kernel-cmdline.conf
-	modules-initfs
+	kernel-cmdline.downstream.conf
+	kernel-cmdline.mainline.conf
+	modules-initfs.downstream
+	modules-initfs.mainline
+"
+subpackages="
+	$pkgname-kernel-downstream:kernel_downstream
+	$pkgname-kernel-mainline:kernel_mainline
 "
 
 build() {
@@ -35,8 +49,22 @@ package() {
 	devicepkg_package $startdir $pkgname
 }
 
+kernel_downstream() {
+	pkgdesc="Sony's 5.10 vendor kernel - boots, has UFS, display and modem drivers"
+	depends="linux-sony-pdx246"
+	devicepkg_subpackage_kernel $startdir $pkgname $subpkgname
+}
+
+kernel_mainline() {
+	pkgdesc="Our own 6.18 mainline kernel - SD card and USB only, see docs/06-mainline.md"
+	depends="linux-postmarketos-qcom-sm6450"
+	devicepkg_subpackage_kernel $startdir $pkgname $subpkgname
+}
+
 sha512sums="
-418b4032806a28aa3a6bfcee940c4c4b4e74a906e293f932656358ae56a712dda3ff461e57b5f90c6c49fe837e0479f3c2a2a9254b2b12cc616c3fde11cd4e9f  deviceinfo
-e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e57738a425bd75dfe7e28985cc60756f010bfd70fdbff79bb4  kernel-cmdline.conf
-603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs
+b5273f0baa014c7df3d3210cc7309328ff60deedc54fbd27701eb6775bc2b35920d8f973bbcc03d16c82560346699b972802ff9b92358cc53dd31cb5a5a9a337  deviceinfo
+e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e57738a425bd75dfe7e28985cc60756f010bfd70fdbff79bb4  kernel-cmdline.downstream.conf
+7d00f1938e6286b3815e6389dab11654cf0303121b151189c3e95a845b9795ae3bbe9534c38745a909778e77e6ade792a0ee24bce34a120eb3b77278f58ef475  kernel-cmdline.mainline.conf
+603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs.downstream
+ae7b5ca4c28bf75a61ba2b53c714ae91c54f8817a11a772a4939b9cf4a0f51821540f8a4da983239de6fa247919c6a4172ab1d21757b6b00d56d0b17a099c131  modules-initfs.mainline
 "

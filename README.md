@@ -42,11 +42,14 @@ Everything the build touches lives under this directory. Nothing is written to
 
 ```
 aports/device/testing/device-sony-pdx246/   device package (deviceinfo, initfs modules)
-aports/device/testing/linux-sony-pdx246/    kernel package
+aports/device/testing/linux-sony-pdx246/    downstream kernel package (Sony 5.10)
+aports/device/testing/linux-postmarketos-qcom-sm6450/
+                                            mainline kernel package (6.18 + our series)
+kernel/patches/                             the mainline series, one patch per commit
 patches/                                    fixes pmbootstrap needs to run rootless
 scripts/                                    bootstrap, pmbootstrap wrapper, aports sync, device probe, flashing
 docs/                                       device facts, design, build, flashing, status
-out/                                        (gitignored) build and install logs
+out/                                        (gitignored) build and install logs, the kernel tree
 .pmb/                                       (gitignored) venv, pmbootstrap, pmaports, chroots
 ```
 
@@ -61,11 +64,21 @@ Every command runs inside the `pmport` distrobox container.
    distrobox enter pmport -- ./scripts/pmb init
    ```
 
-2. **Build the kernel.**
+2. **Build the kernel.** There are two, chosen in `pmb init`: Sony's 5.10,
+   which boots and has UFS and display drivers, or our own mainline 6.18,
+   which is the point of the project. Build whichever one `pmb init` selected.
 
    ```sh
    distrobox enter pmport -- ./scripts/pmb build linux-sony-pdx246
+   distrobox enter pmport -- ./scripts/pmb build linux-postmarketos-qcom-sm6450
    ```
+
+   The mainline package builds a stock kernel.org tarball plus
+   `sm6450-mainline.patch`. That patch is generated, not edited: the work
+   lives on the `sm6450` branch in `out/linux`, and
+   `scripts/sync-kernel-patches.sh` writes it out both as that single diff and
+   as the reviewable series in `kernel/patches/`. Run it after every kernel
+   commit, then `./scripts/pmb checksum linux-postmarketos-qcom-sm6450`.
 
 3. **Build the boot images.** Do not pass `--split`; this device flashes the
    combined image.

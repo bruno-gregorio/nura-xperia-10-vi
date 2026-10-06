@@ -206,6 +206,9 @@ actually does, and it corrects three of the guesses.
 - **`scripts/clkmap.py`** — translates a vendor clock id into the mainline
   define name, because the two headers share names and not numbers. Anything
   copied out of the stock device tree goes through it.
+- **`scripts/sync-kernel-patches.sh`** — exports the mainline branch out of
+  the gitignored `out/linux` into `kernel/patches/` and into the kernel
+  aport. `--check` fails a round that would build from a stale export.
 
 ### Three corrections to the plan above
 
@@ -247,6 +250,37 @@ actually does, and it corrects three of the guesses.
 
 Steps 1, 3 and 4 need no hands. Step 2 is the new one, and it is the one that
 makes rootfs work cheap.
+
+### Two kernels, one loop
+
+Since 2026-10-06 the device package offers a choice: `-kernel-downstream`,
+Sony's 5.10 tree, which boots and has UFS and display drivers, and
+`-kernel-mainline`, our own 6.18, which has neither and is the point of the
+project. `pmbootstrap init` picks one, and `deviceinfo_dtb`, the initramfs
+module list, the USB controller name and the kernel command line all follow
+the choice; "Building it" in [06-mainline.md](06-mainline.md) says why each
+one differs.
+
+Nothing about the loop changes. The same `try-kernel.sh` round flashes
+whichever kernel is installed, to the same inactive slot, and recovers the
+same way, because the recovery path is the bootloader's A/B retry counter and
+knows nothing about what it is booting. That was the point of building the
+loop before the kernel.
+
+Two things do change:
+
+- `scripts/verify-build.sh` now takes `downstream` or `mainline`, and works
+  it out on its own when only one is built. Each kernel promises a different
+  DTB path and a different initramfs module list, and the script checks the
+  one that applies.
+- The kernel source of truth moved. Downstream builds from a GitHub tarball
+  with no patches of ours; mainline builds from a kernel.org tarball plus
+  `sm6450-mainline.patch`, which `scripts/sync-kernel-patches.sh` writes out
+  of `out/linux`. A round that changes the kernel therefore runs that script
+  and then `scripts/pmb checksum linux-postmarketos-qcom-sm6450` before
+  anything else, and `sync-kernel-patches.sh --check` is a Tier 0 check: it
+  fails if the aport would build from a series that does not match the tree
+  the work was done in.
 
 ### What is still missing
 

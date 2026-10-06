@@ -35,10 +35,31 @@ WANT_ADDRS = {
     "tags_addr": 0x00000100,
     "dtb_addr": 0x01F00000,
 }
-DEVICEINFO = ROOT / "aports/device/testing/device-sony-pdx246/deviceinfo"
-MODULES_INITFS = ROOT / "aports/device/testing/device-sony-pdx246/modules-initfs"
-CMDLINE_CONF = ROOT / "aports/device/testing/device-sony-pdx246/kernel-cmdline.conf"
+DEVPKG = ROOT / "aports/device/testing/device-sony-pdx246"
+DEVICEINFO = DEVPKG / "deviceinfo"
 KERNEL_APK = ROOT / ".pmb/work/packages/edge/aarch64"
+PMB_CFG = ROOT / ".pmb/pmbootstrap_v3.cfg"
+
+
+def selected_kernel():
+    """Which of the device package's kernels this boot image was built for.
+
+    The device package offers -kernel-downstream and -kernel-mainline, and the
+    two promise different device trees, initramfs module lists and command
+    lines. pmbootstrap's own config is the right place to ask, because it is
+    what chose the kernel subpackage that went into the rootfs this script is
+    checking - not the newest apk, and not a guess from a filename.
+    """
+    for line in PMB_CFG.read_text().splitlines():
+        k, _, v = line.partition("=")
+        if k.strip() == "kernel":
+            return v.strip()
+    return "downstream"
+
+
+KERNEL = selected_kernel()
+MODULES_INITFS = DEVPKG / f"modules-initfs.{KERNEL}"
+CMDLINE_CONF = DEVPKG / f"kernel-cmdline.{KERNEL}.conf"
 
 fails = []
 
@@ -56,12 +77,26 @@ def check(ok, msg, detail="", hint=""):
 
 
 def deviceinfo():
+    """deviceinfo as the selected kernel sees it.
+
+    Keys that differ between the two kernels carry a _downstream or _mainline
+    suffix in the file, and the one that applies wins under the bare name -
+    the same rewrite devicepkg_subpackage_kernel does when it builds the
+    subpackage, and pmb.parse.deviceinfo does when it reads one. A suffix for
+    the other kernel is dropped rather than left to shadow anything.
+    """
     d = {}
     for line in DEVICEINFO.read_text().splitlines():
         line = line.strip()
         if line.startswith("deviceinfo_") and "=" in line:
             k, _, v = line.partition("=")
             d[k] = v.strip('"')
+    for k in list(d):
+        if k.endswith(f"_{KERNEL}"):
+            d[k[: -len(KERNEL) - 1]] = d.pop(k)
+    for k in list(d):
+        if any(k.endswith(f"_{o}") for o in ("downstream", "mainline")):
+            del d[k]
     return d
 
 

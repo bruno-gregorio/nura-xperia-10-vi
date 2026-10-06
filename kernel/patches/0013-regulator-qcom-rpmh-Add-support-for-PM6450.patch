@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Tue, 6 Oct 2026 14:32:16 -0300
+Subject: [PATCH] regulator: qcom-rpmh: Add support for PM6450
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add the regulator data for PM6450, the companion PMIC on SM6450 boards.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/regulator/qcom-rpmh-regulator.c | 42 +++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/drivers/regulator/qcom-rpmh-regulator.c b/drivers/regulator/qcom-rpmh-regulator.c
+index 933eb0c28..4b83fc437 100644
+--- a/drivers/regulator/qcom-rpmh-regulator.c
++++ b/drivers/regulator/qcom-rpmh-regulator.c
+@@ -1341,6 +1341,44 @@ static const struct rpmh_vreg_init_data pm6350_vreg_data[] = {
+ 	RPMH_VREG("ldo22",  "ldo%s22", &pmic5_nldo,      NULL),
+ };
+ 
++static const struct rpmh_vreg_init_data pm6450_vreg_data[] = {
++	/*
++	 * smps1, smps3, smps5, ldo2 and ldo9 are ARC resources (cx, gfx, ebi,
++	 * lcx and lmx) and are described by rpmhpd, not here. smps2, smps4
++	 * and ldo15 are not named by any RPMh resource.
++	 */
++	RPMH_VREG("smps6",  "smp%s6",  &pmic5_ftsmps510, NULL),
++	RPMH_VREG("smps7",  "smp%s7",  &pmic5_ftsmps510, NULL),
++	RPMH_VREG("smps8",  "smp%s8",  &pmic5_hfsmps510, NULL),
++	RPMH_VREG("smps9",  "smp%s9",  &pmic5_hfsmps515, NULL),
++	RPMH_VREG("ldo1",   "ldo%s1",  &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo3",   "ldo%s3",  &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo4",   "ldo%s4",  &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo5",   "ldo%s5",  &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo6",   "ldo%s6",  &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo7",   "ldo%s7",  &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo8",   "ldo%s8",  &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo10",  "ldo%s10", &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo11",  "ldo%s11", &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo12",  "ldo%s12", &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo13",  "ldo%s13", &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo14",  "ldo%s14", &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo16",  "ldo%s16", &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo17",  "ldo%s17", &pmic5_nldo,      NULL),
++	RPMH_VREG("ldo18",  "ldo%s18", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo19",  "ldo%s19", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo20",  "ldo%s20", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo21",  "ldo%s21", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo22",  "ldo%s22", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo23",  "ldo%s23", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo24",  "ldo%s24", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo25",  "ldo%s25", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo26",  "ldo%s26", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo27",  "ldo%s27", &pmic5_pldo,      NULL),
++	RPMH_VREG("ldo28",  "ldo%s28", &pmic5_pldo,      NULL),
++	{}
++};
++
+ static const struct rpmh_vreg_init_data pmx55_vreg_data[] = {
+ 	RPMH_VREG("smps1",   "smp%s1",    &pmic5_ftsmps510, "vdd-s1"),
+ 	RPMH_VREG("smps2",   "smp%s2",    &pmic5_hfsmps510, "vdd-s2"),
+@@ -1681,6 +1719,10 @@ static const struct of_device_id __maybe_unused rpmh_regulator_match_table[] = {
+ 		.compatible = "qcom,pm6350-rpmh-regulators",
+ 		.data = pm6350_vreg_data,
+ 	},
++	{
++		.compatible = "qcom,pm6450-rpmh-regulators",
++		.data = pm6450_vreg_data,
++	},
+ 	{
+ 		.compatible = "qcom,pmc8180-rpmh-regulators",
+ 		.data = pm8150_vreg_data,

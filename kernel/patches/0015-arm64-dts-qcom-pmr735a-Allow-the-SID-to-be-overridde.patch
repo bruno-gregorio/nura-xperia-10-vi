@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Tue, 6 Oct 2026 14:32:36 -0300
+Subject: [PATCH] arm64: dts: qcom: pmr735a: Allow the SID to be overridden
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+PMR735A is not always at SID 4. On SM6450 boards it sits at SID 6, so give
+it the same PMR735A_SID escape hatch pmk8350.dtsi already has, defaulting
+to 4 so that every board using it today is unaffected.
+
+The generated dtbs for all eleven boards that include this file are
+byte-identical before and after.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ arch/arm64/boot/dts/qcom/pmr735a.dtsi | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/pmr735a.dtsi b/arch/arm64/boot/dts/qcom/pmr735a.dtsi
+index f8efd8e5e..7ac97cba7 100644
+--- a/arch/arm64/boot/dts/qcom/pmr735a.dtsi
++++ b/arch/arm64/boot/dts/qcom/pmr735a.dtsi
+@@ -6,17 +6,22 @@
+ #include <dt-bindings/interrupt-controller/irq.h>
+ #include <dt-bindings/spmi/spmi.h>
+ 
++/* This PMIC can be configured to be at different SIDs */
++#ifndef PMR735A_SID
++	#define PMR735A_SID 4
++#endif
++
+ &spmi_bus {
+-	pmr735a: pmic@4 {
++	pmr735a: pmic@PMR735A_SID {
+ 		compatible = "qcom,pmr735a", "qcom,spmi-pmic";
+-		reg = <0x4 SPMI_USID>;
++		reg = <PMR735A_SID SPMI_USID>;
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+ 
+ 		pmr735a_temp_alarm: temp-alarm@a00 {
+ 			compatible = "qcom,spmi-temp-alarm";
+ 			reg = <0xa00>;
+-			interrupts = <0x4 0xa 0x0 IRQ_TYPE_EDGE_BOTH>;
++			interrupts = <PMR735A_SID 0xa 0x0 IRQ_TYPE_EDGE_BOTH>;
+ 			#thermal-sensor-cells = <0>;
+ 		};
+ 

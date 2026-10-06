@@ -12,6 +12,12 @@ clk: qcom: clk-rpmh: Add support for SM6450
 dt-bindings: power: qcom,rpmpd: Add SM6450
 pmdomain: qcom: rpmhpd: Add SM6450 power domains
 dt-bindings: qcom: Add SM6450 compatibles for PDC, IPCC, WDT and EPSS
+dt-bindings: spmi: Add SM6450 SPMI PMIC arbiter
+dt-bindings: mfd: qcom,spmi-pmic: Add PM6450
+dt-bindings: regulator: qcom,rpmh-regulator: Add PM6450
+regulator: qcom-rpmh: Add support for PM6450
 dt-bindings: arm: qcom: Document SM6450 and Sony Xperia 10 VI
+arm64: dts: qcom: pmr735a: Allow the SID to be overridden
 arm64: dts: qcom: Add SM6450 SoC device tree
+arm64: dts: qcom: Add PM6450 PMIC device tree
 arm64: dts: qcom: Add Sony Xperia 10 VI

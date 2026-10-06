@@ -45,10 +45,19 @@ no device time, so work is pushed down as far as it will go.
 
 2. **Device tree validation.** `make dt_binding_check` and `make dtbs_check`
    against the bindings, plus `W=1` on the drivers.
-3. **DTB differential.** Decompile the built DTB and diff register bases,
-   interrupts and clock ids against the stock `parrot.dtsi`. This is the
-   technique the LineageOS port used to prove the device tree finding, pointed
-   at our own output instead.
+3. **DTB differential.** Implemented in `scripts/check-dt.py`. Decompile the
+   built DTB and check every address and interrupt in it against the tree the
+   device actually boots. The reference turned out to be better than this plan
+   assumed: not the stock `parrot.dtsi` but `/proc/device-tree` read off the
+   running stock Android, which is the resolved tree for this exact board.
+   A deliberate deviation passes only if it is named on the command line, so
+   the list of them stays honest.
+
+   ```sh
+   out/kbuild/scripts/dtc/dtc -I fs -O dts \
+       out/device-dump-root/devicetree/base > live.dts
+   scripts/check-dt.py --allow 0xf100000=tlmm-rebase ours.dts live.dts
+   ```
 4. **Package shape.** Already implemented in `scripts/verify-build.sh`: the DTB
    we boot is present, and every module named in `modules-initfs` was built.
 
@@ -192,6 +201,8 @@ actually does, and it corrects three of the guesses.
   phone's own initramfs shell, so the card never has to come out.
 - **`scripts/check-tables.sh`** and **`scripts/verify-build.sh`** — the two
   Tier 0 checks, unchanged and still the first thing every round runs.
+- **`scripts/check-dt.py`** — the third, written once the mainline device tree
+  existed to check.
 
 ### Three corrections to the plan above
 

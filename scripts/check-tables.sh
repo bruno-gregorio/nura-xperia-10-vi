@@ -134,18 +134,26 @@ join -t"$(printf '\t')" "$WORK/ref" "$WORK/cand" > "$WORK/both"
 # collapses downstream's per-signal names into one function group per mux slot
 # (downstream qup1_se0_l0 / cmu_rng_entropy3 / phase_flag_status27 become
 # mainline qup1_se0 / cmu_rng / phase_flag) and spells "unused" as _ rather
-# than NA. An exact comparison is therefore 100% false positives. What still
-# has to hold, slot by slot, is that both sides agree a slot is unused, or the
-# mainline name is a prefix of the vendor one. That catches the errors that
-# matter - a function in the wrong slot, a shifted or dropped pin - while
-# accepting the rename convention.
+# than NA. Case is not reliable either: the vendor headers are inconsistent
+# about it - parrot writes QSPI0 and PCIE0_CLK_REQ in capitals and everything
+# else in lower case - while every mainline driver is lower case throughout.
+# An exact comparison is therefore 100% false positives. What still has to
+# hold, slot by slot, is that both sides agree a slot is unused, or the
+# mainline name is a prefix of the vendor one, ignoring case. That catches the
+# errors that matter - a function in the wrong slot, a shifted or dropped pin -
+# while accepting the rename convention. It caught a real one: a generator that
+# lower-cased the function tables but not the macro arguments turned nine mux
+# assignments into "unused" with nothing else complaining.
 case "$MODE" in
 clk)
 	awk -F'\t' '$2 != $3' "$WORK/both" > "$WORK/bad"
 	;;
 pinctrl)
 	awk -F'\t' '
-		function norm(s) { return (s == "NA" || s == "na") ? "_" : s }
+		function norm(s) {
+			s = tolower(s)
+			return (s == "na") ? "_" : s
+		}
 		{
 			nr = split($2, r, ","); nc = split($3, c, ",")
 			bad = (nr != nc)

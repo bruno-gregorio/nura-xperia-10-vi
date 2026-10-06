@@ -398,10 +398,17 @@ def rewrite_probe(text, soc, target, keep_calls):
         lines.append("\tqcom_branch_set_clk_en(regmap, %s);%s" % (reg, label))
 
     # Any other regmap_update_bits is SoC-specific and kept verbatim, because
-    # we do not know what it does well enough to drop it.
-    others = [o.group(0) for o in
-              re.finditer(r"regmap_update_bits\(regmap, [^\n]*\);", body)
-              if "BIT(0), BIT(0)" not in o.group(0)]
+    # we do not know what it does well enough to drop it - and whatever comment
+    # the vendor put above it comes along, since that comment is often the only
+    # record of what the bit means.
+    others = []
+    for o in re.finditer(r"(?:[ \t]*/\*(?:[^*]|\*(?!/))*\*/\n)?"
+                         r"[ \t]*regmap_update_bits\(regmap, [^\n]*\);", body):
+        stmt = o.group(0)
+        if "BIT(0), BIT(0)" in stmt:
+            continue
+        others.append("\n".join(l.strip() and "\t" + l.strip() or l
+                                for l in stmt.split("\n")).lstrip("\t"))
     pll = re.findall(r"clk_lucid_evo_pll_configure\([^\n]*\);", body)
     dfs = "qcom_cc_register_rcg_dfs" in body
 

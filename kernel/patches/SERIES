@@ -5,3 +5,5 @@
 #
 dt-bindings: clock: Add Qualcomm SM6450 GCC clock bindings
 clk: qcom: Add Global Clock Controller driver for SM6450
+dt-bindings: pinctrl: Add Qualcomm SM6450 TLMM bindings
+pinctrl: qcom: Add SM6450 pinctrl driver

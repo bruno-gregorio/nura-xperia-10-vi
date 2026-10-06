@@ -12,8 +12,8 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  drivers/pinctrl/qcom/Kconfig.msm      |   10 +
  drivers/pinctrl/qcom/Makefile         |    1 +
- drivers/pinctrl/qcom/pinctrl-sm6450.c | 1113 +++++++++++++++++++++++++
- 3 files changed, 1124 insertions(+)
+ drivers/pinctrl/qcom/pinctrl-sm6450.c | 1111 +++++++++++++++++++++++++
+ 3 files changed, 1122 insertions(+)
  create mode 100644 drivers/pinctrl/qcom/pinctrl-sm6450.c
 
 diff --git a/drivers/pinctrl/qcom/Kconfig.msm b/drivers/pinctrl/qcom/Kconfig.msm
@@ -51,10 +51,10 @@ index 9d7ada203..25488cf3b 100644
  obj-$(CONFIG_PINCTRL_SM8250) += pinctrl-sm8250.o
 diff --git a/drivers/pinctrl/qcom/pinctrl-sm6450.c b/drivers/pinctrl/qcom/pinctrl-sm6450.c
 new file mode 100644
-index 000000000..2b62eb951
+index 000000000..68d3b58b4
 --- /dev/null
 +++ b/drivers/pinctrl/qcom/pinctrl-sm6450.c
-@@ -0,0 +1,1113 @@
+@@ -0,0 +1,1111 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Copyright (c) 2026 Qualcomm Innovation Center, Inc. All rights reserved.
@@ -164,8 +164,6 @@ index 000000000..2b62eb951
 +		.mode = qup_mode,			\
 +		.offset = qup_offset,			\
 +	}
-+
-+
 +
 +static const struct pinctrl_pin_desc sm6450_pins[] = {
 +	PINCTRL_PIN(0, "GPIO_0"),

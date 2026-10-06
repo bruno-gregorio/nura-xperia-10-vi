@@ -388,11 +388,14 @@ def convert(header, soc, target, ngpios, up_names, year, extra=()):
     out.append(d["pdc"].replace("%s_pdc_map[]" % soc,
                                 "%s_pdc_map[]" % target).rstrip("\n"))
     out.append(TAIL.format(target=target, TARGET=target.upper(), ngpios=ngpios))
-    # Collapse runs of blank lines, but keep the double blank the upstream
-    # files have between the macro block and the first table.
-    text = "\n".join(out)
-    head, sep, rest = text.partition("static const struct pinctrl_pin_desc")
-    return head + sep + re.sub(r"\n{3,}", "\n\n", rest), loose
+    # Collapse runs of blank lines. The sections above are glued together
+    # with a blank line of their own, so joining them can leave two or three
+    # in a row. pinctrl-sm4450.c does carry a double blank between the macro
+    # block and the first table, but checkpatch rejects that in a new file
+    # ("Please don't use multiple blank lines"), and an in-tree file is never
+    # re-checked, so this is one of the few places the generator deliberately
+    # does not reproduce its reference.
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)), loose
 
 
 def up_function_names(path):

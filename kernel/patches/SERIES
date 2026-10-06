@@ -7,3 +7,11 @@ dt-bindings: clock: Add Qualcomm SM6450 GCC clock bindings
 clk: qcom: Add Global Clock Controller driver for SM6450
 dt-bindings: pinctrl: Add Qualcomm SM6450 TLMM bindings
 pinctrl: qcom: Add SM6450 pinctrl driver
+dt-bindings: clock: qcom,rpmhcc: Add SM6450
+clk: qcom: clk-rpmh: Add support for SM6450
+dt-bindings: power: qcom,rpmpd: Add SM6450
+pmdomain: qcom: rpmhpd: Add SM6450 power domains
+dt-bindings: qcom: Add SM6450 compatibles for PDC, IPCC, WDT and EPSS
+dt-bindings: arm: qcom: Document SM6450 and Sony Xperia 10 VI
+arm64: dts: qcom: Add SM6450 SoC device tree
+arm64: dts: qcom: Add Sony Xperia 10 VI

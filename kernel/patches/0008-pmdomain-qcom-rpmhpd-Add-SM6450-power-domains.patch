@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Tue, 6 Oct 2026 09:04:48 -0300
+Subject: [PATCH] pmdomain: qcom: rpmhpd: Add SM6450 power domains
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SM6450 exposes cx (and its active-only variant), ebi, gfx, lcx, lmx,
+mss and mx.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/pmdomain/qcom/rpmhpd.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/drivers/pmdomain/qcom/rpmhpd.c b/drivers/pmdomain/qcom/rpmhpd.c
+index 4c3cbf3ab..c5f43600b 100644
+--- a/drivers/pmdomain/qcom/rpmhpd.c
++++ b/drivers/pmdomain/qcom/rpmhpd.c
+@@ -395,6 +395,23 @@ static const struct rpmhpd_desc sm4450_desc = {
+ 	.num_pds = ARRAY_SIZE(sm4450_rpmhpds),
+ };
+ 
++/* SM6450 RPMH powerdomains */
++static struct rpmhpd *sm6450_rpmhpds[] = {
++	[RPMHPD_CX] = &cx,
++	[RPMHPD_CX_AO] = &cx_ao,
++	[RPMHPD_EBI] = &ebi,
++	[RPMHPD_GFX] = &gfx,
++	[RPMHPD_LCX] = &lcx,
++	[RPMHPD_LMX] = &lmx,
++	[RPMHPD_MSS] = &mss,
++	[RPMHPD_MX] = &mx,
++};
++
++static const struct rpmhpd_desc sm6450_desc = {
++	.rpmhpds = sm6450_rpmhpds,
++	.num_pds = ARRAY_SIZE(sm6450_rpmhpds),
++};
++
+ /* SM6350 RPMH powerdomains */
+ static struct rpmhpd *sm6350_rpmhpds[] = {
+ 	[SM6350_CX] = &cx_w_mx_parent,
+@@ -790,6 +807,7 @@ static const struct of_device_id rpmhpd_match_table[] = {
+ 	{ .compatible = "qcom,sdx75-rpmhpd", .data = &sdx75_desc},
+ 	{ .compatible = "qcom,sm4450-rpmhpd", .data = &sm4450_desc },
+ 	{ .compatible = "qcom,sm6350-rpmhpd", .data = &sm6350_desc },
++	{ .compatible = "qcom,sm6450-rpmhpd", .data = &sm6450_desc },
+ 	{ .compatible = "qcom,sm7150-rpmhpd", .data = &sm7150_desc },
+ 	{ .compatible = "qcom,sm8150-rpmhpd", .data = &sm8150_desc },
+ 	{ .compatible = "qcom,sm8250-rpmhpd", .data = &sm8250_desc },

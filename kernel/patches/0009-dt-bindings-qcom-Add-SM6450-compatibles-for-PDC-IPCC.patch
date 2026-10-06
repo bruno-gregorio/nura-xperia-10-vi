@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Tue, 6 Oct 2026 09:04:48 -0300
+Subject: [PATCH] dt-bindings: qcom: Add SM6450 compatibles for PDC, IPCC, WDT
+ and EPSS
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Document the SM6450 variants of the power domain controller, the
+inter-processor communication controller, the APSS watchdog and the
+EPSS CPU frequency controller. SM6450 has two frequency domains, so it
+joins the two-domain list as well.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ Documentation/devicetree/bindings/cpufreq/cpufreq-qcom-hw.yaml  | 2 ++
+ .../devicetree/bindings/interrupt-controller/qcom,pdc.yaml      | 1 +
+ Documentation/devicetree/bindings/mailbox/qcom-ipcc.yaml        | 1 +
+ Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml        | 1 +
+ 4 files changed, 5 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/cpufreq/cpufreq-qcom-hw.yaml b/Documentation/devicetree/bindings/cpufreq/cpufreq-qcom-hw.yaml
+index 2d42fc3d8..15866540c 100644
+--- a/Documentation/devicetree/bindings/cpufreq/cpufreq-qcom-hw.yaml
++++ b/Documentation/devicetree/bindings/cpufreq/cpufreq-qcom-hw.yaml
+@@ -45,6 +45,7 @@ properties:
+               - qcom,sdx75-cpufreq-epss
+               - qcom,sm4450-cpufreq-epss
+               - qcom,sm6375-cpufreq-epss
++              - qcom,sm6450-cpufreq-epss
+               - qcom,sm8250-cpufreq-epss
+               - qcom,sm8350-cpufreq-epss
+               - qcom,sm8450-cpufreq-epss
+@@ -146,6 +147,7 @@ allOf:
+               - qcom,sm6115-cpufreq-hw
+               - qcom,sm6350-cpufreq-hw
+               - qcom,sm6375-cpufreq-epss
++              - qcom,sm6450-cpufreq-epss
+     then:
+       properties:
+         reg:
+diff --git a/Documentation/devicetree/bindings/interrupt-controller/qcom,pdc.yaml b/Documentation/devicetree/bindings/interrupt-controller/qcom,pdc.yaml
+index 38d0c2d57..40ac51184 100644
+--- a/Documentation/devicetree/bindings/interrupt-controller/qcom,pdc.yaml
++++ b/Documentation/devicetree/bindings/interrupt-controller/qcom,pdc.yaml
+@@ -44,6 +44,7 @@ properties:
+           - qcom,sdx75-pdc
+           - qcom,sm4450-pdc
+           - qcom,sm6350-pdc
++          - qcom,sm6450-pdc
+           - qcom,sm8150-pdc
+           - qcom,sm8250-pdc
+           - qcom,sm8350-pdc
+diff --git a/Documentation/devicetree/bindings/mailbox/qcom-ipcc.yaml b/Documentation/devicetree/bindings/mailbox/qcom-ipcc.yaml
+index e5c423130..59455b574 100644
+--- a/Documentation/devicetree/bindings/mailbox/qcom-ipcc.yaml
++++ b/Documentation/devicetree/bindings/mailbox/qcom-ipcc.yaml
+@@ -35,6 +35,7 @@ properties:
+           - qcom,sdx75-ipcc
+           - qcom,sm6350-ipcc
+           - qcom,sm6375-ipcc
++          - qcom,sm6450-ipcc
+           - qcom,sm8250-ipcc
+           - qcom,sm8350-ipcc
+           - qcom,sm8450-ipcc
+diff --git a/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml b/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
+index 49e2b807d..52239b3ac 100644
+--- a/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
++++ b/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
+@@ -40,6 +40,7 @@ properties:
+               - qcom,apss-wdt-sdx65
+               - qcom,apss-wdt-sm6115
+               - qcom,apss-wdt-sm6350
++              - qcom,apss-wdt-sm6450
+               - qcom,apss-wdt-sm8150
+               - qcom,apss-wdt-sm8250
+           - const: qcom,kpss-wdt

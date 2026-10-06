@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Tue, 6 Oct 2026 09:04:48 -0300
+Subject: [PATCH] dt-bindings: arm: qcom: Document SM6450 and Sony Xperia 10 VI
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add the SoC and the one device built on it, the Sony Xperia 10 VI
+(pdx246, codenamed columbia).
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ Documentation/devicetree/bindings/arm/qcom.yaml | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
+index 18b5ed044..1500a8fdf 100644
+--- a/Documentation/devicetree/bindings/arm/qcom.yaml
++++ b/Documentation/devicetree/bindings/arm/qcom.yaml
+@@ -955,6 +955,11 @@ properties:
+               - sony,pdx225
+           - const: qcom,sm6375
+ 
++      - items:
++          - enum:
++              - sony,pdx246
++          - const: qcom,sm6450
++
+       - items:
+           - enum:
+               - xiaomi,curtana

@@ -13,20 +13,25 @@ IPCC, the TCSR mutex, the memory-mapped timer, the APSS watchdog, the
 RPMh RSC with its clock and power domain controllers, the EPSS CPU
 frequency controller, the QUPv3 wrapper holding the debug UART, the
 SPMI arbiter with both its buses, the AOSS side channel and its sleep
-stats, and SMEM with the four SMP2P edges that ride on it.
+stats, SMEM with the four SMP2P edges that ride on it, the apps SMMU,
+the SD card controller, and USB with its high-speed PHY.
+
+The USB3 + DP combo PHY at 0x88e8000 is left out: which upstream QMP
+generation it is has not been established. Until it has, the controller
+runs at high speed off the UTMI clock, which is enough for a console.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- arch/arm64/boot/dts/qcom/sm6450.dtsi | 1032 ++++++++++++++++++++++++++
- 1 file changed, 1032 insertions(+)
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 1320 ++++++++++++++++++++++++++
+ 1 file changed, 1320 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450.dtsi
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..272cb420c
+index 000000000..1828560be
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,1032 @@
+@@ -0,0 +1,1320 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -767,6 +772,148 @@ index 000000000..272cb420c
 +			#hwlock-cells = <1>;
 +		};
 +
++		sdhc_2: mmc@8804000 {
++			compatible = "qcom,sm6450-sdhci", "qcom,sdhci-msm-v5";
++			reg = <0x0 0x08804000 0x0 0x1000>;
++
++			interrupts = <GIC_SPI 207 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 223 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "hc_irq", "pwr_irq";
++			iommus = <&apps_smmu 0x540 0x0>;
++
++			clocks = <&gcc GCC_SDCC2_AHB_CLK>,
++				 <&gcc GCC_SDCC2_APPS_CLK>,
++				 <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "iface", "core", "xo";
++			resets = <&gcc GCC_SDCC2_BCR>;
++
++			/*
++			 * The stock tree packs these into one qcom,dll-hsr-list;
++			 * its first and last words are the two mainline reads
++			 * separately, and both are what SM6350 uses.
++			 */
++			qcom,dll-config = <0x0007642c>;
++			qcom,ddr-config = <0x80040868>;
++
++			power-domains = <&rpmhpd RPMHPD_CX>;
++			operating-points-v2 = <&sdhc2_opp_table>;
++			bus-width = <4>;
++			dma-coherent;
++
++			status = "disabled";
++
++			sdhc2_opp_table: opp-table {
++				compatible = "operating-points-v2";
++
++				/*
++				 * The two frequencies are the stock tree's. The
++				 * corner each one needs is not in it, and these
++				 * are SM6350's, which has the same two
++				 * frequencies and the same DLL and DDR words.
++				 */
++				opp-100000000 {
++					opp-hz = /bits/ 64 <100000000>;
++					required-opps = <&rpmhpd_opp_svs_l1>;
++				};
++
++				opp-202000000 {
++					opp-hz = /bits/ 64 <202000000>;
++					required-opps = <&rpmhpd_opp_nom>;
++				};
++			};
++		};
++
++		usb_1_hsphy: phy@88e3000 {
++			compatible = "qcom,sm6450-usb-hs-phy",
++				     "qcom,usb-snps-hs-7nm-phy";
++			reg = <0x0 0x088e3000 0x0 0x400>;
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "ref";
++			resets = <&gcc GCC_QUSB2PHY_PRIM_BCR>;
++
++			#phy-cells = <0>;
++
++			status = "disabled";
++		};
++
++		usb_1: usb@a6f8800 {
++			compatible = "qcom,sm6450-dwc3", "qcom,dwc3";
++			reg = <0x0 0x0a6f8800 0x0 0x400>;
++
++			clocks = <&gcc GCC_CFG_NOC_USB3_PRIM_AXI_CLK>,
++				 <&gcc GCC_USB30_PRIM_MASTER_CLK>,
++				 <&gcc GCC_AGGRE_USB3_PRIM_AXI_CLK>,
++				 <&gcc GCC_USB30_PRIM_SLEEP_CLK>,
++				 <&gcc GCC_USB30_PRIM_MOCK_UTMI_CLK>;
++			clock-names = "cfg_noc",
++				      "core",
++				      "iface",
++				      "sleep",
++				      "mock_utmi";
++
++			assigned-clocks = <&gcc GCC_USB30_PRIM_MOCK_UTMI_CLK>,
++					  <&gcc GCC_USB30_PRIM_MASTER_CLK>;
++			assigned-clock-rates = <19200000>, <133333333>;
++
++			/*
++			 * The stock tree names four of these five: it has no
++			 * hs_phy_irq. SPI 130 for pwr_event and SPI 133 for
++			 * the core are what SM6350 uses, which puts hs_phy_irq
++			 * at 131, and 131 is claimed by nothing else in the
++			 * stock tree. That is the one inferred line here.
++			 */
++			interrupts-extended = <&intc GIC_SPI 130 IRQ_TYPE_LEVEL_HIGH>,
++					      <&intc GIC_SPI 131 IRQ_TYPE_LEVEL_HIGH>,
++					      <&pdc 14 IRQ_TYPE_EDGE_BOTH>,
++					      <&pdc 15 IRQ_TYPE_EDGE_BOTH>,
++					      <&pdc 17 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "pwr_event",
++					  "hs_phy_irq",
++					  "dp_hs_phy_irq",
++					  "dm_hs_phy_irq",
++					  "ss_phy_irq";
++
++			power-domains = <&gcc GCC_USB30_PRIM_GDSC>;
++
++			resets = <&gcc GCC_USB30_PRIM_BCR>;
++
++			/*
++			 * There is a USB3 + DP combo PHY at 0x88e8000, but
++			 * which upstream QMP generation it is has not been
++			 * established yet. Until it has, the controller runs
++			 * at high speed off the UTMI clock alone.
++			 */
++			qcom,select-utmi-as-pipe-clk;
++
++			#address-cells = <2>;
++			#size-cells = <2>;
++			ranges;
++
++			status = "disabled";
++
++			usb_1_dwc3: usb@a600000 {
++				compatible = "snps,dwc3";
++				reg = <0x0 0x0a600000 0x0 0xcd00>;
++				interrupts = <GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>;
++				iommus = <&apps_smmu 0x80 0x0>;
++				phys = <&usb_1_hsphy>;
++				phy-names = "usb2-phy";
++				maximum-speed = "high-speed";
++
++				snps,dis-u1-entry-quirk;
++				snps,dis-u2-entry-quirk;
++				snps,dis_u2_susphy_quirk;
++				snps,dis_u3_susphy_quirk;
++				snps,has-lpm-erratum;
++				snps,hird-threshold = /bits/ 8 <0x0>;
++				snps,is-utmi-l1-suspend;
++				snps,usb2-gadget-lpm-disable;
++				snps,usb2-lpm-disable;
++				tx-fifo-resize;
++			};
++		};
++
 +		pdc: interrupt-controller@b220000 {
 +			compatible = "qcom,sm6450-pdc", "qcom,pdc";
 +			reg = <0x0 0x0b220000 0x0 0x30000>,
@@ -872,6 +1019,152 @@ index 000000000..272cb420c
 +				drive-strength = <2>;
 +				bias-disable;
 +			};
++
++			sdc2_off_state: sdc2-off-state {
++				clk-pins {
++					pins = "sdc2_clk";
++					drive-strength = <2>;
++					bias-disable;
++				};
++
++				cmd-pins {
++					pins = "sdc2_cmd";
++					drive-strength = <2>;
++					bias-pull-up;
++				};
++
++				data-pins {
++					pins = "sdc2_data";
++					drive-strength = <2>;
++					bias-pull-up;
++				};
++			};
++
++			sdc2_on_state: sdc2-on-state {
++				clk-pins {
++					pins = "sdc2_clk";
++					drive-strength = <10>;
++					bias-disable;
++				};
++
++				cmd-pins {
++					pins = "sdc2_cmd";
++					drive-strength = <8>;
++					bias-pull-up;
++				};
++
++				data-pins {
++					pins = "sdc2_data";
++					drive-strength = <8>;
++					bias-pull-up;
++				};
++			};
++		};
++
++		apps_smmu: iommu@15000000 {
++			compatible = "qcom,sm6450-smmu-500", "qcom,smmu-500",
++				     "arm,mmu-500";
++			reg = <0x0 0x15000000 0x0 0x100000>;
++			#iommu-cells = <2>;
++			#global-interrupts = <1>;
++			interrupts = <GIC_SPI 65 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 96 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 670 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 671 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 99 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 100 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 101 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 102 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 103 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 104 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 105 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 106 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 107 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 108 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 109 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 113 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 114 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 115 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 116 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 117 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 118 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 181 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 182 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 183 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 184 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 185 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 186 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 187 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 188 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 189 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 190 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 191 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 192 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 315 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 316 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 317 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 318 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 319 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 320 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 321 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 322 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 323 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 324 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 325 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 326 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 327 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 328 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 329 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 330 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 331 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 332 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 333 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 334 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 335 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 336 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 337 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 338 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 339 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 340 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 341 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 342 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 343 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 344 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 345 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 395 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 396 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 397 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 398 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 399 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 400 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 401 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 402 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 403 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 404 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 405 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 406 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 407 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 408 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 409 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 412 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 418 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 419 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 421 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 706 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 423 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 424 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 425 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 689 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 690 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 691 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 692 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 693 IRQ_TYPE_LEVEL_HIGH>;
++			dma-coherent;
 +		};
 +
 +		intc: interrupt-controller@17200000 {

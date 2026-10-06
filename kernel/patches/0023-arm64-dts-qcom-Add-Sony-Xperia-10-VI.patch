@@ -10,13 +10,14 @@ Add the Sony Xperia 10 VI (pdx246, codenamed columbia), the one device
 shipping SM6450. Described so far: the debug UART, the PMIC complement
 (PM6450, PM6150L, PMK8350 and PMR735A), the 45 RPMh-managed regulators
 with the windows the board's own firmware uses, the power and volume
-keys, and an alias and stdout-path for the console.
+keys, the SD card slot with its card detect, and USB in OTG mode with
+the high-speed PHY tuned the way the board's own firmware tunes it.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  arch/arm64/boot/dts/qcom/Makefile             |   1 +
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 351 ++++++++++++++++++
- 2 files changed, 352 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 412 ++++++++++++++++++
+ 2 files changed, 413 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 
 diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
@@ -33,10 +34,10 @@ index dffdb219f..8b5b821a9 100644
  dtb-$(CONFIG_ARCH_QCOM)	+= sm7225-fairphone-fp4.dtb
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 new file mode 100644
-index 000000000..324eb57ae
+index 000000000..863a529c5
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -0,0 +1,351 @@
+@@ -0,0 +1,412 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -385,6 +386,67 @@ index 000000000..324eb57ae
 +	status = "okay";
 +};
 +
++&sdc2_off_state {
++	sd-cd-pins {
++		pins = "gpio107";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-pull-up;
++	};
++};
++
++&sdc2_on_state {
++	sd-cd-pins {
++		pins = "gpio107";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-pull-up;
++	};
++};
++
++&sdhc_2 {
++	cd-gpios = <&tlmm 107 GPIO_ACTIVE_HIGH>;
++	vmmc-supply = <&pm6150l_l9>;
++	vqmmc-supply = <&pm6150l_l6>;
++
++	pinctrl-names = "default", "sleep";
++	pinctrl-0 = <&sdc2_on_state>;
++	pinctrl-1 = <&sdc2_off_state>;
++
++	status = "okay";
++};
++
 +&uart3 {
++	status = "okay";
++};
++
++&usb_1 {
++	status = "okay";
++};
++
++&usb_1_dwc3 {
++	dr_mode = "otg";
++	usb-role-switch;
++};
++
++/*
++ * The stock tree tunes this PHY with a raw register write,
++ * qcom,param-override-seq, into HS_PHY_OVERRIDE_X0 through X3. Every field
++ * it sets inverts cleanly through the tables in phy-qcom-snps-femto-v2.c,
++ * so these are the same four registers expressed the way mainline expects.
++ * The fields it leaves at their nominal value are left out.
++ */
++&usb_1_hsphy {
++	vdda-pll-supply = <&pm6450_l5>;
++	vdda18-supply = <&pm6450_l23>;
++	vdda33-supply = <&pm6450_l25>;
++
++	qcom,hs-disconnect-bp = <630>;
++	qcom,squelch-detector-bp = <(-530)>;
++	qcom,hs-amplitude-bp = <650>;
++	qcom,pre-emphasis-duration-bp = <20000>;
++	qcom,pre-emphasis-amplitude-bp = <30000>;
++	qcom,hs-output-impedance-micro-ohms = <2600000>;
++
 +	status = "okay";
 +};

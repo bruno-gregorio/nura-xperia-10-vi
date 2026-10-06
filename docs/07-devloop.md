@@ -203,6 +203,9 @@ actually does, and it corrects three of the guesses.
   Tier 0 checks, unchanged and still the first thing every round runs.
 - **`scripts/check-dt.py`** — the third, written once the mainline device tree
   existed to check.
+- **`scripts/clkmap.py`** — translates a vendor clock id into the mainline
+  define name, because the two headers share names and not numbers. Anything
+  copied out of the stock device tree goes through it.
 
 ### Three corrections to the plan above
 

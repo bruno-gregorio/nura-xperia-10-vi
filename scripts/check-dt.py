@@ -18,7 +18,9 @@ close off the single largest class of mistake in a port like this.
 Two checks run:
 
 - **Addresses.** Every unit address in our tree must appear somewhere in
-  theirs. The two sides are read differently on purpose. Ours is taken from
+  theirs, either outright or inside a block theirs declares - mainline often
+  names a register bank where the stock tree names the whole peripheral, so
+  containment is reported as its own, weaker result rather than hidden. The two sides are read differently on purpose. Ours is taken from
   unit addresses only, because that is what we are asserting and a unit
   address is unambiguous. Theirs is taken from unit addresses *and* from every
   value a reg property could be hiding, under both the one-cell and the
@@ -97,18 +99,32 @@ def parse(path):
 
 
 def addresses(by_addr, all_nodes):
-    """Every address the tree can be read as describing."""
-    seen = set(by_addr)
+    """Every address the tree can be read as describing, and every span.
+
+    Returns (exact, spans). exact is the set of addresses a reg or a unit
+    address names outright. spans is a list of (base, end, path), because the
+    stock tree sometimes declares one block where mainline declares a register
+    bank inside it - its USB node covers all of 0xa600000+1M, while mainline
+    points at the QSCRATCH bank at 0xa6f8800 within it. An address inside a
+    span is weaker evidence than an exact hit, so it is reported separately
+    rather than folded in.
+    """
+    exact, spans = set(by_addr), []
     for n in all_nodes:
         reg = [v for v in n["props"].get("reg", []) if isinstance(v, int)]
+        path = n["path"]
         if len(reg) % 2 == 0:
-            seen.update(v for v in reg[0::2] if v >= MMIO_MIN)
+            for i in range(0, len(reg), 2):
+                if reg[i] >= MMIO_MIN:
+                    exact.add(reg[i])
+                    spans.append((reg[i], reg[i] + reg[i + 1], path))
         if len(reg) % 4 == 0:
             for i in range(0, len(reg), 4):
                 v = reg[i] << 32 | reg[i + 1]
                 if v >= MMIO_MIN:
-                    seen.add(v)
-    return seen
+                    exact.add(v)
+                    spans.append((v, v + (reg[i + 2] << 32 | reg[i + 3]), path))
+    return exact, spans
 
 
 def main():
@@ -124,15 +140,32 @@ def main():
         return 2
     ours, our_nodes = parse(argv[0])
     theirs, their_nodes = parse(argv[1])
-    seen = addresses(theirs, their_nodes)
+    seen, spans = addresses(theirs, their_nodes)
 
-    missing = sorted(a for a in ours if a not in seen and a not in allowed)
-    waived = sorted(a for a in ours if a not in seen and a in allowed)
+    def within(a):
+        """The smallest span of theirs that contains a, if any."""
+        hits = [s for s in spans if s[0] < a < s[1]]
+        return min(hits, key=lambda s: s[1] - s[0]) if hits else None
+
+    missing, waived, inside = [], [], []
+    for a in sorted(ours):
+        if a in seen:
+            continue
+        if a in allowed:
+            waived.append(a)
+        elif within(a):
+            inside.append(a)
+        else:
+            missing.append(a)
     print("==> addresses")
-    print("    %d in ours, %d accounted for in theirs, %d waived, "
-          "%d unaccounted for"
-          % (len(ours), len(ours) - len(missing) - len(waived), len(waived),
-             len(missing)))
+    print("    %d in ours, %d exact in theirs, %d inside a block of theirs, "
+          "%d waived, %d unaccounted for"
+          % (len(ours), len(ours) - len(missing) - len(waived) - len(inside),
+             len(inside), len(waived), len(missing)))
+    for a in inside:
+        base, end, path = within(a)
+        print("    WITHIN   0x%x  %s" % (a, ours[a]["path"]))
+        print("             theirs 0x%x..0x%x  %s" % (base, end, path))
     for a in waived:
         print("    WAIVED   0x%x  %s  (%s)" % (a, ours[a]["path"], allowed[a]))
     for a in missing:

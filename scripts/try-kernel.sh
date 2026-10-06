@@ -162,11 +162,11 @@ build_vendor_boot() {
 		# It does need the two bootloader properties stamped on, or the boot
 		# chain will not select it out of the dtb area at all. They are not
 		# device tree and do not belong in the source; see
-		# scripts/dtb-bootloader-ids.sh.
+		# scripts/dtb-stamp-ids.sh.
 		dtb="$BOOT/dtbs/$MAINLINE_DTB"
 		[ -f "$dtb" ] || die "missing $dtb - is linux-postmarketos-qcom-sm6450 installed in the rootfs?"
 		say "stamping the bootloader ids onto our own device tree"
-		"$ROOT/scripts/dtb-bootloader-ids.sh" "$dtb" "$WORK/pdx246-stamped.dtb"
+		"$ROOT/scripts/dtb-stamp-ids.sh" "$dtb" "$WORK/pdx246-stamped.dtb"
 		"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/pdx246-stamped.dtb"
 	else
 		# Sony's device trees, because our downstream base does not define the

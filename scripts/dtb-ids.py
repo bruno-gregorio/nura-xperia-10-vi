@@ -11,6 +11,11 @@ properties decide whether our device tree is ever used.
 Accepts a bare .dtb, a concatenation of them (which is what Qualcomm ships in
 vendor_boot), or a vendor_boot image, whose dtb area is found from its header.
 
+scripts/dtb-stamp-ids.sh is the other half of this pair: a mainline device tree
+carries none of these properties, because they describe the firmware's
+selection protocol rather than the hardware, so they are stamped on at flash
+time and checked back with this.
+
 The scan steps one byte at a time rather than four: Qualcomm's concatenated
 trees are not padded to an alignment, so a 4-byte scan silently skips every
 tree that happens to start at an odd offset.

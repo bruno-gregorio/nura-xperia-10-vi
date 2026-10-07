@@ -141,6 +141,54 @@ pmbootlog_find_rddata() {
 	return 1
 }
 
+pmbootlog_try() {
+	# Runs "$2..." into the record, unless it has not finished in two
+	# seconds. Much of what is worth reading takes a kernel lock - the
+	# configfs gadget, the clock, regulator and power-domain trees - and a
+	# driver stuck holding one would otherwise stop the log for good, at
+	# exactly the moment it matters. A source that blocks once is reported
+	# and never read again; the stuck reader is left where it is, because
+	# nothing can kill it. $1 names the source, and its files.
+	_n=$1
+	shift
+	if [ -e "/pmbl.blocked.$_n" ]; then
+		echo "(blocked since uptime $(cat "/pmbl.blocked.$_n"), not read again)"
+		return 0
+	fi
+	rm -f "/pmbl.try.$_n" "/pmbl.done.$_n"
+	# All three descriptors redirected on the job itself, not just on the
+	# command inside it: a job that kept the caller's stdout would hold
+	# open the pipe of any $(...) this runs in, and that would wait on a
+	# stuck reader just as surely as reading the file directly.
+	( "$@"; : > "/pmbl.done.$_n" ) > "/pmbl.try.$_n" 2>&1 < /dev/null &
+	_k=0
+	while [ ! -e "/pmbl.done.$_n" ]; do
+		_k=$((_k + 1))
+		if [ "$_k" -gt 20 ]; then
+			cut -d' ' -f1 /proc/uptime > "/pmbl.blocked.$_n"
+			echo "(BLOCKED: no answer in 2 s from: $*)"
+			return 0
+		fi
+		/bin/busybox sleep 0.1
+	done
+	cat "/pmbl.try.$_n"
+}
+
+pmbootlog_tasks() {
+	# Every task in uninterruptible sleep, and where in the kernel it is
+	# sleeping. A hang that is a sleep - a probe or a bind waiting for
+	# something that never comes - is invisible to the lockup detectors,
+	# and this is where it shows.
+	for _p in /proc/[0-9]*; do
+		_st=""
+		read -r _st < "$_p/stat" 2>/dev/null || continue
+		_st=${_st##*) }
+		[ "${_st%% *}" = D ] || continue
+		echo "pid ${_p##*/}: $(tr '\0' ' ' < "$_p/cmdline" 2>/dev/null)[$(cat "$_p/comm" 2>/dev/null)]"
+		cat "$_p/stack" 2>/dev/null
+	done
+}
+
 pmbootlog_record() {
 	# The record itself. $1 is its sequence number and $2 the attempt.
 	echo "''' + LOG_MAGIC.decode() + r''' seq=$1 attempt=$2 uptime=$(cut -d' ' -f1 /proc/uptime)"
@@ -152,8 +200,10 @@ pmbootlog_record() {
 	dmesg 2>/dev/null
 	echo "--- init log ---"
 	cat /pmOS_init.log 2>/dev/null
+	echo "--- blocked tasks ---"
+	pmbootlog_try tasks pmbootlog_tasks
 	echo "--- modules ---"
-	cat /proc/modules 2>/dev/null
+	pmbootlog_try modules cat /proc/modules
 	# What the probe itself got up to, which dmesg does not say.
 	echo "--- probe log ---"
 	cat /pmprobe.log 2>/dev/null
@@ -163,12 +213,12 @@ pmbootlog_record() {
 	# exactly how dwc3-msm hid for a day.
 	echo "--- deferred probes ---"
 	mount -t debugfs none /sys/kernel/debug 2>/dev/null
-	cat /sys/kernel/debug/devices_deferred 2>/dev/null
+	pmbootlog_try deferred cat /sys/kernel/debug/devices_deferred
 	echo "--- udc ---"
 	for _u in /sys/class/udc/*; do
 		[ -e "$_u" ] && echo "${_u##*/} $(cat "$_u/state" 2>/dev/null)"
 	done
-	echo "gadget g1 bound to: $(cat /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null)"
+	echo "gadget g1 bound to: $(pmbootlog_try gadget cat /sys/kernel/config/usb_gadget/g1/UDC)"
 	echo "--- platform devices and their drivers ---"
 	for _p in /sys/bus/platform/devices/*; do
 		_drv=$(readlink "$_p/driver" 2>/dev/null)
@@ -178,9 +228,9 @@ pmbootlog_record() {
 	cat /proc/interrupts 2>/dev/null
 	# Power state, which is software bookkeeping and safe to read anywhere.
 	echo "--- power domains ---"
-	cat /sys/kernel/debug/pm_genpd/pm_genpd_summary 2>/dev/null
+	pmbootlog_try genpd cat /sys/kernel/debug/pm_genpd/pm_genpd_summary
 	echo "--- regulators ---"
-	cat /sys/kernel/debug/regulator/regulator_summary 2>/dev/null
+	pmbootlog_try regulators cat /sys/kernel/debug/regulator/regulator_summary
 	# The clock tree reads hardware, so only on our own device tree, whose
 	# only providers are GCC and RPMh - always-on registers. Stock's tree
 	# has GPU, display and camera controllers as well, behind power domains
@@ -189,7 +239,7 @@ pmbootlog_record() {
 	# the HS PHY's CLKREF, ever came on.
 	if grep -q 'sony,pdx246' /proc/device-tree/compatible 2>/dev/null; then
 		echo "--- clocks ---"
-		cat /sys/kernel/debug/clk/clk_summary 2>/dev/null
+		pmbootlog_try clocks cat /sys/kernel/debug/clk/clk_summary
 	fi
 }
 
@@ -250,6 +300,9 @@ pmbootlog_start() {
 				dd if=/pmbootlog.tmp of="$card" bs=65536 seek=$seek \
 					count=$PMBL_HALF conv=notrunc,sync,fsync 2>/dev/null
 				rm -f /pmbl.busy
+				# The watchdog waits on this for a record made
+				# after its stack dump.
+				echo "$n" > /pmbl.seq
 			else
 				# rddata has room for two halves as well.
 				: > /pmbl.busy
@@ -257,6 +310,7 @@ pmbootlog_start() {
 					seek=$(( n % 2 * PMBL_HALF )) count=$PMBL_HALF \
 					conv=notrunc,sync,fsync 2>/dev/null
 				rm -f /pmbl.busy
+				echo "$n" > /pmbl.seq
 			fi
 			/bin/busybox sleep 1
 		done
@@ -833,7 +887,11 @@ USB_WATCHDOG = """
 	# 3  a UDC exists, but configfs never bound the gadget to it
 	# 4  the gadget is bound and the UDC is "not attached": no host saw it
 	# 5  the gadget is bound and the UDC got partway with a host
+	# 6  binding the gadget never returned, see below
 	# A configured UDC is a host that enumerated us, and stands this down.
+	# _t counts the tenths of a second spent waiting in here, which come off
+	# the delay at the end, so the total still names the rung exactly.
+	_t=0
 	_u=0
 	[ -e /sys/bus/platform/devices/a6f8800.usb/driver ] && _u=1
 	[ "$_u" -eq 1 ] && [ -e /sys/bus/platform/devices/88e3000.phy/driver ] && _u=2
@@ -849,13 +907,32 @@ USB_WATCHDOG = """
 		_st=""
 		read -r _st < "$_udc/state" 2>/dev/null
 		[ "$_st" = configured ] && exit 0
-		_g=""
-		read -r _g < /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null
-		if [ -n "$_g" ]; then
-			case "$_st" in
-			"not attached") _u=4 ;;
-			*) _u=5 ;;
-			esac
+		# Read from a child, with a time limit. configfs takes the
+		# gadget's lock to answer, and the init's write to the same file
+		# holds that lock for the whole bind - so a bind that never
+		# returns used to take this watchdog down with it, silently,
+		# which is the likeliest reading of rounds 18 and 19.
+		/bin/busybox rm -f /pmwd.g /pmwd.g.done
+		(
+			read -r _x < /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null
+			echo "$_x" > /pmwd.g
+			: > /pmwd.g.done
+		) &
+		while [ ! -e /pmwd.g.done ] && [ "$_t" -lt 20 ]; do
+			/bin/busybox sleep 0.1
+			_t=$((_t + 1))
+		done
+		if [ -e /pmwd.g.done ]; then
+			_g=""
+			read -r _g < /pmwd.g
+			if [ -n "$_g" ]; then
+				case "$_st" in
+				"not attached") _u=4 ;;
+				*) _u=5 ;;
+				esac
+			fi
+		else
+			_u=6
 		fi
 	fi
 	_m=0
@@ -863,7 +940,30 @@ USB_WATCHDOG = """
 	case "$_m" in ''|*[!0-9]*) _m=0 ;; esac
 	# Same hold file as the staged probe: a shell that got in can stop this.
 	while [ -e /pmhold ]; do /bin/busybox sleep 5; done
-	/bin/busybox sleep $((_m + _u))
+	# On the way out, put the kernel stack of every blocked task into the
+	# ring buffer, and give the log hook time to write two more records -
+	# the second is the first one certain to have been put together after
+	# the dump. Up to six seconds, and never more than the delay has left,
+	# so the timing still holds. Neither exists without sysrq and the hook.
+	_lim=$(( (_m + _u) * 10 ))
+	[ "$_lim" -gt 60 ] && _lim=60
+	if [ -w /proc/sysrq-trigger ]; then
+		/bin/busybox echo w > /proc/sysrq-trigger
+		_s0=""
+		[ -r /pmbl.seq ] && read -r _s0 < /pmbl.seq
+		case "$_s0" in ''|*[!0-9]*) _s0="" ;; esac
+		while [ -n "$_s0" ] && [ "$_t" -lt "$_lim" ]; do
+			_s1=0
+			read -r _s1 < /pmbl.seq
+			case "$_s1" in ''|*[!0-9]*) _s1=0 ;; esac
+			[ "$_s1" -ge $((_s0 + 2)) ] && break
+			/bin/busybox sleep 0.1
+			_t=$((_t + 1))
+		done
+	fi
+	_d=$(( (_m + _u) * 10 - _t ))
+	[ "$_d" -lt 0 ] && _d=0
+	/bin/busybox sleep $((_d / 10)).$((_d % 10))
 	# Let a log write that is under way finish first, so the reset never
 	# lands in the middle of one - the card it goes to also holds the
 	# rootfs. Two seconds at most, and nothing at all without the hook.
@@ -872,8 +972,12 @@ USB_WATCHDOG = """
 		/bin/busybox sleep 0.1
 		_w=$((_w + 1))
 	done
+	# sysrq b restarts at once. reboot(2) is the fallback without sysrq, and
+	# a poor one: it runs every driver's shutdown under that device's lock,
+	# so a bind stuck holding one can stop it too. -n at least keeps sync
+	# out of it, which a stuck block device would hold up the same way.
 	[ -w /proc/sysrq-trigger ] && /bin/busybox echo b > /proc/sysrq-trigger
-	/bin/busybox reboot -f
+	/bin/busybox reboot -f -n
 	# reboot(2) refused. Do not sit here looking like a hang.
 	/bin/busybox sleep 90
 	/bin/busybox reboot -f
@@ -1083,7 +1187,8 @@ def markdecode(total, base, scale, table=None):
         return
     if per > 500:
         print("  longer than any mark can make it: the watchdog never fired,"
-              " so userspace stopped, and something else reset the phone.")
+              " or its reset never finished, and something else reset the"
+              " phone.")
         return
     names = {}
     if table:
@@ -1097,7 +1202,8 @@ def markdecode(total, base, scale, table=None):
            "glue and PHY bound, no UDC (dwc3 core failed)",
            "UDC exists, gadget not bound to it",
            "gadget bound, UDC not attached (no host saw it)",
-           "gadget bound, UDC partway with a host"]
+           "gadget bound, UDC partway with a host",
+           "binding the gadget never returned (configfs lock held)"]
     if scale <= len(udc):
         print(f"  warning: scale {scale} is too small to keep {len(udc)}"
               " USB states apart; use 8")

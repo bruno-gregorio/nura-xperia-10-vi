@@ -566,6 +566,18 @@ Everything here is about `linux-postmarketos-qcom-sm6450`, our own 6.18 kernel.
   the build chroot, against gcc 14.2.0 and no pahole in the distrobox, which is
   why `CONFIG_CFI` and `CONFIG_DEBUG_INFO_BTF` had to be set by hand rather
   than left to `olddefconfig`.
+
+  The 63 minutes is the cost of that particular invocation, not of building
+  this kernel, and it was quoted as the rebuild cost for a day after it
+  stopped being true. `--arch aarch64` builds inside the aarch64 chroot under
+  QEMU user emulation, from a cold cache. The APKBUILD says
+  `pmb:cross-native`, so a plain `pmb build linux-postmarketos-qcom-sm6450`
+  compiles in the x86_64 chroot with a cross toolchain instead, through
+  pmbootstrap's ccache (`.pmb/work/cache_ccache_x86_64`). With that cache warm,
+  a one-file change rebuilt, packaged, installed into the rootfs and ran
+  `mkinitfs` in under two minutes on 2026-10-07 - 1:44 of it the package
+  build, which still unpacks the tarball and runs every compile through the
+  cache. Never pass `--arch` for this package.
 - **The package contains what a boot needs** — Verified. `boot/vmlinuz`
   28,588,544 bytes, `boot/linux.efi` 11,493,888, 427 modules, `kernel.release`
   `6.18.55`, and `boot/dtbs/qcom/sm6450-sony-xperia-columbia-pdx246.dtb` at
@@ -996,9 +1008,10 @@ as what it would have fixed.
   362. With that withdrawn there is no evidence any init has ever run, and the
   search moves back into the kernel and the tree.
 
-  The tree is the cheap half of what is left. A kernel rebuild for this device
-  costs 63 minutes and a device tree costs one `dtc` invocation, and the tree
-  is also the half that was written by hand. `scripts/dt-reduce.py` builds
+  The tree is the cheap half of what is left. A device tree costs one `dtc`
+  invocation, against a couple of minutes for a kernel (this entry said 63,
+  which was a cold build under emulation - see "The whole SM6450 series
+  builds clean"), and the tree is also the half that was written by hand. `scripts/dt-reduce.py` builds
   variants by giving nodes `status = "disabled"` or deleting them outright,
   working on `dtc -I dtb -O dts` output rather than on our source, so that
   neither kbuild nor the C preprocessor is involved and a variant differs from
@@ -1978,7 +1991,8 @@ port boots" above. What is left starts from there.
 
    The instrument now is the device tree, because it is the half of the port
    that was written by hand and the only half that can be varied without a
-   63-minute rebuild: `scripts/dt-reduce.py` builds a reduced tree and
+   kernel rebuild, though with ccache warm that costs two minutes and not the
+   63 this once said: `scripts/dt-reduce.py` builds a reduced tree and
    `try-kernel.sh` takes `DTB=path` to flash it. After that, `initcall_blacklist`
    disables a named driver from the cmdline with no rebuild at all. And if both
    run out, the fallback is the one this list named before any of them: a

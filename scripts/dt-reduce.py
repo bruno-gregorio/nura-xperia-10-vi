@@ -27,8 +27,9 @@ bootloader makes seven attempts and they add up.
 
 One bit per nine minutes puts a premium on which question each round asks, and
 the cheapest large question is the device tree. A kernel rebuild for this
-device costs 63 minutes; a device tree costs one dtc invocation, and the device
-tree is also the half of the port that was written by hand. So the useful loop
+device costs about two minutes through pmbootstrap's ccache (the 63 this once
+said was a cold build under QEMU); a device tree costs one dtc invocation, and
+the device tree is also the half of the port that was written by hand. So the useful loop
 is: reduce the tree, flash, see whether the death moves, and bisect on what
 changed. try-kernel.sh takes DTB=path for exactly this.
 

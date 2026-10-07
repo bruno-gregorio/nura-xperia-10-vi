@@ -1102,6 +1102,56 @@ as what it would have fixed.
   `aports/` is still where anything that matters has to end up, because a
   round flashed from a patched image is not one anyone can reproduce from the
   sources; this is for asking questions, not for keeping answers.
+- **The kernel never reaches the `/init` check at all** — Verified 2026-10-07
+  by the positive control described above. `rdinit=/nonexistent rootdelay=30`
+  came back at 538, not 750: even with `init_eaccess` guaranteed to fail, the
+  30-second sleep at the top of `prepare_namespace` was never spent. So the
+  panic is between `calibrate_delay()` (`init/main.c:1037`, proven by the
+  0.992 delay-loop factor) and the access check at `init/main.c:1565`. The
+  candidates in that window are `smp_init`, the initcalls,
+  `wait_for_initramfs` and `console_on_rootfs`, and of those the one with a
+  panic of its own is secondary bring-up: `cpu_panic_kernel()`, called from a
+  capability conflict (`arch/arm64/kernel/cpufeature.c:3577`) or a short ASID
+  field (`arch/arm64/mm/context.c:75`), ends in
+  `panic("CPU%u detected unsupported configuration")` at
+  `arch/arm64/kernel/smp.c:170`.
+- **`maxcpus=1` does not stop it** — Verified 2026-10-07, over three rounds,
+  and the first of them said the opposite. With the probe sleeping 8 seconds,
+  `maxcpus=1` came back at 138 once; with a 1-second sleep, at 540; repeated
+  exactly as the 138 round, at 542. Two out of three are the ordinary
+  all-panic figure, so secondary bring-up is not where the panic is, and the
+  138 needs explaining on its own.
+- **Every attempt ends one of two ways, and the mix varies from boot to boot**
+  — Reasoned 2026-10-07, from the totals alone, and it explains every figure
+  this document has called an anomaly. With the constants the `panic=5` and
+  `panic=60` rounds pin down - seven attempts, 12.9 seconds of fixed cost per
+  attempt, 30 seconds for the stock slot to answer - a total can be solved for
+  how many attempts waited out `panic=60` and how many reset almost at once:
+
+  - 540 is 7.00 panics and no resets, every ordinary round.
+  - 362 is 4.03 panics and 2.97 resets, the round recorded above as "reaches
+    userspace" and then withdrawn.
+  - 138 is 0.30 panics and 6.70 resets, the `maxcpus=1` round.
+
+  Near-integers three times out of three, with no free parameter fitted to
+  them, is a model rather than a coincidence. Each reset attempt costs about
+  2.6 seconds of kernel time, too short to be the probe's 8-second sleep, so a
+  short round is not a sign the kernel got further. It is a second failure
+  mode: something resets the SoC before the kernel reaches `panic()`, on some
+  boots and not others, from a byte-identical image. Two consequences. A
+  single round is no longer a measurement, because the same image can land
+  anywhere from 138 to 540. And anything that changes the mix looks like a
+  result when it is luck, which is exactly how the 362 and the 138 were read.
+- **KASLR is the only per-boot random input, and it is on** — Guess, under
+  test 2026-10-07. `CONFIG_RANDOMIZE_BASE=y`, and ABL writes a fresh
+  `/chosen/kaslr-seed` on every boot: the live tree has the property, eight
+  bytes, zeroed, which is what the kernel leaves after consuming a seed. So
+  every attempt runs the kernel at a different virtual base, and a fault that
+  depends on the layout would come and go exactly like the reset mode does.
+  `nokaslr` is read by the early pre-init code from the device tree's
+  bootargs, which is where our command line lands, so it is a command-line
+  round. If KASLR is the variable, `nokaslr` collapses every round to one of
+  the two pure figures, and it has to do so twice before it counts.
 - **After that, `initcall_blacklist` can test the two generated drivers** —
   Reasoned. `CONFIG_KALLSYMS=y` is set, so the blacklist works, and the two
   hand-generated drivers are the dominant risk this document has named from

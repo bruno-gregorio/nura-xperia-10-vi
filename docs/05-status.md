@@ -1787,16 +1787,27 @@ for it. This is now a two-minute step instead of an eleven-minute one.
 
 ## Known gaps
 
-- **Display.** The panel driver is in the out-of-tree `sm6450-modules`
-  repository, which this port does not build. First boots are blind by design.
-- **Vendor device trees that need `sm6450-modules`.** The same repository also
+- **Display.** On the mainline kernel this has to be in-tree: the msm DRM
+  driver (MDSS, DPU, DSI and the DSI PHY for this SoC generation) and an
+  upstream-style panel driver for the Samsung `fhd_amoled_cmd` panel, of the
+  kind `linux-mdss-dsi-panel-driver-generator` produces from the downstream
+  panel node. None of it exists for SM6450 yet. The downstream kernel's panel
+  driver is in the out-of-tree `sm6450-modules` repository, which this port
+  does not build and the mainline kernel will never use - not depending on
+  Android vendor modules is the point of the mainline kernel. First boots are
+  blind by design.
+- **Vendor device trees that need `sm6450-modules`** (downstream kernel only).
+  The same repository also
   owns the dt-bindings headers that Qualcomm's `audio/` and `camera/` device
   trees include, so those cannot be built here at all. We sidestep it by
   building only the base `parrot.dtb`, which is the one we boot; the rest of
   the parrot family is not ours. If `sm6450-modules` is ever built, the
   three-line `vendor/qcom/Makefile` written in `prepare()` is what to revisit.
-- **GPU.** Adreno 710 on a downstream KGSL kernel. Mesa's a7xx support targets
-  the mainline `msm` uAPI. Expect software rendering, if anything.
+- **GPU.** Adreno 710. On the downstream kernel it is KGSL, and Mesa's a7xx
+  support targets the mainline `msm` uAPI, so expect software rendering there.
+  On the mainline kernel it is drm/msm's GPU side, which already knows a7xx
+  parts, plus the GMU and zap-shader firmware; that is the path that leads
+  anywhere.
 - **Modem, Wi-Fi, Bluetooth, audio, camera.** None attempted. Wi-Fi and audio
   additionally need firmware from the stock `/vendor/firmware`, which is not
   redistributable and is not packaged here.
@@ -1908,8 +1919,14 @@ port boots" above. What is left starts from there.
    urgent: `deviceinfo_usb_network_udc` names the real controller, so the
    gadget cannot land on `dummy_udc.0` by accident any more. It does mean
    rebuilding the rootfs image too, because the modules live in it.
-4. **Build `sm6450-modules` for display.** The last thing, as before. It also
-   retires `deviceinfo_no_framebuffer`.
+4. **Display on the mainline kernel, from in-tree drivers only.** MDSS, DPU
+   and DSI nodes in `sm6450.dtsi`, whatever DPU catalog entry and DSI PHY
+   support SM6450 needs, and an upstream-style panel driver for the Samsung
+   command-mode panel. It also retires `deviceinfo_no_framebuffer`. Building
+   Sony's out-of-tree `sm6450-modules` was the plan when the downstream kernel
+   was the destination; it is not the plan now, because the mainline kernel
+   exists to stop depending on Android vendor modules. It stays an option only
+   for the downstream bring-up kernel, and only if that ever needs a screen.
 5. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and

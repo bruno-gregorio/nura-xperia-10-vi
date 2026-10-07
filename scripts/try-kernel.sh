@@ -231,6 +231,23 @@ build_vendor_boot() {
 			mv "$WORK/vendor_boot-log.img" "$WORK/vendor_boot.img"
 		fi
 	fi
+	# CMDLINE_ADD and CMDLINE_DEL rewrite the kernel command line in place,
+	# which is possible because for header v3 and later the line lives in the
+	# vendor_boot header and not in boot.img - whose own cmdline field is
+	# empty on this device. scripts/patch-cmdline.py says why that is worth a
+	# knob: the sanctioned route is the conf file in aports/ and a package
+	# rebuild, which is ten minutes, and most of the cheap questions a blind
+	# boot can be asked are command line questions. Both take space-separated
+	# lists, and CMDLINE_DEL takes globs, so replacing a value is
+	# CMDLINE_DEL='panic=*' CMDLINE_ADD='panic=5'. Anything that turns out to
+	# matter goes into kernel-cmdline.mainline.conf before it is believed.
+	if [ -n "${CMDLINE_ADD:-}" ] || [ -n "${CMDLINE_DEL:-}" ]; then
+		say "patching the command line in the vendor_boot header"
+		set --
+		for t in ${CMDLINE_DEL:-}; do set -- "$@" -d "$t"; done
+		for t in ${CMDLINE_ADD:-}; do set -- "$@" -a "$t"; done
+		"$ROOT/scripts/patch-cmdline.py" "$WORK/vendor_boot.img" "$@"
+	fi
 }
 
 # vbmeta for the spare slot has to come from the slot the device last ran: its

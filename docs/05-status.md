@@ -1013,9 +1013,70 @@ as what it would have fixed.
   watchdog stays because it has to: the kernel adopting and petting the
   bootloader's watchdog is what lets a `panic=60` wait run its full 60
   seconds, and that wait is the ruler every number on this page is measured
-  with. With the reboot probe as `/init`, that round reads as about 176
-  seconds if the kernel now gets to userspace and 540 if it still panics, and
-  either answer splits the remaining search roughly in half.
+  with.
+- **Nothing we wrote into `/soc@0` is the cause** — Verified 2026-10-07 by
+  flashing the reduced tree above. Fifteen of the eighteen children of
+  `/soc@0` were disabled, which is the clock controller, the pinctrl driver,
+  the SPMI arbiter and every regulator under it, USB and its HS PHY, the
+  SDHCI controller, the SMMU, the rpmh RSC, EPSS cpufreq, the PDC, the AOSS
+  QMP, IPCC, the TCSR mutex, the GENI QUP and the rpmh stats; the smp2p nodes,
+  the reboot-mode nvmem and the gpio keys went with them and the thermal zones
+  were deleted outright. Readback of the flashed image confirms three live
+  children and the bootloader ids still stamped.
+
+  The round came back at **540 seconds**, which is the panic baseline to
+  within 2. Both halves of that matter. The outcome did not change, so none of
+  those nodes is what calls `panic()`; and the *timing* did not change either,
+  which is the stronger half - a tree where almost nothing probes should reach
+  the end of its initcalls sooner than one where everything does, and this one
+  did not move at all. That is the signature of a fixed-cost path: bootloader,
+  kernel init, and then a panic that does not depend on what probed.
+
+  Taken with the initramfs making no difference, that leaves the end of the
+  boot. Both panics there are reachable with no device at all:
+  `panic("VFS: Unable to mount root fs on %s")` at `init/do_mounts.c:236` if
+  the initramfs gave the kernel no `/init`, and `panic("No working init
+  found.")` at `init/main.c:1505` if it gave it one that cannot be executed.
+- **`rootdelay` separates those two without a rebuild and without risking a
+  hang** — Reasoned from the source, 2026-10-07, and this is the round in
+  flight. `kernel_init_freeable` calls `prepare_namespace()` only when
+  `init_eaccess(ramdisk_execute_command)` fails (`init/main.c:1565`), so
+  whether that function runs at all *is* the question "did the initramfs
+  provide a usable `/init`". And `root_delay` is spent at the very top of it,
+  `ssleep(root_delay)` before anything else (`init/do_mounts.c:466`), so it
+  costs exactly N seconds per attempt if and only if that path is taken.
+
+  With `rootdelay=30` on top of `panic=60` and the reboot probe as `/init`,
+  the three outcomes are far apart and all three are informative. About 750
+  seconds - `7 x (12.9 + 30 + 60) + 30` - means the initramfs never gave the
+  kernel an `/init`, so the fault is in how it is passed, unpacked or
+  reserved. 540 again means the opposite: `/init` was there and accessible,
+  `prepare_namespace` was skipped, and the panic is "No working init found",
+  which puts the fault in `execve` rather than in the archive. About 176
+  means the probe ran after all and every reading on this page needs redoing.
+  Unlike the obvious test for the same thing - `root=/dev/... rootwait`, which
+  turns the panic into an unbounded wait - none of these needs a button press,
+  because `rootdelay` sleeps and then carries on to the same panic.
+- **The bootloader ignores the load addresses in the vendor_boot header** —
+  Verified 2026-10-07, and it closes a hypothesis that looked alarming for
+  about ten minutes. The header asks for the kernel at base+0x8000, the
+  ramdisk at base+0x1000000 and the dtb at base+0x1f00000, and our kernel is
+  27.3 MiB, so a bootloader taking those literally would drop 13.1 MiB of
+  ramdisk into the middle of the kernel image. Stock is worse: a 44.7 MiB
+  kernel that would overlap both the ramdisk and the dtb. Stock boots, so ABL
+  computes its own placement and these fields are decoration. Our three
+  addresses are byte-identical to stock's anyway, since both come from the
+  same `deviceinfo` offsets.
+- **Command line experiments no longer cost a package rebuild** — Verified
+  2026-10-07. For header v3 and later the kernel command line is not in
+  boot.img, whose `cmdline` field is empty here, but in the vendor_boot
+  header at offset 28, 2048 bytes, of which pmbootstrap's generated line uses
+  240. `scripts/patch-cmdline.py` rewrites it in place - a single overwrite,
+  nothing reflows, 11 bytes changed in a 13 MiB image for a `panic=` swap -
+  and `try-kernel.sh` takes `CMDLINE_ADD` and `CMDLINE_DEL`. The conf file in
+  `aports/` is still where anything that matters has to end up, because a
+  round flashed from a patched image is not one anyone can reproduce from the
+  sources; this is for asking questions, not for keeping answers.
 - **After that, `initcall_blacklist` can test the two generated drivers** —
   Reasoned. `CONFIG_KALLSYMS=y` is set, so the blacklist works, and the two
   hand-generated drivers are the dominant risk this document has named from

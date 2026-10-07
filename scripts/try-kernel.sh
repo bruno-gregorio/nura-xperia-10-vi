@@ -229,8 +229,9 @@ build_vendor_boot() {
 		# it got through the retry counter: before each step k it writes
 		# base + scale*k where the USB watchdog adds it to its reset
 		# delay, so a boot no host ever configures comes back after a time
-		# that names the step, and the UDC's state with it. One round is
-		# enough:
+		# that names the step, and how far up the USB stack it got with it.
+		# The USB states need a scale of 8 to fit between steps, so
+		# MARKS="4 8". One round is enough:
 		#   bootlog.py markdecode <total> <base> <scale> marks-table.txt
 		# panic-scale*k goes into kernel.panic for a boot that dies
 		# instead; that needs hardlockup_panic=1 softlockup_panic=1 on

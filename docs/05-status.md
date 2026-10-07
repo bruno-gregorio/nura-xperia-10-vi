@@ -1382,18 +1382,23 @@ as what it would have fixed.
   that could not even be built, is ruled out on paper.
 - **The USB watchdog now stands down only for a configured gadget, and says
   why when it resets** — Done 2026-10-07, in `scripts/bootlog.py`; tested
-  under busybox ash against a fake UDC tree, not yet run on the device. It
-  decides at 150 seconds instead of 240, and stands down only if a UDC's
-  `state` reads `configured` - a host has really enumerated it. Otherwise it
-  resets after an extra delay that carries two numbers: the last progress
-  mark the init wrote to `/pmmark`, and the UDC's state, 0 for no UDC but the
-  dummy, 1 for `not attached`, 2 for anything short of configured.
+  under busybox ash against fake sysfs trees for every case, not yet run on
+  the device. It decides at 150 seconds instead of 240, past `udevadm
+  settle`'s own 120-second timeout, and stands down only if a UDC's `state`
+  reads `configured` - a host has really enumerated it. Otherwise it resets
+  after an extra delay that carries two numbers: the last progress mark the
+  init wrote to `/pmmark`, and how far up the USB stack the boot got, as one
+  rung of a six-rung ladder. 0 is the dwc3 glue (`usb@a6f8800`) unbound, 1
+  the glue bound and the HS PHY not, 2 both bound but no UDC, which means
+  the dwc3 core failed, 3 a UDC that configfs never bound the gadget to, 4 a
+  bound gadget whose UDC is `not attached`, so no host saw it, and 5 one
+  that got partway with a host.
 
-  `MARKS="4 4"` on `try-kernel.sh` numbers 38 steps across both stages, with
-  `debug_shell` as mark 24, and `bootlog.py markdecode` turns a round's total
-  back into the step and the UDC state. One round answers both "how far did
-  the init get" and "what did USB do", because the watchdog's offset is
-  known. A round in which it never fires runs past 500 seconds an attempt,
+  `MARKS="4 8"` on `try-kernel.sh` numbers 38 steps across both stages, with
+  `debug_shell` as mark 24, eight seconds apart so the six rungs fit between
+  them, and `bootlog.py markdecode` turns a round's total back into the step
+  and the rung. One round answers both "how far did the init get" and "where
+  did USB stop", because the watchdog's offset is known. A round in which it never fires runs past 500 seconds an attempt,
   so a real hang still shows, as a total no mark can produce.
 - **The marks feed a second channel for a kernel that dies** — Reasoned.
   pkgrel 4 builds in the soft- and buddy hard-lockup detectors, and each mark
@@ -2139,10 +2144,11 @@ port boots" above. What is left starts from there.
    runs the initramfs, see "Why the kernel resets". Round 18 then ran the
    real init and nothing reached the host; "The real init on mainline" has
    why that says less than it first seemed to. The next round is the real
-   init with `MARKS="4 4"`, `BOOTLOG=0` (the log hook needs UFS, which
-   mainline does not have) and
-   `CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1"`, and its
-   total names the init step and the UDC state in one go. What follows is
+   init with `MARKS="4 8"`, `BOOTLOG=0` (the log hook needs UFS, which
+   mainline does not have),
+   `CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1"` and
+   `DTB=out/milestone/clkref.dtb`, and its total names the init step and the
+   rung USB stopped on, in one go. What follows is
    the history of getting this far.
 
    The boot itself was the open question for a while: it has happened twice. The first flash on 2026-10-06 was

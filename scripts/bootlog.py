@@ -672,27 +672,48 @@ USB_WATCHDOG = """
 #
 # When it does reset, it says why, through the one channel a blind boot has:
 # how long it takes. The delay before the reset is the last progress mark the
-# init wrote to /pmmark - none without bootlog.py marks - plus the state of
-# the UDC: 0 for no UDC but the dummy, 1 for "not attached", 2 for anything
-# else short of configured. bootlog.py markdecode reads both back out of a
-# round's total.
+# init wrote to /pmmark - none without bootlog.py marks - plus how far up the
+# USB stack the boot got, one rung of the ladder below at a time. The names
+# are mainline's; on the downstream kernel the first rungs never match and
+# the ladder starts at the UDC. bootlog.py markdecode reads both numbers back
+# out of a round's total.
 (
 	# A working boot has USB up in about sixteen seconds, so this is far
-	# longer than it needs and far shorter than waiting for a person.
+	# longer than it needs and far shorter than waiting for a person. It is
+	# also past udevadm settle's own 120-second timeout, so a settle that
+	# never finishes still lets the init get on before this looks.
 	/bin/busybox sleep @WAIT@
+	# 0  the dwc3 glue (usb@a6f8800) has no driver
+	# 1  the glue is bound, the HS PHY (phy@88e3000) is not
+	# 2  glue and PHY are bound, but there is no UDC - the dwc3 core failed
+	# 3  a UDC exists, but configfs never bound the gadget to it
+	# 4  the gadget is bound and the UDC is "not attached": no host saw it
+	# 5  the gadget is bound and the UDC got partway with a host
+	# A configured UDC is a host that enumerated us, and stands this down.
 	_u=0
-	for _s in /sys/class/udc/*/state; do
-		case "$_s" in
-		*/dummy_udc*|'/sys/class/udc/*/state') continue ;;
-		esac
-		_st=""
-		read -r _st < "$_s" 2>/dev/null
-		case "$_st" in
-		configured) exit 0 ;;
-		"not attached") [ "$_u" -eq 0 ] && _u=1 ;;
-		*) _u=2 ;;
+	[ -e /sys/bus/platform/devices/a6f8800.usb/driver ] && _u=1
+	[ "$_u" -eq 1 ] && [ -e /sys/bus/platform/devices/88e3000.phy/driver ] && _u=2
+	_udc=""
+	for _s in /sys/class/udc/*; do
+		case "${_s##*/}" in
+		dummy_udc*|'*') ;;
+		*) _udc="$_s" ;;
 		esac
 	done
+	if [ -n "$_udc" ]; then
+		_u=3
+		_st=""
+		read -r _st < "$_udc/state" 2>/dev/null
+		[ "$_st" = configured ] && exit 0
+		_g=""
+		read -r _g < /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null
+		if [ -n "$_g" ]; then
+			case "$_st" in
+			"not attached") _u=4 ;;
+			*) _u=5 ;;
+			esac
+		fi
+	fi
 	_m=0
 	[ -r /pmmark ] && read -r _m < /pmmark
 	case "$_m" in ''|*[!0-9]*) _m=0 ;; esac
@@ -919,12 +940,19 @@ def markdecode(total, base, scale, table=None):
             if f[:1] == ["mark"]:
                 names[int(f[1])] = " ".join(f[4:])
     kmax = max(names) if names else 64
-    udc = ["no UDC but the dummy", "UDC not attached",
-           "UDC partway (attached/powered/addressed)"]
+    # The rungs of USB_WATCHDOG's ladder, in its order.
+    udc = ["dwc3 glue unbound", "glue bound, HS PHY unbound",
+           "glue and PHY bound, no UDC (dwc3 core failed)",
+           "UDC exists, gadget not bound to it",
+           "gadget bound, UDC not attached (no host saw it)",
+           "gadget bound, UDC partway with a host"]
+    if scale <= len(udc):
+        print(f"  warning: scale {scale} is too small to keep {len(udc)}"
+              " USB states apart; use 8")
     cands = []
     for k in range(kmax + 1):
         v = 0 if k == 0 else base + scale * k
-        for u in range(3):
+        for u in range(len(udc)):
             cands.append((abs(extra - v - u), k, u, v))
     cands.sort()
     for err, k, u, v in cands[:3]:

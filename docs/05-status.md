@@ -917,6 +917,26 @@ had become the priority.
   The hook is armed right after `mount_proc_sys_dev` and writes for ten
   minutes, which outlasts the USB watchdog. A boot the watchdog resets
   therefore leaves a record from the second before.
+- **Since 2026-10-05 the hook had been armed in the wrong place** —
+  Verified in the image round 19 flashed, and fixed. `install` put
+  `. /bootlog.sh` after the first `mount_proc_sys_dev` followed by a newline.
+  Since 22859f2, which moved the USB watchdog to the top of `/init`, that
+  match has been a comment line in the watchdog's block. So the hook was the
+  first thing `/init` ran: before `busybox --install` and before `/proc`,
+  `/sys` and `/dev` were mounted. Its wait loop counts iterations and gives
+  up after 120. With no `sleep` applet yet, nothing slowed it down, so it
+  could spend all 120 before the applets existed and quit for good. No
+  recorded log was lost to it. The last downstream logs on disk predate the
+  change, and every round since has been mainline, with no UFS to write to.
+  It would have cost the card channel its first round. `install` now anchors
+  on the call on a line of its own, and refuses an init where that comes
+  before `busybox --install`. The hook's `sleep`s now go through
+  `/bin/busybox` directly.
+- **The hook runs under Alpine's own busybox** — Done, tested. The suite
+  above was run again under busybox 1.38.0 from the native chroot, through
+  its musl loader. That is the build the initramfs ships, for x86_64 instead
+  of aarch64. Every case passed, including a clear followed by a boot whose
+  p1 appears late, which restarted cleanly at attempt 1.
 - **`rddata` now uses two halves as well** — Done, tested. The records sit at
   0 and 8 MiB, 16 MiB of the 20, so the downstream fallback has the same
   protection against a torn write. A dump from the old single-record hook

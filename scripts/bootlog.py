@@ -194,7 +194,7 @@ pmbootlog_start() {
 			fi
 			i=$((i + 1))
 			[ "$i" -gt 120 ] && exit 0
-			sleep 1
+			/bin/busybox sleep 1
 		done
 		if [ -n "$card" ]; then
 			# This boot's attempt number: one more than the counter
@@ -222,7 +222,7 @@ pmbootlog_start() {
 				>> /pmbootlog.tmp
 			if [ -n "$card" ]; then
 				# Same disk, same layout, or no write at all.
-				[ "$(pmbootlog_find_card)" = "$card" ] || { sleep 1; continue; }
+				[ "$(pmbootlog_find_card)" = "$card" ] || { /bin/busybox sleep 1; continue; }
 				# Alternate halves, so the write that a reset tears
 				# is never the only copy. conv=sync pads the last
 				# block with zeros, so every record ends in a zero
@@ -237,7 +237,7 @@ pmbootlog_start() {
 					seek=$(( n % 2 * PMBL_HALF )) count=$PMBL_HALF \
 					conv=notrunc,sync,fsync 2>/dev/null
 			fi
-			sleep 1
+			/bin/busybox sleep 1
 		done
 	) &
 }
@@ -330,10 +330,20 @@ def install(src, dst):
         text = text.replace(marker, "\n")
     # Arm it as soon as /dev exists. It blocks on the block device itself, so
     # being this early costs nothing and covers a death during load_modules.
-    anchor = "mount_proc_sys_dev\n"
-    if anchor not in text:
-        sys.exit("error: could not find mount_proc_sys_dev in init")
-    text = text.replace(anchor, anchor + marker.lstrip("\n"), 1)
+    #
+    # The anchor is the call on a line of its own, not the first place the
+    # words appear: USB_WATCHDOG's comment has a line ending in them too, and
+    # from 2026-10-05 until this was fixed the hook went in there - the first
+    # thing /init ran, before the applets were installed or /proc and /sys
+    # were mounted. Nothing in the hook works that early, and its wait loop,
+    # which counts iterations, could spend all of them before sleep existed.
+    anchor = re.search(r"^mount_proc_sys_dev\n", text, re.M)
+    if not anchor:
+        sys.exit("error: could not find the mount_proc_sys_dev call in init")
+    if text.find("busybox --install") > anchor.start():
+        sys.exit("error: mount_proc_sys_dev comes before busybox --install"
+                 " in this init, so the hook would run without its applets")
+    text = text[:anchor.end()] + marker.lstrip("\n") + text[anchor.end():]
     init[2] = text.encode()
 
     mode = 0o100755

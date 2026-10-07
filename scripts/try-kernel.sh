@@ -57,6 +57,14 @@ KERNEL=$(sed -n 's/^kernel *= *//p' "$ROOT/.pmb/pmbootstrap_v3.cfg" | head -1)
 KERNEL=${KERNEL:-downstream}
 MAINLINE_DTB="qcom/sm6450-sony-xperia-columbia-pdx246.dtb"
 
+# DTB=path overrides the tree that goes into vendor_boot, for bisection.
+# The reason this is a knob and not a constant: a kernel rebuild costs 63
+# minutes and a device tree costs one dtc invocation, so when the question is
+# "which node in our tree kills this boot" the device tree is the cheap half
+# of the search space, and it is also the half we wrote by hand. Point DTB at
+# a variant built from a reduced .dts and a round answers it directly. The
+# default is the tree the installed kernel package built.
+
 die() { echo "error: $*" >&2; exit 1; }
 say() { echo; echo "== $*"; }
 
@@ -164,8 +172,14 @@ build_vendor_boot() {
 		# device tree and do not belong in the source; see
 		# scripts/dtb-stamp-ids.py, which stamps for the strict matcher the
 		# appended path uses rather than the lenient one stock takes.
-		dtb="$BOOT/dtbs/$MAINLINE_DTB"
+		dtb="${DTB:-$BOOT/dtbs/$MAINLINE_DTB}"
 		[ -f "$dtb" ] || die "missing $dtb - is linux-postmarketos-qcom-sm6450 installed in the rootfs?"
+		# An if, not a &&: under set -e a trailing && that tests false is
+		# the whole statement's exit status, and the script would abort
+		# every time DTB was unset, which is most of the time.
+		if [ -n "${DTB:-}" ]; then
+			say "using the device tree named by DTB, not the package's"
+		fi
 		say "stamping the bootloader ids onto our own device tree"
 		"$ROOT/scripts/dtb-stamp-ids.py" "$dtb" "$WORK/pdx246-stamped.dtb"
 		"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/pdx246-stamped.dtb"

@@ -226,25 +226,11 @@ def install(src, dst):
 
     newrd = gzip.compress(cpio_build(entries), 6)
 
-    hdr = bytearray(d[:s["up"](s["hs"])])
-    struct.pack_into("<I", hdr, 24, len(newrd))  # vendor_ramdisk_size
-    # A single-entry ramdisk table has to agree about the size, or the
-    # bootloader hands the kernel a truncated archive.
-    o_vrt, vrt_size = s["vrt"]
-    vrt = bytearray(d[o_vrt:o_vrt + vrt_size])
-    if s["vrt_num"] == 1 and vrt_size >= 8:
-        struct.pack_into("<I", vrt, 4, len(newrd))  # entry ramdisk_size
-
-    up = s["up"]
-    o_dtb, ds = s["dtb"]
-    o_bc, bc = s["bc"]
-    out = bytearray()
-    out += hdr
-    out += newrd + b"\0" * (up(len(newrd)) - len(newrd))
-    out += d[o_dtb:o_dtb + ds] + b"\0" * (up(ds) - ds)
-    out += bytes(vrt) + b"\0" * (up(vrt_size) - vrt_size)
-    out += d[o_bc:o_bc + bc] + b"\0" * (up(bc) - bc)
-    open(dst, "wb").write(out)
+    # Reassembly is _rebuild's job. This used to carry its own copy of it,
+    # and the copy had the vendor ramdisk table bug described there while the
+    # original did not, which is the usual fate of duplicated header surgery.
+    open(dst, "wb").write(_rebuild(d, s, newrd))
+    ds = s["dtb"][1]
 
     print(f"  in   {src}")
     print(f"  out  {dst}")
@@ -828,8 +814,17 @@ def _rebuild(d, s, newrd):
     struct.pack_into("<I", hdr, 24, len(newrd))
     o_vrt, vrt_size = s["vrt"]
     vrt = bytearray(d[o_vrt:o_vrt + vrt_size])
+    # A v4 vendor ramdisk table entry starts {ramdisk_size, ramdisk_offset},
+    # so the new length goes at 0 and the offset stays 0 - there is one
+    # fragment and it begins at the start of the section. Writing the length
+    # to 4 instead, as this did until 2026-10-07, left ramdisk_size at the
+    # pre-recompression value and put the length in ramdisk_offset, which
+    # described a fragment starting at the end of the section. ABL ignores
+    # the table when there is a single entry - a downstream probe round ran
+    # seven times through exactly this - so it cost nothing, but a tool that
+    # writes a self-contradicting header is a trap for the next reader.
     if s["vrt_num"] == 1 and vrt_size >= 8:
-        struct.pack_into("<I", vrt, 4, len(newrd))
+        struct.pack_into("<2I", vrt, 0, len(newrd), 0)
     o_dtb, ds = s["dtb"]
     o_bc, bc = s["bc"]
     out = bytearray()

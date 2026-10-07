@@ -891,58 +891,86 @@ as what it would have fixed.
   equation on this page. `adb reboot` out of recovery to an `adb devices` that
   reads `device`: 30 seconds. Every total below is seven failed attempts plus
   this.
-- **The timing model closes, and it says `/init` is reached** — Verified
-  2026-10-07, with the caveat in the next entry. Subtracting the 30 and
+- **The timing model closes** — Verified 2026-10-07. Subtracting the 30 and
   dividing by seven gives the per-attempt cost, and taking each round's own
   deliberate delay off that gives what the boot itself costs:
 
-      panic=5         158s   18.3s per attempt   13.3s of boot
-      panic=60        540s   72.9s per attempt   12.9s of boot
-      PROBE sleep 8   362s   47.4s per attempt   39.4s of boot
+      panic=5                  158s   18.3s per attempt   13.3s of boot
+      panic=60                 540s   72.9s per attempt   12.9s of boot
+      STAGE=1, panic=60        540s   72.9s per attempt   12.9s of boot
+      PROBE sleep 1, panic=60  542s   73.1s per attempt   72.1s of boot
+      PROBE sleep 8, panic=60  362s   47.4s per attempt   39.4s of boot
+      PROBE sleep 8, panic=60  540s   72.9s per attempt   64.9s of boot
 
   The two panic rounds agree to within 0.4 seconds on a quantity neither was
   measuring, which is a real check on the whole method and on seven being the
   retry count. So ABL plus kernel to the panic is about 13 seconds.
 
-  The probe round is the interesting one. `bootlog.py probe` replaces `/init`
-  with `sleep 8; reboot -f`, so if `/init` never ran the kernel would panic
-  exactly as before and the total would be 540 again. It was 362. Changing
-  only the initramfs changed the outcome, so **the kernel reaches `/init`** -
-  and since the panic also happens at about 13 seconds, the panic is at or
-  after `/init` rather than in a driver probe. The likeliest single cause is
-  the real init exiting and taking `panic("Attempted to kill init!")` with it:
-  with no gadget, no console and no rootfs, a pmOS initramfs that cannot open
-  a shell has nothing left to do.
-- **Where the probe round's extra 26 seconds go is not established** —
-  Reasoned, and flagged because the entry above leans on it. 39.4 seconds of
-  boot against the panic rounds' 12.9 leaves 26.5 unexplained. The reading
-  taken above is that `reboot -f` itself takes that long, which would mean
-  mainline's reset path on this SoC is slow or falling through to something
-  else - plausible, since `psci` is declared but nothing has confirmed
-  `SYSTEM_RESET` works here. It is not the only reading: a mixture of
-  panicking and probe-completing attempts would also produce an intermediate
-  total, and so would attempts that hang and get reset by something else. A
-  round with the probe's sleep set to something other than 8 would separate
-  them, because only the true attempt count multiplies the change. That round
-  has not been run, so treat the 26 seconds as unexplained rather than as
-  evidence about `reboot`.
-- **That question was worth buying and the tooling already existed** —
-  Verified 2026-10-07. A genuine `panic()` this early had two very different
-  families of cause: a driver probe, or the end of the boot - "No working init
-  found", "Attempted to kill init!" - which would mean the kernel got through
-  every initcall and the device tree is largely fine. `bootlog.py probe`
-  separated them for the price of one hands-free round and no rebuild, and the
-  answer was the second family. Which is the better answer by a wide margin:
-  it means the clock controller, the pinctrl driver, the regulators and the
-  memory map are all carrying a kernel to userspace.
+  The last column is only meaningful for a round that reached its own delay,
+  which is the point of the next entry.
+- **The kernel does not reach `/init`, and an earlier version of this document
+  said it did** — Verified 2026-10-07 by running the same round twice. The
+  claim rested on one point in that table. `bootlog.py probe` replaces `/init`
+  with `sleep 8; reboot -f`, and that round came back at 362 rather than the
+  panic's 540, which would mean changing only the initramfs changed the
+  outcome. Two rounds were run to test it and both refute it: at sleep 1 the
+  total was 542 - and lowering the sleep cannot raise the total if the probe is
+  running - and repeating sleep 8 unchanged gave 540.
 
-  What it leaves is a much narrower problem. The initramfs has to be made to
-  *stay alive* and get the USB gadget up, because that gadget is the only
-  output channel this device has. `STAGE=1` is the next round and it is built
-  for exactly this: it marks each step, forces peripheral mode on the ssusb
-  wrapper, waits up to twelve seconds for a real UDC, sets up the gadget and
-  opens telnet on it. Its flash-backed log will not work here - that needs UFS
-  - but the gadget half does not.
+  So four of the five `panic=60` rounds sit within 2 seconds of
+  `7 x (12.9 + 60) + 30`, across initramfs contents that differ as much as a
+  four-line reboot script differs from the real pmOS init. 362 did not
+  reproduce and has no explanation; the honest reading is one bad measurement,
+  and the conclusion commit 1558974 recorded is superseded by this entry.
+
+  What follows from the four that agree is the opposite of what was claimed:
+  the panic happens before `/init` and nothing in the initramfs reaches it.
+  That is the worse branch - the fault is still in the kernel or the tree
+  rather than in a script we can edit - but it is the one the evidence
+  supports.
+- **The panic is after `parse_args`, which rules out the early arch code** —
+  Reasoned from the source, 2026-10-07, and it is the one thing the timing
+  does establish about position. `panic` is a `core_param`, so it is parsed by
+  the `parse_args("Booting kernel", ...)` call in `start_kernel` and not by
+  `parse_early_param`. `panic_timeout` is therefore still 0 for the whole of
+  `setup_arch`, and a panic there would reset at once rather than wait.
+  `panic=5` and `panic=60` gave 158 and 540, so the value was in effect: the
+  kernel got through `setup_arch` - which means the memory map it was handed
+  is workable - and through `parse_args`, and died after. That leaves
+  `init_IRQ`, `time_init`, the initcalls, and `kernel_init` itself.
+- **The `/memory` node has size zero and the bootloader is expected to fill it
+  in** — Verified 2026-10-07 against the live tree. This is a trap worth
+  writing down even though the entry above exonerates it. Our tree says
+  `reg = <0x0 0x80000000 0x0 0x0>`, which is the idiomatic upstream Qualcomm
+  board pattern and useless on its own. The tree ABL handed the stock kernel
+  has a seven-entry `reg` adding up to the 7.2 GiB the running phone reports,
+  plus a `ddr_device_type` ABL put there itself, so ABL does patch memory in
+  on this device; and libfdt resolves the path `/memory` against a node named
+  `memory@80000000`, so our unit address is not a problem either. Had the
+  panic been before `parse_args`, this is where to have looked first.
+- **The initramfs is not failing to execute for want of a binfmt** — Verified
+  2026-10-07 in the shipping config. Every `/init` this project has flashed is
+  a `#!` script, which makes "the kernel cannot exec any of them" a hypothesis
+  that fits "the initramfs contents make no difference" exactly, and it would
+  end in `panic("No working init found")`. It is wrong:
+  `CONFIG_BINFMT_SCRIPT=y`, `CONFIG_BINFMT_ELF=y`, `CONFIG_BLK_DEV_INITRD=y`,
+  `CONFIG_DEVTMPFS=y` and `CONFIG_TMPFS=y` are all set, and
+  `CONFIG_INITRAMFS_SOURCE` is empty, so nothing is competing with the
+  initramfs the bootloader passes.
+- **The repacked `vendor_boot` declared a self-contradicting ramdisk table,
+  and that was not it either** — Verified 2026-10-07 and fixed. A v4 vendor
+  ramdisk table entry begins `{ramdisk_size, ramdisk_offset}`, and
+  `bootlog.py` wrote the recompressed length to offset 4 instead of 0. Every
+  image this project has flashed therefore said its single ramdisk fragment
+  was 13857010 bytes long and started 13739256 bytes into a section 13739256
+  bytes long. Stock says `ramdisk_size=10002117, ramdisk_offset=0`.
+
+  It cost nothing: a downstream probe round completed seven 8-second sleeps
+  through exactly this image shape, so ABL does not consult the table when
+  there is one entry, and it takes the length from the header field - which
+  was always right. Both repack paths now go through one function and write
+  offset 0, because a tool that emits a header contradicting itself is a trap
+  for whoever reads it next looking for a cause.
 - **`STAGE=1` did not survive either, and it came back at 540 again** —
   Verified 2026-10-07. That is the same figure as the plain panic round, which
   is the one number it could least afford to be. The staged init carries its own
@@ -962,23 +990,32 @@ as what it would have fixed.
   round whose own arithmetic says 45 and whose real explanation is a panic.
   Nothing has been changed yet, because the constants are right for the kernel
   they were written for and a second set needs the kernel to be selectable.
-- **An init that does nothing runs; an init that does something does not** —
-  Reasoned, and this is the shape of the open problem. `PROBE=1` replaces
-  `/init` with four lines - a bare `#!/bin/busybox ash`, an explicit
-  `/bin/busybox sleep`, an explicit `/bin/busybox reboot -f` - and the timing
-  moved, so something ran. `STAGE=1` replaces it with a script that installs
-  the busybox applets, sources `init_functions.sh` and `deviceinfo`, mounts
-  proc, sys and dev, and starts a background subshell, and the timing did not
-  move at all. The real initramfs init does more than either. Which of those
-  steps fails is not yet known, and the honest position is that "the probe ran"
-  rests on a single number interpreted through an assumed attempt count.
+- **Nothing in the initramfs runs, and the next cheap question is the device
+  tree** — Reasoned 2026-10-07. An earlier entry here read "an init that does
+  nothing runs; an init that does something does not", on the strength of the
+  362. With that withdrawn there is no evidence any init has ever run, and the
+  search moves back into the kernel and the tree.
 
-  That is testable rather than arguable, which is what `PROBE_SLEEP` is for.
-  A round's total is `ATTEMPTS x (boot + sleep + reboot) + FALLBACK_BOOT`, so
-  running the same probe at two sleeps and differencing cancels every unknown
-  but `ATTEMPTS`. At sleep 8 the total was 362; if the probe really runs, sleep
-  1 must come back near 313, and if it does not run it will sit at 540 with the
-  rest.
+  The tree is the cheap half of what is left. A kernel rebuild for this device
+  costs 63 minutes and a device tree costs one `dtc` invocation, and the tree
+  is also the half that was written by hand. `scripts/dt-reduce.py` builds
+  variants by giving nodes `status = "disabled"` or deleting them outright,
+  working on `dtc -I dtb -O dts` output rather than on our source, so that
+  neither kbuild nor the C preprocessor is involved and a variant differs from
+  the shipped tree only where it was edited. That round trip is exact,
+  verified 2026-10-07: decompiling and recompiling the shipped tree with no
+  edits reproduces all 30410 bytes. `try-kernel.sh` takes `DTB=path` to flash
+  one.
+
+  The first variant disables every child of `/soc@0` but three - the GIC, the
+  memory-mapped timer and the watchdog - along with the smp2p nodes, the
+  reboot-mode nvmem and the gpio keys, and deletes the thermal zones. The
+  watchdog stays because it has to: the kernel adopting and petting the
+  bootloader's watchdog is what lets a `panic=60` wait run its full 60
+  seconds, and that wait is the ruler every number on this page is measured
+  with. With the reboot probe as `/init`, that round reads as about 176
+  seconds if the kernel now gets to userspace and 540 if it still panics, and
+  either answer splits the remaining search roughly in half.
 - **After that, `initcall_blacklist` can test the two generated drivers** —
   Reasoned. `CONFIG_KALLSYMS=y` is set, so the blacklist works, and the two
   hand-generated drivers are the dominant risk this document has named from
@@ -1753,18 +1790,26 @@ port boots" above. What is left starts from there.
    the failure. Until the kernel reaches `/init` there is nothing to read
    anywhere, so every round has to be reasoned into rather than measured.
 
-   The current candidate is the three `late_initcall_sync` teardowns, and
-   `clk_ignore_unused pd_ignore_unused regulator_ignore_unused` went onto
-   `kernel-cmdline.mainline.conf` on 2026-10-06; "Why the kernel resets" above
-   has the argument and the two hypotheses discarded on the way. If that is
-   wrong, the next instrument is not a new channel but the retry counter: a
-   kernel patched to `emergency_restart()` at a chosen point still ends in the
-   same hands-free fallback, but each of the seven attempts takes a different
-   length of time depending on how far it got, and seven attempts multiply that
-   difference into something measurable from the host. Combined with
-   `initcall_blacklist`, which disables a driver from the cmdline without a
-   rebuild, that is enough to bisect a blind boot - coarsely, one bit at a
-   time, but without touching the phone.
+   Four candidates have been bought and spent, and "Why the kernel resets"
+   above has each one: the `late_initcall_sync` teardowns, the watchdog,
+   initramfs decompression and the CPU idle states are all refuted, and so is
+   the claim that the kernel reaches `/init`. What the rounds did establish is
+   narrow but real - the kernel calls `panic()` outright, about 13 seconds
+   after power-on including the bootloader, after `parse_args` and before
+   anything in the initramfs runs.
+
+   The instrument now is the device tree, because it is the half of the port
+   that was written by hand and the only half that can be varied without a
+   63-minute rebuild: `scripts/dt-reduce.py` builds a reduced tree and
+   `try-kernel.sh` takes `DTB=path` to flash it. After that, `initcall_blacklist`
+   disables a named driver from the cmdline with no rebuild at all. And if both
+   run out, the fallback is the one this list named before any of them: a
+   kernel patched to `emergency_restart()` - or simply to set `panic_timeout` -
+   at a chosen point still ends in the same hands-free fallback, but each of
+   the seven attempts then takes a length of time that depends on how far it
+   got, and seven attempts multiply that difference into something measurable
+   from the host. That is enough to bisect a blind boot, coarsely, one number
+   at a time, without touching the phone.
 
 2. **Find where stock stage 1 wedges.** Still unknown, and now diagnosable:
    the watchdog arms on line 5 instead of line 35, so a hang becomes a reset

@@ -1351,6 +1351,28 @@ as what it would have fixed.
   So the likeliest reading of round 18 is Reasoned, not Verified: the init
   ran, the gadget never reached the host, and the phone sat still. A real
   hang is not excluded. The next round tells the two apart.
+- **The phone never even pulled D+ up** — Verified in the host's own kernel
+  log, which costs nothing to read. The phone left the bus at 15:10:53 for
+  the reboot out of fastboot, and in the following hour the host logged no
+  new device, no descriptor read error and no address failure - nothing.
+  So whatever ran on the phone, its gadget did not fail enumeration; it
+  never presented itself. That points below the gadget stack, at the
+  controller or the PHY, and away from anything a USB function does.
+- **The HS PHY was missing its reference clock gate** — Verified against
+  the stock tree; whether it is what kept the gadget off the bus is the
+  question for round 19. Stock's `hsphy@88e3000` takes two clocks, CXO as
+  `ref_clk_src` and `GCC_EUSB3_0_CLKREF_EN` as `ref_clk`
+  (`parrot-usb.dtsi`), and stock Android runs that gate enabled with one
+  consumer. Ours named only `RPMH_CXO_CLK`, so nothing in mainline ever
+  turns the gate on, and with no reference the PHY has nothing to run its
+  PLL from. Upstream already has the pattern: qdu1000, lemans and
+  sc8280xp all give the femto PHY its CLKREF gate as `ref`, and qdu1000's
+  `gcc_usb2_clkref_en` at `0x9c008` is a register away from ours at
+  `0x9c00c`. The working tree in `out/linux` makes that one-line change and
+  passes `CHECK_DTBS=y`; the DTB is `out/milestone/clkref.dtb`, differing
+  from pkgrel 4's in that one property. It goes into the series once a round
+  says it matters - unless ABL happens to leave the gate on, in which case
+  `clk_ignore_unused` already kept it on and the change is inert.
 - **The gadget stack is in the initramfs and loadable** — Verified in the
   pkgrel 4 vendor ramdisk. `libcomposite`, `u_ether`, `usb_f_ncm`,
   `usb_f_rndis` and `usb_f_acm` are there as `.ko.zst` with a `modules.dep`

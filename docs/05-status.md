@@ -139,6 +139,16 @@ closed every gap the unprivileged pass left open.
   boots.
 - **TWRP exists for this device** — Verified. It identifies as `twrp_pdx246`,
   `device:pdx246`.
+- **The bootloader itself is readable from recovery** — Verified, 2026-10-06.
+  `abl_a` is `sda12` and `abl_b` is `sda27`, 1,572,864 bytes each, and
+  `adb exec-out dd` reads them with root in recovery. The two slots differ,
+  which is expected on a phone that has taken an OTA. They are dumped to
+  `out/device-dump-root/stock/abl_{a,b}.img` and deliberately *not* in the set
+  `try-kernel.sh --restore` writes back: nothing in this project ever writes to
+  the bootloader chain. `scripts/abl-unpack.py` opens them - signed ELF, then
+  an EDK2 firmware volume, then an LZMA section, then a second volume - and
+  being able to read what the bootloader will do is worth more than most of
+  what is in this file.
 
 ### What the bootloader actually rejects
 
@@ -654,11 +664,29 @@ chain will accept the images at all.
 
 Read on 2026-10-06 from the public EDK2 `QcomModulePkg` - `BootLinux.c`,
 `LocateDeviceTree.c`, `PartitionTableUpdate.c`, `Board.c` and
-`Include/Library/LocateDeviceTree.h`. This is not Sony's ABL and predates
-SM6450, so every item below is "verified against the published implementation"
-rather than against this phone; what raises confidence is that it predicts the
-2026-10-06 red state exactly, from code paths nobody was looking at when the
-experiment was designed.
+`Include/Library/LocateDeviceTree.h` - and then checked against the bootloader
+actually on this phone, which is the thing that makes the rest of this section
+load-bearing rather than suggestive.
+
+- **The published sources are this device's ABL** — Verified, against the
+  binary. `abl_b` was dumped from recovery and unpacked with
+  `scripts/abl-unpack.py`, and its strings carry the code paths verbatim:
+  "Unable to find the Board Dtb", "Error: Board Dtbo blob not found", "Dtbo hdr
+  magic mismatch %x, with %x", "DTB offset is incorrect, kernel image does not
+  have appended DTB", "Single appended DTB found", "Exact DTB match found. DTBO
+  search is not required", "No match found for Soc Dtb type", all five "Dtbo
+  Table ... got corrupted" checks, both "DTB header is corrupted" messages, and
+  the LK matcher's own "Add DTB entry", "Delete don't fit DTB entry", "Best
+  match DTB tags", "ddr size does not match", "subtype-id doesnot match" and
+  "soc foundry does not match". `qcom,pmic-id-size` is there too. This is the
+  same implementation, down to the format strings.
+- **This build has no soft-SKU term at all** — Verified, against the binary,
+  and it removes the last unread field in the chain. `qcom,softsku-id` does not
+  appear anywhere in the unpacked volume - the only "sku" string in it is
+  `androidboot.hardware.sku=`, which is a command line argument and not a
+  matcher - so `GetSoftSkuMatchDtb` and the `CurDtSkuId == BoardSoftSkuId ()`
+  term of `platform_dt_absolute_match` are not in this ABL. The entry below
+  about `SkuId` is therefore moot on this device.
 
 - **There are two matchers, and the dtbo decides which one runs** — Verified
   against the sources. `BootLinux.c` calls `LoadAndValidateDtboImg`, which
@@ -694,14 +722,14 @@ experiment was designed.
   this chip reports `foundry_id` 3. And for a tree with no `qcom,pmic-id`,
   `DeviceTreeCompatible` fills the entry's PMIC revisions in from
   `BoardPmicTarget()` itself, so they compare equal by construction.
-- **`SkuId` is never read from the tree** — Verified against the sources.
-  `DeviceTreeCompatible` populates `platform_id`, `variant_id`,
-  `board_hw_subtype`, `soc_rev`, `pmic_rev`, `offset`, `size` and `Idx`, and
-  never `SkuId`, which therefore stays at the zero the allocation gave it. The
-  absolute match then needs `BoardSoftSkuId()` to be zero as well. Nothing on
-  this device reports it, and no stock tree carries `qcom,softsku-id`, so a
-  non-zero value would mean Sony's own trees cannot be appended-booted either.
-  Assumed zero; it is the last unread field in the chain.
+- **`SkuId` is never read from the tree** — Verified against the sources, and
+  moot on this device. In the published sources `DeviceTreeCompatible`
+  populates `platform_id`, `variant_id`, `board_hw_subtype`, `soc_rev`,
+  `pmic_rev`, `offset`, `size` and `Idx`, and never `SkuId`, so the absolute
+  match's `CurDtSkuId == BoardSoftSkuId ()` would need the board to report zero.
+  That was the one field nothing here could check - and the binary says the term
+  does not exist in this build at all. Recorded because a newer ABL would
+  reintroduce it.
 - **The exact-match shortcut cannot be reached here** — Verified against the
   sources. `GetSocDtb` sets `DtboNeed = FALSE` and skips the overlay entirely
   when a base satisfies `CheckAllBitsSet`, which would have been the tidy route

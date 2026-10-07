@@ -802,13 +802,16 @@ on equal scores. It lost, which leaves one reading: the board's DDR type is 0.
 The sweep stays because that is an inference about firmware rather than a
 reading off the device, and because 56 bytes is cheaper than a button press.
 
-What is still unverified is whether Sony's ABL is this ABL. The sources read
-here are the public EDK2 `QcomModulePkg`, which predates SM6450; the empty-dtbo
-failure is predicted by them exactly, which is good corroboration and not
-proof. The two fields that would fail silently if it differs are
-`BoardSoftSkuId`, which the appended matcher compares for equality against a
-`SkuId` that `DeviceTreeCompatible` never fills in from the tree - so zero, and
-fine if the board also reports zero - and the DDR type the sweep covers.
+Sony's ABL *is* this ABL, which was the one thing worth checking before
+spending another flash cycle. `abl_b` was dumped from recovery and unpacked
+with `scripts/abl-unpack.py`, and every string the code paths above would log
+is in it verbatim - "Unable to find the Board Dtb", "Dtbo hdr magic mismatch",
+"DTB offset is incorrect, kernel image does not have appended DTB", "Exact DTB
+match found. DTBO search is not required", and the LK matcher's "Add DTB
+entry", "ddr size does not match" and "subtype-id doesnot match". The same read
+closed the last open field: `qcom,softsku-id` appears nowhere in the volume, so
+the `SkuId` equality term is not in this build and cannot refuse our tree. What
+remains unread is the DDR type, which the sweep covers by construction.
 
 ## Ordered plan
 

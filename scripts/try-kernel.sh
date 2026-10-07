@@ -162,11 +162,11 @@ build_vendor_boot() {
 		# It does need the two bootloader properties stamped on, or the boot
 		# chain will not select it out of the dtb area at all. They are not
 		# device tree and do not belong in the source; see
-		# scripts/dtb-stamp-ids.sh.
+		# scripts/dtb-stamp-ids.py.
 		dtb="$BOOT/dtbs/$MAINLINE_DTB"
 		[ -f "$dtb" ] || die "missing $dtb - is linux-postmarketos-qcom-sm6450 installed in the rootfs?"
 		say "stamping the bootloader ids onto our own device tree"
-		"$ROOT/scripts/dtb-stamp-ids.sh" "$dtb" "$WORK/pdx246-stamped.dtb"
+		"$ROOT/scripts/dtb-stamp-ids.py" "$dtb" "$WORK/pdx246-stamped.dtb"
 		"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/pdx246-stamped.dtb"
 	else
 		# Sony's device trees, because our downstream base does not define the
@@ -471,15 +471,37 @@ cmd_harvest() {
 cmd_restore() {
 	need_fastboot
 	cur=$(getvar current-slot)
-	case "$cur" in a) spare=b ;; b) spare=a ;; *) die "could not read current-slot" ;; esac
-	say "restoring stock images on slot $spare"
+	case "$cur" in a) other=b ;; b) other=a ;; *) die "could not read current-slot" ;; esac
+
+	# Which slot to put back is "the one that is not known good", not "the
+	# spare". Those are the same thing after the bootloader has fallen back,
+	# which is what this assumed - but a run that red-states never boots at
+	# all, so it leaves the experiment slot active and nothing falls back.
+	# Restoring "the spare" then rewrites the stock slot, which is already
+	# stock, and leaves the broken slot exactly as it was. Asking which slot
+	# is marked successful covers both.
+	if [ "$(getvar "slot-successful:$cur")" = "yes" ]; then
+		good=$cur; bad=$other
+	elif [ "$(getvar "slot-successful:$other")" = "yes" ]; then
+		good=$other; bad=$cur
+	else
+		die "neither slot is marked successful, so there is no stock slot to
+       keep. Restore both by hand from $STOCK before booting anything."
+	fi
+
+	say "restoring stock images on slot $bad (slot $good is the good one)"
 	for p in vbmeta dtbo boot vendor_boot; do
-		f="$STOCK/${p}_$spare.img"
+		f="$STOCK/${p}_$bad.img"
 		[ -f "$f" ] || die "missing $f"
-		fastboot flash "${p}_$spare" "$f"
+		fastboot flash "${p}_$bad" "$f"
 	done
+
+	if [ "$good" != "$cur" ]; then
+		say "making the good slot $good active again"
+		fastboot --set-active="$good" || die "could not switch to slot $good"
+	fi
 	echo
-	echo "Slot $spare is stock again. Slot $cur is still active."
+	echo "Slot $bad is stock again, and slot $good is active."
 }
 
 case "${1:-}" in

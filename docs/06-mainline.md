@@ -682,9 +682,19 @@ and a patch adding them should be rejected, because they describe the
 firmware's selection protocol rather than the hardware. `dtb-ids.py` on the
 `vendor_boot.img` boot-deploy builds confirms ours comes out with both empty.
 
-So `scripts/dtb-stamp-ids.sh` adds them with `fdtput` on the way into the
-image, and the `.dts` that goes to the lists stays clean. A `dtc` round-trip
-shows the stamp adds exactly two lines and changes nothing else.
+So `scripts/dtb-stamp-ids.py` adds them on the way into the image, and the
+`.dts` that goes to the lists stays clean. A `dtc` round-trip shows the stamp
+adds exactly two lines and changes nothing else.
+
+It does the FDT surgery itself rather than calling `fdtput`, and that is not
+gratuitous. `fdtput` and `dtc` are in the pmport container; `fastboot` and
+`adb` are on the host, and this project may not install anything there. So
+`try-kernel.sh`, which needs both, could not run on either side - it got as far
+as "stamping the bootloader ids" and died on "fdtput not found". Eighty lines of
+Python buys a loop that runs from one place. It is checked against the
+implementation it replaced: byte-identical output, and stamping an
+already-stamped tree is a no-op rather than a tree with two `qcom,msm-id`
+properties in it.
 
 Getting the values right needed one correction, because the obvious source is
 the wrong one. `/proc/device-tree` on the running phone has
@@ -712,10 +722,21 @@ declared corrupt over 61 unresolvable labels, and ours would fail on all 1234.
 The board id cannot be used to dodge it either, since base and overlay are both
 matched against the hardware rather than against each other. So the other half
 is `scripts/empty-dtbo.py`, which builds an Android DT table with
-`dt_entry_count = 0` for the spare slot to carry. Whether this bootloader
-accepts an empty dtbo is the one thing here checked against nothing - it is the
-experiment - and it is safe to run because it goes on the inactive slot with
-byte-for-byte dumps of both slots on disk.
+`dt_entry_count = 0` for the spare slot to carry.
+
+That was the one thing here checked against nothing, and it has now been run.
+It does not work: on 2026-10-06 the device red-stated, and since there were no
+overlays to fail to apply and the stamped ids did match the hardware's
+`soc_id`, the empty table itself is what ABL will not take. Recovery was one
+command and one button press, as the design intended.
+
+The next shape to try is a dtbo that is well-formed but inapplicable: one real
+overlay whose `qcom,board-id` matches nothing the hardware reports, so ABL can
+parse the table, find no entry for this board, and apply none. That is a
+different condition from an empty table, and it should have been the first
+attempt. Before that, though, flashing Sony's own `vendor_boot` with only the
+dtbo swapped would say whether the dtbo is the whole story - the run that
+failed changed two things at once, and separating them costs one boot.
 
 ## Ordered plan
 

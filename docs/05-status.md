@@ -599,6 +599,51 @@ Everything here is about `linux-postmarketos-qcom-sm6450`, our own 6.18 kernel.
   flashing it would write zeros over the rootfs. `make-rootfs-img.sh` is the
   route to a real one.
 
+## The first mainline flash
+
+Run on 2026-10-06. The kernel never got to run, so nothing here is evidence
+about the kernel or the device tree's contents - only about whether the boot
+chain will accept the images at all.
+
+- **The flash itself is clean and the loop reaches it unattended** — Verified.
+  `to-fastboot.sh` put a running pmOS into fastboot in fifteen seconds,
+  `try-kernel.sh` moved the stock slot back to active, settled it, built the
+  images and flashed `vbmeta_a`, `dtbo_a`, `boot_a` and `vendor_boot_a` without
+  a single manual step. Our stamped tree went in at 30,484 bytes and the empty
+  dtbo at 4,096.
+- **The device red-states, and the empty dtbo is the reason** — Verified, and
+  this is the experiment's answer: no. The screen says the phone is corrupt and
+  will not boot, and USB never comes up. What makes the dtbo the suspect rather
+  than the device tree is that the two known failure modes are now separated.
+  On 2026-10-05 our tree plus *stock's* dtbo red-stated over 61 unresolvable
+  labels, which is an overlay failing to apply. This time there were no overlays
+  to apply at all and `dtb-stamp-ids.py` had matched the hardware's `soc_id`
+  `0x219`, so a base was there to select - and it still red-stated. A dt table
+  with `dt_entry_count = 0` is evidently not something this ABL will accept.
+- **One variable is still uncontrolled, and it is cheap to control** — Reasoned.
+  The run changed two things against a boot that works: the dtb area in
+  `vendor_boot` and the dtbo. Flashing Sony's own `vendor_boot` with nothing but
+  the empty dtbo swapped in would separate them outright - if that red-states,
+  the empty dtbo is the whole story; if it boots, our tree is not being
+  selected and the ids are wrong in some way `dtb-ids.py` cannot see.
+- **A red state leaves no USB and costs one button press** — Verified, again.
+  Nothing appeared on the bus: no fastboot, no adb, no gadget. Power+VolUp then
+  VolUp-while-plugging-in is the only way back, which puts a hard price on each
+  failed attempt of this particular kind and is the argument for choosing the
+  next one carefully rather than iterating.
+- **Recovery is complete and took one command** — Verified. `try-kernel.sh
+  --restore` rewrote `vbmeta_a`, `dtbo_a`, `boot_a` and `vendor_boot_a` from the
+  2026-10-05 dumps and made slot b active; the phone then booted stock Android
+  16 on `_b` with adb up and `ro.boot.verifiedbootstate` `orange`, which is what
+  an unlocked bootloader reports and not a complaint.
+- **`--restore` was restoring the wrong slot** — Verified and fixed. It targeted
+  "the spare", which is correct only after the bootloader has fallen back. A run
+  that red-states never boots, so it leaves the experiment slot active and
+  nothing falls back: the old code would have rewritten the stock slot, which
+  was already stock, and left the broken slot untouched. It now restores
+  whichever slot is not marked successful and hands activity back to the one
+  that is.
+
 ## The boot images
 
 - **boot-deploy's v4 path builds the images the way this port needs** —
@@ -1169,15 +1214,27 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   has no adbd and no authorised way to ask for the bootloader, so the port sat
   for twenty-one hours with a finished mainline kernel on the host and nothing
   able to flash it.
-- **Rebooting a healthy pmOS does not burn the slot down to a fallback** —
-  Verified, and it corrects the hope that it would. `scripts/to-fastboot.sh`
-  does reboot the phone over ssh, reliably: `journalctl --list-boots` counts
-  seven boots on this install, several of them eight to nineteen seconds long.
-  The bootloader never fell back and never dropped into fastboot. So the
-  "burning the retry counter" result below holds for *failed* boots, where the
-  probe reboots from inside the initramfs, and does not generalise to boots
-  that succeed - a successful pmOS boot evidently does not cost the slot an
-  attempt the bootloader minds.
+- **`systemctl reboot --reboot-argument=bootloader` reaches fastboot, and is
+  the answer** — Verified, 2026-10-06. Fifteen seconds from a running pmOS to
+  `fastboot devices` answering. It hands `reboot(2)`
+  `LINUX_REBOOT_CMD_RESTART2` with the string "bootloader", and the
+  `qcom,reboot-reason` node in the live tree binds a driver that turns that
+  into the restart reason the boot chain reads - the same mechanism
+  `adb reboot bootloader` uses on stock, done by the kernel rather than by
+  poking the SDAM from userspace. Two spellings do not work and are worth not
+  rediscovering: `systemctl reboot bootloader` is rejected with "Too many
+  arguments" by this systemd, and `systemctl reboot` as `user` returns silently
+  and does nothing, because logind defers to polkit and polkit wants an active
+  local session.
+- **Rebooting a healthy pmOS does burn the slot's retry counter** — Verified,
+  and this corrects a claim written earlier the same day that it does not.
+  Reading the slot state from fastboot settled it: slot a, the pmOS slot, was
+  at `slot-retry-count:a 1` with `slot-successful:a no`, down from the 7 that
+  slot b still shows. So the handful of reboots had been spending attempts all
+  along; the counter simply had not reached zero yet, and the earlier reading
+  was drawn from "no fallback happened" rather than from the counter itself.
+  Burning it down is a real route to the stock slot, just six or seven rounds
+  slower than asking the kernel.
 - **`systemctl reboot` has to go through sudo, and not too early** — Verified.
   As `user` it returns silently and does nothing, because logind hands the
   request to polkit and polkit wants an active local session. `sudo` is setuid
@@ -1196,10 +1253,8 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   the request is not being honoured. Writing it would not help, which is worth
   knowing because it is the obvious next thing to try.
 
-  What that leaves is the restart reason in the PMIC's SDAM, which is the one
-  mechanism known to work on this SoC and is the one this project was told not
-  to write. Reaching fastboot from a working pmOS therefore needs either that
-  authorisation or Power+VolUp by hand.
+  The restart reason is what works, and it is reached through the kernel rather
+  than written by hand; see the `--reboot-argument` entry above.
 - **Burning the bootloader's retry counter is the sanctioned route, and it is
   fast if you do not wait** — Verified. Our slot never marks itself booted, so
   every attempt decrements the counter; after enough of them the bootloader

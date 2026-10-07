@@ -303,25 +303,26 @@ project is not authorised to poke. So the loop stalled on its own success: the
 phone sat up for twenty-one hours with a finished mainline kernel on the host
 and nothing able to flash it.
 
-`scripts/to-fastboot.sh` is the attempt at closing it, and it does not close
-it. It tries fastboot, then adb, then rebooting pmOS over ssh in the hope of
-burning the slot's retry counter down to a fallback. The first two work. The
-third does not: seven reboots went past without the bootloader ever falling
-back or dropping into fastboot, so the retry-counter result this loop was built
-on holds for boots that *fail* - where the probe reboots from inside the
-initramfs - and not for boots that succeed.
+`scripts/to-fastboot.sh` closes it. It tries fastboot, then adb, then asks the
+kernel: `systemctl reboot --reboot-argument=bootloader` hands `reboot(2)` the
+string `bootloader`, and the `qcom,reboot-reason` driver bound to the live tree
+turns that into the restart reason the boot chain reads. Fifteen seconds from a
+running pmOS to `fastboot devices` answering, which is the same mechanism
+`adb reboot bootloader` uses on stock. The script is safe to call at the top of
+any round whatever the device is doing.
 
-The script is still worth having, because the first two branches are the common
-case and the third is at least honest about what it did. But the hole is open,
-and [05-status.md](05-status.md) records what closed it off: the BCB at offset
-0 of `misc` already reads `bootonce-bootloader` and this bootloader ignores it,
-so the only mechanism left is the restart reason in the PMIC's SDAM, which this
-project is not authorised to write.
+If that is ever refused it falls back to burning the slot's retry counter, which
+also works - our slot never reports its boot successful, so every attempt at it
+decrements the counter and nothing resets it, and slot a was measured dropping
+from 7 retries to 1 over a handful of reboots - it is just six or seven rounds
+slower. Two spellings that do not work are recorded in
+[05-status.md](05-status.md) so nobody spends an afternoon on them again:
+`systemctl reboot bootloader`, and writing `bootonce-bootloader` into the BCB
+at offset 0 of `misc`.
 
-So for now, reaching fastboot from a pmOS that works is a Power+VolUp step, and
-it belongs in `## Exceptions` above rather than in the loop. It is cheap to
-make unnecessary - one authorisation - and expensive to leave as it is, because
-it puts a hand back in the middle of every round that ends in a working boot.
+With this the loop no longer has a hand in it on the rounds that *succeed*,
+which is the half that was missing. The rounds that fail were already
+hands-free, through the fallback to stock.
 
 ### What is still missing
 

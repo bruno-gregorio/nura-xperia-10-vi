@@ -13,35 +13,28 @@
 # adb, and the loop stops dead on its own success - which is where this port
 # sat for twenty-one hours with a built mainline kernel and no way to flash it.
 #
-# The way out is the same A/B logic the rest of the loop leans on, pointed the
-# other way. Our slot never reports its boot successful, so the bootloader
-# decrements the retry counter on every attempt at it and never resets it. A
-# plain 'reboot' from inside pmOS therefore spends one attempt per round, and
-# after enough rounds the bootloader marks the slot unbootable and boots the
-# stock slot instead - where adb is waiting. docs/05-status.md records this as
-# the sanctioned route, as against writing the restart reason into the PMIC's
-# SDAM directly: that register was located and is writable, but poking it was
-# not authorised, and this needs nothing but a reboot.
+# The way out is to ask the kernel for it. 'systemctl reboot
+# --reboot-argument=bootloader' reaches reboot(2) with LINUX_REBOOT_CMD_RESTART2
+# and the string "bootloader", and the live tree's 'qcom,reboot-reason' node
+# binds a driver that turns that into the restart reason the boot chain reads.
+# This is the same mechanism 'adb reboot bootloader' uses on stock, done by the
+# kernel rather than by poking the PMIC's SDAM from userspace, and it takes one
+# reboot and about fifteen seconds.
 #
-# That third branch does not work on this device, and the script is kept anyway
-# because the first two are the common case and because it says so plainly
-# rather than appearing to succeed. Measured 2026-10-06: it reboots the phone
-# reliably - journalctl counted seven boots - and the bootloader never fell
-# back and never dropped into fastboot. The retry-counter result this loop was
-# built on came from the initramfs probe, which *fails* its boots, and it does
-# not generalise to boots that succeed.
+# Two spellings do NOT work and are worth not rediscovering. 'systemctl reboot
+# bootloader' is rejected with "Too many arguments" by this build, so the
+# argument has to go through --reboot-argument. And writing "bootonce-bootloader"
+# into the BCB at offset 0 of 'misc' does nothing on this device: that field
+# already contains exactly that string and seven boots went straight past it.
 #
-# docs/05-status.md has what rules out the alternatives: the BCB at offset 0 of
-# 'misc' already reads "bootonce-bootloader", the string Android writes to ask
-# for fastboot, and seven boots went straight past it. The only mechanism left
-# is the restart reason in the PMIC's SDAM, which this project is not
-# authorised to write.
+# The fallback, if the reboot argument is ever refused, is the bootloader's own
+# A/B logic: our slot never reports its boot successful, so every attempt at it
+# decrements the retry counter and nothing resets it. That works - measured
+# 2026-10-06, slot a went from 7 retries to 1 over a handful of reboots - it is
+# just six or seven rounds slower than asking.
 #
-# So from a pmOS that works, this exits nonzero and the step is Power+VolUp by
-# hand. From stock, recovery, or a failed experiment, it works.
-#
-# What this also does NOT fix: a kernel hung without panicking, because nothing
-# in the device is running to reboot it.
+# What this does NOT fix: a kernel hung without panicking, because nothing in
+# the device is running to reboot it. That is still Power+VolUp by hand.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -111,6 +104,14 @@ request_reboot() {
 		"echo $PASS | sudo -S systemctl reboot" >/dev/null 2>&1 || true
 }
 
+# The direct route: hand reboot(2) the string the qcom,reboot-reason driver
+# knows, and let the boot chain come up in fastboot.
+request_bootloader() {
+	timeout 40 "$ROOT/scripts/ssh.py" \
+		"echo $PASS | sudo -S systemctl reboot --reboot-argument=bootloader" \
+		>/dev/null 2>&1 || true
+}
+
 report() {
 	echo "   fastboot: $(have_fastboot && echo yes || echo no)   adb: $(have_adb && echo yes || echo no)"
 }
@@ -137,7 +138,27 @@ have_ssh || die "nothing reachable: no fastboot, no adb, and sshd on 172.16.42.1
        does not answer. Hold Power+VolUp until it vibrates, then hold VolUp
        while plugging in USB."
 
-say "pmOS is up and has no adb - burning the slot's retry counter"
+say "pmOS is up and has no adb - asking the kernel for the bootloader"
+request_bootloader
+i=0
+while [ "$i" -lt 60 ]; do
+	sleep 3
+	i=$((i + 3))
+	have_fastboot && { say "in fastboot after ${i}s"; exit 0; }
+	if have_adb; then
+		say "adb answered instead - asking it for the bootloader"
+		adb reboot bootloader >/dev/null 2>&1 || true
+		j=0
+		while [ "$j" -lt 60 ]; do
+			sleep 2
+			have_fastboot && { say "in fastboot"; exit 0; }
+			j=$((j + 2))
+		done
+		die "adb answered but fastboot never appeared"
+	fi
+done
+
+say "the reboot argument did not land - burning the slot's retry counter instead"
 echo "   Each round is one 'reboot', which is one boot attempt the bootloader"
 echo "   does not get told succeeded. Stock Android answers when it gives up."
 

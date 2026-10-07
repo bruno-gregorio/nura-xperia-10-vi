@@ -22,12 +22,11 @@ Base: v6.18.55
      .../bindings/soc/qcom/qcom,aoss-qmp.yaml           |    1 +
      .../bindings/spmi/qcom,x1e80100-spmi-pmic-arb.yaml |    4 +-
      .../devicetree/bindings/usb/qcom,dwc3.yaml         |    3 +
-     .../devicetree/bindings/watchdog/qcom-wdt.yaml     |    1 +
      arch/arm64/boot/dts/qcom/Makefile                  |    1 +
      arch/arm64/boot/dts/qcom/pm6450.dtsi               |   63 +
      arch/arm64/boot/dts/qcom/pmr735a.dtsi              |   11 +-
      .../qcom/sm6450-sony-xperia-columbia-pdx246.dts    |  412 +++
-     arch/arm64/boot/dts/qcom/sm6450.dtsi               | 1320 ++++++++++
+     arch/arm64/boot/dts/qcom/sm6450.dtsi               | 1313 +++++++++
      drivers/clk/qcom/Kconfig                           |   10 +
      drivers/clk/qcom/Makefile                          |    1 +
      drivers/clk/qcom/clk-rpmh.c                        |   22 +
@@ -38,7 +37,7 @@ Base: v6.18.55
      drivers/pmdomain/qcom/rpmhpd.c                     |   18 +
      drivers/regulator/qcom-rpmh-regulator.c            |   42 +
      include/dt-bindings/clock/qcom,sm6450-gcc.h        |  184 ++
-     32 files changed, 6197 insertions(+), 4 deletions(-)
+     31 files changed, 6189 insertions(+), 4 deletions(-)
 
 diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
 index 18b5ed044..1500a8fdf 100644
@@ -453,18 +452,6 @@ index a792434c5..c583651a4 100644
                - qcom,sm8150-dwc3
                - qcom,sm8250-dwc3
                - qcom,sm8350-dwc3
-diff --git a/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml b/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
-index 49e2b807d..52239b3ac 100644
---- a/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
-+++ b/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
-@@ -40,6 +40,7 @@ properties:
-               - qcom,apss-wdt-sdx65
-               - qcom,apss-wdt-sm6115
-               - qcom,apss-wdt-sm6350
-+              - qcom,apss-wdt-sm6450
-               - qcom,apss-wdt-sm8150
-               - qcom,apss-wdt-sm8250
-           - const: qcom,kpss-wdt
 diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
 index dffdb219f..8b5b821a9 100644
 --- a/arch/arm64/boot/dts/qcom/Makefile
@@ -996,10 +983,10 @@ index 000000000..863a529c5
 +};
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..1828560be
+index 000000000..119dfcfb4
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,1320 @@
+@@ -0,0 +1,1313 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -2144,13 +2131,6 @@ index 000000000..1828560be
 +			interrupt-controller;
 +			#redistributor-regions = <1>;
 +			redistributor-stride = <0x0 0x20000>;
-+		};
-+
-+		watchdog@17410000 {
-+			compatible = "qcom,apss-wdt-sm6450", "qcom,kpss-wdt";
-+			reg = <0x0 0x17410000 0x0 0x1000>;
-+			clocks = <&sleep_clk>;
-+			interrupts = <GIC_SPI 0 IRQ_TYPE_EDGE_RISING>;
 +		};
 +
 +		timer@17420000 {

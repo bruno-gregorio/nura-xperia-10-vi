@@ -1196,6 +1196,67 @@ as what it would have fixed.
 
   Each attempt is `12.9 + timeout` and the round is seven of them plus 30, so
   one step of 2 seconds moves the total by 14, well above the 2-second poll.
+- **The panic is in initcall 535, `qcom_wdt`** — Verified 2026-10-07 over two
+  rounds of the milestone kernel. The decode needs the delay-loop factor
+  measured earlier, because `panic()` waits with `mdelay`: each attempt costs
+  `13.34 + 0.992 x timeout` seconds and the round is seven of them plus 30.
+  Round 14, `pmos.milestone panic=44 nokaslr`, came back at 686: a timeout of
+  81.02, initcall band 81, calls 528 to 543. Round 15 zoomed in with
+  `pmos.milestone=512` and came back at 976: a timeout of 122.8, so 123, so
+  call 535. In the flashed kernel's own initcall table, recovered from the
+  image's kallsyms with `vmlinux-to-elf` because pmbootstrap discards
+  `System.map`, call 535 is `qcom_watchdog_driver_init`. A driver
+  registration only does something if a device matches, and one does:
+  `watchdog@17410000`, `qcom,apss-wdt-sm6450`, in our `sm6450.dtsi`.
+
+  The decode is now `out/milestone/zoom512-decode.txt`, generated from the
+  table. The same 21 coarse marks and the zoom can be pointed anywhere else
+  without a rebuild.
+- **That register block belongs to the hypervisor** — Verified against the
+  stock system, 2026-10-07. Android on this phone runs as a Gunyah VM: the
+  live tree has `qcom,gunyah-hypervisor-1.0` with `qcom,vmid = <3>`. Its own
+  MMIO watchdog node, `qcom,wdt@17410000`, is `status = "disabled"`, and the
+  watchdog it actually uses is `qcom,gh-watchdog` under `/hypervisor`, driven
+  by `gh_virt_wdt` - which is in the stock module list as loaded. The upstream
+  Gunyah watchdog series says it outright: the hypervisor "doesn't allow its
+  Virtual Machines to directly access the MMIO watchdog". The reading is that
+  `qcom_wdt`'s probe touches a block Gunyah never mapped into our VM, takes a
+  synchronous external abort, oopses in PID 1, and the kernel panics because
+  init died. The mechanism is Reasoned; that disabling the node changes the
+  outcome is the next entry.
+- **With the watchdog node disabled, the kernel reaches `/init`** — Verified
+  2026-10-07, over two rounds. Round 16 flashed the same
+  kernel and command line as round 15 with one difference, a tree from
+  `scripts/dt-reduce.py -d '/soc@0/watchdog@17410000'`, and came back at 180:
+  8.1 seconds per attempt above the fixed cost, which is the probe's 8-second
+  sleep. A panic here would have cost at least 32 and an immediate reset 2.6.
+  This is the first round in this document where the probe has run.
+
+  Round 17 is the slope test, the one that refuted the 362 earlier: the same
+  image with the probe sleeping 20 seconds instead of 8. Predicted 264, came
+  back 262, so 11.7 seconds more per attempt for a 12-second change. The
+  probe ran on every attempt in both rounds.
+- **The watchdog node is gone from the series** — Done 2026-10-07, in
+  `kernel/patches/` and the aport, pkgrel 3. `sm6450.dtsi` no longer declares
+  `watchdog@17410000`, and the `qcom,apss-wdt-sm6450` compatible came out of
+  the bindings patch with it, since nothing would use it. Deleted rather than
+  disabled because that is what upstream does on this generation: SM4450,
+  SM8550, SM8650, SM8750 and SAR2130P have no APSS watchdog node either, and
+  the ones that do (SM6350, QCS8300) predate or sit outside Gunyah. Both
+  commits say why in their messages. The rewrite was a cherry-pick replay
+  checked to differ from the old branch by exactly those eight lines, which
+  is kept as `sm6450-pre-wdt-fix` in `out/linux`; the board DTB passes
+  `CHECK_DTBS=y`.
+- **What upstream does about it, and so what our tree should say** — Verified
+  in the lists, 2026-10-07. The Gunyah watchdog is not a device-tree node
+  upstream at all: `qcom_scm` registers a `gunyah_wdt` platform device
+  itself, and only when no available `qcom,kpss-wdt` or `arm,sbsa-gwdt` node
+  exists, so that an MMIO watchdog where one really works keeps priority. The
+  SCM half was applied to the qcom tree by Bjorn Andersson on 2026-03-30; the
+  driver went to watchdog-next. So the fix that survives review is to stop
+  declaring an available APSS watchdog in `sm6450.dtsi` - the block exists,
+  but this VM may not touch it - and to carry those two patches as backports
+  to get a working watchdog back.
 - **After that, `initcall_blacklist` can test the two generated drivers** —
   Reasoned. `CONFIG_KALLSYMS=y` is set, so the blacklist works, and the two
   hand-generated drivers are the dominant risk this document has named from
@@ -1243,8 +1304,12 @@ as what it would have fixed.
   for `no-map`, from `hypervisor@80000000` through `rdtag@ffdc0000`. The
   `memory@80000000` node carries `reg = <0x0 0x80000000 0x0 0x0>`, which is the
   upstream convention: ABL fills the size in from the UEFI memory map.
-- **The watchdog is already handled and is not the cause** — Verified, after
-  briefly believing otherwise. Some Qualcomm bootloaders leave the APSS
+- **The watchdog is already handled and is not the cause** — Withdrawn for the
+  mainline kernel on 2026-10-07: the watchdog *is* the cause there, see "The
+  panic is in initcall 535, `qcom_wdt`". What follows was right about the
+  config and wrong about the question, which was never whether the driver
+  probes but whether this VM may touch the register block at all. Originally
+  Verified, after briefly believing otherwise. Some Qualcomm bootloaders leave the APSS
   watchdog running, which resets the device in about 30 seconds unless the
   kernel pets it, and a module-only driver would never load here because
   mainline has no UFS and so never reaches a rootfs. But the shipping config

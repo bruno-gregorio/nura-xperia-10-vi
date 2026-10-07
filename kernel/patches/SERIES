@@ -11,7 +11,7 @@ dt-bindings: clock: qcom,rpmhcc: Add SM6450
 clk: qcom: clk-rpmh: Add support for SM6450
 dt-bindings: power: qcom,rpmpd: Add SM6450
 pmdomain: qcom: rpmhpd: Add SM6450 power domains
-dt-bindings: qcom: Add SM6450 compatibles for PDC, IPCC, WDT and EPSS
+dt-bindings: qcom: Add SM6450 compatibles for PDC, IPCC and EPSS
 dt-bindings: spmi: Add SM6450 SPMI PMIC arbiter
 dt-bindings: mfd: qcom,spmi-pmic: Add PM6450
 dt-bindings: regulator: qcom,rpmh-regulator: Add PM6450

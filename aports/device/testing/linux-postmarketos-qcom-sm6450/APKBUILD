@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=2
+pkgrel=3
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -109,6 +109,6 @@ package() {
 sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
 da7dc9aa27052c0fe46c7a1bb0403beeadf5f62eeb4bc724184e60a2f90b140b0cf9d05064625778944721c871d41af7532fc3e2f958035a6858a57ae0b6e765  config-postmarketos-qcom-sm6450.aarch64
-70c555aa2ec942710788a14373a755005b3f69fc4e74125843d8670bc5ff8494219a9752eccaa300cc922e92321e99755b9b7f0baeeaa7e3134a74dedd915c13  sm6450-mainline.patch
+94ee74cd834259c575dff3259199bbd0d868954040c56bc8750aad6c2ac21e971da87086daac08f5b49557fee9645d867727e76bd1d4a38535813805351da328  sm6450-mainline.patch
 693ed8dff51fabd84fcabe6b579383bfcdc817687122f9bb43d9257d6e27ccc83979acdd4754718336d8fe1e3bf2375a41007f56ccdb7fbcd1549e19eeb2f760  bringup-milestones.patch
 "

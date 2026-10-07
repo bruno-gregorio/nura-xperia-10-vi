@@ -1,24 +1,23 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
-Date: Tue, 6 Oct 2026 09:04:48 -0300
-Subject: [PATCH] dt-bindings: qcom: Add SM6450 compatibles for PDC, IPCC, WDT
- and EPSS
+Date: Wed, 7 Oct 2026 15:05:34 -0300
+Subject: [PATCH] dt-bindings: qcom: Add SM6450 compatibles for PDC, IPCC and
+ EPSS
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 Document the SM6450 variants of the power domain controller, the
-inter-processor communication controller, the APSS watchdog and the
-EPSS CPU frequency controller. SM6450 has two frequency domains, so it
-joins the two-domain list as well.
+inter-processor communication controller and the EPSS CPU frequency
+controller. SM6450 has two frequency domains, so it joins the
+two-domain list as well.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  Documentation/devicetree/bindings/cpufreq/cpufreq-qcom-hw.yaml  | 2 ++
  .../devicetree/bindings/interrupt-controller/qcom,pdc.yaml      | 1 +
  Documentation/devicetree/bindings/mailbox/qcom-ipcc.yaml        | 1 +
- Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml        | 1 +
- 4 files changed, 5 insertions(+)
+ 3 files changed, 4 insertions(+)
 
 diff --git a/Documentation/devicetree/bindings/cpufreq/cpufreq-qcom-hw.yaml b/Documentation/devicetree/bindings/cpufreq/cpufreq-qcom-hw.yaml
 index 2d42fc3d8..15866540c 100644
@@ -64,15 +63,3 @@ index e5c423130..59455b574 100644
            - qcom,sm8250-ipcc
            - qcom,sm8350-ipcc
            - qcom,sm8450-ipcc
-diff --git a/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml b/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
-index 49e2b807d..52239b3ac 100644
---- a/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
-+++ b/Documentation/devicetree/bindings/watchdog/qcom-wdt.yaml
-@@ -40,6 +40,7 @@ properties:
-               - qcom,apss-wdt-sdx65
-               - qcom,apss-wdt-sm6115
-               - qcom,apss-wdt-sm6350
-+              - qcom,apss-wdt-sm6450
-               - qcom,apss-wdt-sm8150
-               - qcom,apss-wdt-sm8250
-           - const: qcom,kpss-wdt

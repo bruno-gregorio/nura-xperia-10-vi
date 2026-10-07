@@ -9,29 +9,36 @@ Content-Transfer-Encoding: 8bit
 Add the base device tree for SM6450: eight CPUs in one cluster (four
 Cortex-A55 and four Cortex-A78) with their idle states and PSCI power
 domains, the carve-outs the firmware owns, GCC, TLMM, the GIC, PDC,
-IPCC, the TCSR mutex, the memory-mapped timer, the APSS watchdog, the
-RPMh RSC with its clock and power domain controllers, the EPSS CPU
-frequency controller, the QUPv3 wrapper holding the debug UART, the
-SPMI arbiter with both its buses, the AOSS side channel and its sleep
-stats, SMEM with the four SMP2P edges that ride on it, the apps SMMU,
-the SD card controller, and USB with its high-speed PHY.
+IPCC, the TCSR mutex, the memory-mapped timer, the RPMh RSC with its
+clock and power domain controllers, the EPSS CPU frequency controller,
+the QUPv3 wrapper holding the debug UART, the SPMI arbiter with both
+its buses, the AOSS side channel and its sleep stats, SMEM with the
+four SMP2P edges that ride on it, the apps SMMU, the SD card
+controller, and USB with its high-speed PHY.
 
 The USB3 + DP combo PHY at 0x88e8000 is left out: which upstream QMP
 generation it is has not been established. Until it has, the controller
 runs at high speed off the UTMI clock, which is enough for a console.
 
+The APSS watchdog at 0x17410000 is left out too. The OS runs as a
+Gunyah VM on this SoC and the hypervisor does not map that block for
+it: with the node present, qcom_wdt's probe takes an external abort
+and the boot dies in its initcall. As on SM4450 and SM8550 onwards,
+the watchdog is the Gunyah SMC one, which qcom_scm registers when no
+MMIO watchdog is described.
+
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- arch/arm64/boot/dts/qcom/sm6450.dtsi | 1320 ++++++++++++++++++++++++++
- 1 file changed, 1320 insertions(+)
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 1313 ++++++++++++++++++++++++++
+ 1 file changed, 1313 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450.dtsi
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..1828560be
+index 000000000..119dfcfb4
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,1320 @@
+@@ -0,0 +1,1313 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -1176,13 +1183,6 @@ index 000000000..1828560be
 +			interrupt-controller;
 +			#redistributor-regions = <1>;
 +			redistributor-stride = <0x0 0x20000>;
-+		};
-+
-+		watchdog@17410000 {
-+			compatible = "qcom,apss-wdt-sm6450", "qcom,kpss-wdt";
-+			reg = <0x0 0x17410000 0x0 0x1000>;
-+			clocks = <&sleep_clk>;
-+			interrupts = <GIC_SPI 0 IRQ_TYPE_EDGE_RISING>;
 +		};
 +
 +		timer@17420000 {

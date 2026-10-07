@@ -746,6 +746,178 @@ load-bearing rather than suggestive.
   It lost. `dtb-stamp-ids.py` sweeps all eight values anyway, in one property,
   for 56 bytes.
 
+## The second mainline flash: the kernel gets control
+
+Run on 2026-10-06, after the section above was read. This is the first time
+anything of ours has been handed the CPU, so unlike the first flash, some of
+what follows *is* evidence about the kernel and the device tree.
+
+- **ABL accepts the images and selects our own device tree** — Verified. No red
+  screen. The flash was clean: `vbmeta_a` 64 KB, `dtbo_a` 4 KB, `boot_a`
+  27,924 KB, `vendor_boot_a` 13,464 KB with a 30,540-byte dtb area, then
+  `Setting current slot to 'a'`. The two changes that did it were the dtbo the
+  bootloader cannot parse, which forces the appended-device-tree path and so
+  applies no overlay, and board ids stamped for that path's strict matcher
+  rather than the lenient one stock takes. Both are argued from ABL's sources
+  in the previous section.
+- **The kernel resets repeatedly and the bootloader falls back on its own** —
+  Verified. 158 seconds after `fastboot reboot`, adb answered on slot `_b`:
+  the retry counter ran down, the slot was marked unbootable and stock Android
+  came back without a button press. The screen was black throughout.
+- **Each attempt is on the order of fifteen seconds** — Reasoned, not measured.
+  The 158 seconds covers seven failed attempts *plus* stock's own boot to adb.
+  Taking stock at 45 to 60 seconds leaves roughly 14 to 16 seconds per attempt,
+  a few of which are ABL itself. Nothing timed an individual attempt, so treat
+  this as an order of magnitude and not a number.
+- **This failure mode is hands-free, and that changes the economics** —
+  Verified. A red state leaves nothing on the bus and costs a Power+VolUp by
+  hand. This one returns adb by itself in under three minutes. Rounds against
+  a kernel that resets are cheap in a way rounds against ABL never were.
+- **The kernel produced no output of any kind** — Verified. No fastboot, no
+  adb, no USB gadget at any point during the seven attempts, and
+  `/sys/fs/pstore` was mounted and empty afterwards.
+- **The `PMBOOTLOG` in `rddata` is stale and says nothing about this boot** —
+  Verified, and worth writing down because it is a trap. The harvest prints it,
+  and it reads `Linux version 5.10.269-gki`, built `Mon Oct  5 12:53:44 UTC
+  2026`, `Machine model: Qualcomm Technologies, Inc. Parrot QRD`. That is
+  downstream output from the day before. The mainline kernel has no UFS driver,
+  so it cannot have written to `rddata` at all, and any round that appears to
+  find a log there has found the previous one.
+
+## Every output channel but one is closed
+
+Established on 2026-10-06. This is the central constraint on mainline bring-up
+here and the reason a silent reset is so expensive: there is exactly one way to
+see anything, and it is downstream of the failure.
+
+- **RAM cannot carry anything across a reset** — Verified 2026-10-05, and it
+  closes a route that looks obvious. Since we control our own device tree, the
+  tempting plan is to reserve ramoops at `0xffd00000`, the address downstream
+  uses, let the mainline kernel panic into it, and read `/sys/fs/pstore` from
+  the downstream kernel after the automatic fallback. It cannot work. The
+  binding itself is fine - TWRP's own kernel reserves the region, prints
+  `printk: console [ramoops-1] enabled` and writes to it - but reboot TWRP into
+  TWRP, a clean warm reboot with nothing of ours involved, and the records from
+  seconds earlier are gone. The bootloader scrubs DRAM, so a cross-kernel
+  handoff would hand the second kernel zeros.
+- **There is no UART to reach** — Verified earlier. `chosen/stdout-path` names
+  `/soc/qcom,qup_uart@98c000` and the mainline cmdline sets
+  `earlycon=qcom_geni,mmio32,0x98c000`, so the kernel is talking; the pads are
+  simply not broken out on this board. The earlycon stays in because it costs
+  nothing and would be the first thing to pay off if that ever changes.
+- **The bootloader's framebuffer cannot be used as a console** — Verified
+  2026-10-06, and this one took a single adb call to settle. ABL does leave a
+  live framebuffer: `reserved-memory/splash_region`, labelled
+  `cont_splash_region`, at `0xb8000000` for `0x2b00000` - 43 MiB, enough for
+  four 1080x2520 buffers at 32bpp - and carrying no `no-map`. That invites a
+  `simple-framebuffer` node under `/chosen` plus `simpledrm` and `fbcon`, which
+  is how postmarketOS gets a console on a device with no display driver. It
+  will not work here, because the panel is command mode:
+  `/sys/class/drm/card0/card0-DSI-1/modes` reads `1080x2520x60cmd`. A
+  command-mode panel does not scan out continuously; each frame has to be
+  pushed over DSI by the DPU. `simpledrm` only writes memory, and nothing would
+  push it, so the glass would keep showing ABL's last frame no matter what the
+  kernel wrote. This is also why "black screen" is not itself informative.
+- **The USB gadget in the initramfs is the only channel** — Verified by
+  construction. `pmos.debug-shell` stops the boot in the initramfs and brings
+  up telnet on 172.16.42.1:23 and a CDC-ACM port, and `try-kernel.sh` already
+  watches for the gadget as its win condition. It is a good channel - a live
+  shell on a running kernel beats any post-mortem - but it lives in userspace,
+  so reaching it is exactly the thing that is failing. Until the kernel
+  survives to `/init` there is nothing to read, anywhere.
+
+## Why the kernel resets
+
+Still unknown. The first candidate was reasoned out on 2026-10-06, flashed the
+same day, and refuted - the entries below keep it because the reasoning was
+sound and the refutation is the useful part. What it rules out is worth as much
+as what it would have fixed.
+
+- **The `late_initcall_sync` teardown is not the cause** — Verified 2026-10-06
+  by flashing it. `clk_ignore_unused pd_ignore_unused regulator_ignore_unused`
+  went into the cmdline and `verify-bootimg.py` confirmed all three reached the
+  image. The device then behaved *identically*: adb answered on slot `_b` after
+  158 seconds, the same figure as the round before, to the resolution of a
+  2-second poll. Had the kernel got past the clock and genpd passes and died
+  later, the per-attempt time would have moved and seven attempts would have
+  multiplied the difference; nothing moved. So the kernel dies before
+  `late_initcall_sync`, which also means it dies before `/init` and before any
+  of the three passes could have run. The flags stay on - they are correct for
+  bring-up regardless, and the regulator one guards a death the device has not
+  lived long enough to reach - but they are no longer an explanation.
+- **`rddata` is now a clean instrument** — Verified. The round read it and
+  found 0 non-zero bytes in 1 MB, then cleared it. The stale downstream
+  `PMBOOTLOG` that the previous round printed is gone, so a future round that
+  finds something there has genuinely written it.
+- **What the next round should ask is what *kind* of death this is** —
+  Reasoned. A panic and a hardware reset are indistinguishable in the data so
+  far, and they point in opposite directions: a panic means the kernel is alive
+  and its reporting machinery works, while a silent hardware reset means a bad
+  register access, the watchdog, or TZ killing us. The cmdline already
+  separates them, for free. `panic=5` adds a 5-second delay before a panic
+  reboots (`panic_timeout > 0` in `kernel/panic.c:558`), and a hardware reset
+  has no such delay. Raise it to `panic=60` and the two outcomes diverge by 55
+  seconds per attempt, which seven attempts multiply into 385: a panicking
+  kernel falls back at around 543 seconds, a hard-resetting one at 158 again.
+  One cmdline change, no rebuild, hands-free either way.
+- **After that, `initcall_blacklist` can test the two generated drivers** —
+  Reasoned. `CONFIG_KALLSYMS=y` is set, so the blacklist works, and the two
+  hand-generated drivers are the dominant risk this document has named from
+  the start: `initcall_blacklist=gcc_sm6450_init` disables the clock
+  controller (`subsys_initcall`, `drivers/clk/qcom/gcc-sm6450.c:2766`) and
+  `sm6450_tlmm_init` the pinctrl driver (`arch_initcall`,
+  `drivers/pinctrl/qcom/pinctrl-sm6450.c:1102`). A wrong register offset in
+  either is exactly the kind of fault that resets this SoC with nothing
+  printed. Note the asymmetry in what the outcomes cost: if blacklisting one
+  makes the resets stop, the kernel most likely hangs instead - no clock
+  provider means almost every probe defers - and a hang needs a button press,
+  because nothing resets it. That is the good branch, and it is worth the
+  press.
+
+- **Three subsystems switch off everything no driver claimed, at
+  `late_initcall_sync`** — Verified in the source, and this is why it was the
+  first candidate even though it turned out to be wrong. `clk_disable_unused`
+  (`drivers/clk/clk.c:1558`), `genpd_power_off_unused`
+  (`drivers/pmdomain/core.c:1392`) and `regulator_init_complete`
+  (`drivers/regulator/core.c:6631`) all run after every driver has probed and
+  before `/init` is executed. On a SoC this young almost nothing has been
+  claimed, so what they tear down is most of the chip - including clocks and
+  power domains that TZ, the modem and ABL's own live display are still using.
+  Losing those is not a crash the kernel can report; it is a hardware reset,
+  which is precisely the shape of what the device did.
+- **The timing distinguishes the three** — Verified in the source. The clock
+  and genpd passes run the moment `late_initcall_sync` is reached. The
+  regulator pass does not: `regulator_init_complete` queues delayed work
+  `msecs_to_jiffies(30000)` out, so it fires about 30 seconds later. A death at
+  roughly fifteen seconds therefore cannot be the regulator pass - but a kernel
+  that survives the first two will live long enough to meet it, which is why
+  all three flags go on at once rather than costing a round each.
+- **All three have a documented escape hatch, and using it is upstream
+  practice** — Verified. `clk_ignore_unused`, `pd_ignore_unused` and
+  `regulator_ignore_unused` are each a `__setup` in the file above. Upstream
+  describes the first two as the bring-up workaround in as many words: "we need
+  to use these two kernel command line arguments (clk_ignore_unused &
+  pd_ignore_unused) to skip disabling clocks and genpd power domains as part of
+  late init for initial version". They are bring-up only and should come off one
+  at a time, late, once the drivers that ought to hold these votes exist.
+- **The kernel is not being handed memory the firmware still owns** — Verified,
+  and this was the first hypothesis, discarded. A kernel allocating into TZ or
+  modem memory would also reset in seconds with no output. But `sm6450.dtsi`
+  reserves all 34 regions the live tree reserves, node for node and `no-map`
+  for `no-map`, from `hypervisor@80000000` through `rdtag@ffdc0000`. The
+  `memory@80000000` node carries `reg = <0x0 0x80000000 0x0 0x0>`, which is the
+  upstream convention: ABL fills the size in from the UEFI memory map.
+- **The watchdog is already handled and is not the cause** — Verified, after
+  briefly believing otherwise. Some Qualcomm bootloaders leave the APSS
+  watchdog running, which resets the device in about 30 seconds unless the
+  kernel pets it, and a module-only driver would never load here because
+  mainline has no UFS and so never reaches a rootfs. But the shipping config
+  has `CONFIG_QCOM_WDT=y` with `CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`, so the
+  driver is builtin, probes at boot and adopts a watchdog the bootloader
+  started. The `CONFIG_QCOM_WDT=m` that prompted the scare was in
+  `out/kbuild/.config`, a scratch out-of-tree build directory that nothing
+  ships from.
+
 ## The boot images
 
 - **boot-deploy's v4 path builds the images the way this port needs** —
@@ -1445,41 +1617,36 @@ up by `dd` under `out/device-dump/stock/`, the rootfs is on the SD card, the
 handoff into the stock second stage works, and **the port boots** - see "The
 port boots" above. What is left starts from there.
 
-1. **Boot the mainline kernel.** Everything up to the boot is now done.
-   Phase 1 is written and the whole series builds: `arm64` `defconfig` plus
-   our three symbols produced `vmlinux` and `Image` with no warning on
-   2026-10-06, and `nm` finds `gcc_sm6450_probe` at `subsys_initcall` and
-   `sm6450_tlmm_probe` at `arch_initcall`, so the generated drivers really
-   are linked and registered rather than merely compiling.
-   `linux-postmarketos-qcom-sm6450` is the aport, built from a kernel.org
-   6.18.55 tarball plus the squashed series, with a config derived from
-   pmaports' sm6350 one. `device-sony-pdx246` now has `-kernel-downstream`
-   and `-kernel-mainline` subpackages, so `pmbootstrap init` chooses which
-   kernel to install and `deviceinfo_dtb` follows the choice. See "Building
-   it" in [06-mainline.md](06-mainline.md).
+1. **Get the mainline kernel as far as `/init`.** The boot itself is no longer
+   the open question: it has happened twice. The first flash on 2026-10-06 was
+   refused by ABL outright, and the second - after the dtbo and the board-id
+   stamp were rewritten from ABL's own sources - was accepted, selected our
+   device tree and handed our kernel the CPU. See "The second mainline flash"
+   above. What it then did was reset about seven times and let the bootloader
+   fall back to stock, silently.
 
-   The apk build is done as well, and it is clean: 63 minutes under Alpine's
-   clang 23.1.2, exit 0, no warnings, and `verify-build.sh mainline` and
-   `verify-bootimg.py` both pass on the result. `pmb install --zap` then built
-   a rootfs with that kernel in it, and boot-deploy embedded our device tree
-   in `vendor_boot.img` byte-identically. The whole flash-image pipeline has
-   been dry-run offline: stamp the ids, swap the tree into `vendor_boot`, read
-   the ids back, build the dtbo the bootloader refuses. UFS and USB3 still wait on identifying
-   their PHY generations; neither is needed for a shell, because the loop boots
-   from the SD card and `sdhc_2` is written.
+   Silent is the hard part, and it is structural rather than bad luck. "Every
+   output channel but one is closed" above works through it: DRAM is scrubbed
+   by the bootloader so nothing RAM-backed survives a reset, the UART is not
+   broken out, and the panel is command mode so the bootloader's live
+   framebuffer cannot be driven as a console either. The only instrument is the
+   USB gadget the initramfs brings up - which is in userspace, downstream of
+   the failure. Until the kernel reaches `/init` there is nothing to read
+   anywhere, so every round has to be reasoned into rather than measured.
 
-   What is left is only getting the device into fastboot. That turned out to be
-   the real gate: the phone was running pmOS happily, which means no adb and no
-   sanctioned way to ask for the bootloader, so `scripts/to-fastboot.sh` now
-   burns the slot's retry counter to get there. See "Getting back to fastboot
-   without touching the phone" above.
+   The current candidate is the three `late_initcall_sync` teardowns, and
+   `clk_ignore_unused pd_ignore_unused regulator_ignore_unused` went onto
+   `kernel-cmdline.mainline.conf` on 2026-10-06; "Why the kernel resets" above
+   has the argument and the two hypotheses discarded on the way. If that is
+   wrong, the next instrument is not a new channel but the retry counter: a
+   kernel patched to `emergency_restart()` at a chosen point still ends in the
+   same hands-free fallback, but each of the seven attempts takes a different
+   length of time depending on how far it got, and seven attempts multiply that
+   difference into something measurable from the host. Combined with
+   `initcall_blacklist`, which disables a driver from the cmdline without a
+   rebuild, that is enough to bisect a blind boot - coarsely, one bit at a
+   time, but without touching the phone.
 
-   The honest expectation for that boot is that it does not reach userspace.
-   It is the first time a hand-written device tree for this SoC has been given
-   to a kernel, and a wrong register offset in a clock controller produces a
-   hang with nothing printed. That is what `earlycon=qcom_geni,mmio32,0x98c000`
-   and `panic=5` in `kernel-cmdline.mainline.conf` are for, and why the
-   experiment goes on the inactive slot.
 2. **Find where stock stage 1 wedges.** Still unknown, and now diagnosable:
    the watchdog arms on line 5 instead of line 35, so a hang becomes a reset
    loop that ends in Android with a flash log to read. The log hook arms right

@@ -825,6 +825,16 @@ Each phase gates the next; the ordering is the whole point.
    What this buys phase 1 is the thing "Effort and risk" below says is the
    dominant risk: a hand-written `sm6450.dtsi` that does not boot can now say
    so in writing.
+
+   Only half of that carries over to the mainline kernel, which is worth
+   stating plainly because this list implies otherwise. The flash-partition
+   log needs UFS, and mainline has no UFS driver for this SoC, so it cannot
+   write one; the `PMBOOTLOG` a mainline round appears to find in `rddata` is
+   the previous downstream boot's. What is left is the USB gadget, and that is
+   in userspace. So for mainline, phase 0 is not done: a device tree that
+   wedges before `/init` still cannot say so, and 05-status.md's "Every output
+   channel but one is closed" works through why RAM, the UART and the
+   bootloader's framebuffer are all unavailable here.
 1. **SoC base.** `sm6450.dtsi` plus dt-bindings; `gcc-sm6450.c` and
    `pinctrl-sm6450.c` transformed from the parrot sources against the
    ravelin/sm4450 template; RPMh (RSC, regulators, `pm6450.dtsi`); SMEM, SMP2P,

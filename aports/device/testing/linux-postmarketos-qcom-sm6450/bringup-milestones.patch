@@ -1,0 +1,180 @@
+--- a/init/main.c	2026-10-07 12:55:39.068474819 -0300
++++ b/init/main.c	2026-10-07 13:37:56.802570623 -0300
+@@ -866,6 +866,57 @@
+ #endif
+ }
+ 
++/*
++ * Bring-up instrument for a board with no usable console. NOT FOR UPSTREAM.
++ *
++ * docs/05-status.md in the postmarketOS port for sony-pdx246 has the full
++ * argument; the short version is that this phone has exactly one output
++ * channel. Its DRAM is scrubbed by the bootloader between boots, its UART is
++ * not broken out, and its panel is command mode so nothing pushes whatever a
++ * framebuffer console writes. What is left is the A/B retry counter: boot one
++ * slot, and how long the bootloader takes to give up and fall back to the
++ * other one is readable from the host. With panic=N the kernel chooses that
++ * duration, and seven attempts multiply it, so a number the kernel writes
++ * into panic_timeout arrives on the host as elapsed seconds.
++ *
++ * So panic_timeout is used here as a one-register output port. Each call
++ * below stores a different value, and whichever ran last before the panic is
++ * the furthest point the kernel reached. Nothing is printed and nothing is
++ * read back, which is the point: this works on a kernel that cannot print.
++ *
++ * Inert unless pmos.milestone is on the command line.
++ */
++static int pmos_milestone_on;
++static int pmos_initcall_seq;
++
++static int __init pmos_milestone_setup(char *str)
++{
++	pmos_milestone_on = 1;
++	return 0;
++}
++early_param("pmos.milestone", pmos_milestone_setup);
++
++/*
++ * Deliberately not __init: the last two call sites run after free_initmem().
++ */
++static void pmos_milestone(int n)
++{
++	if (pmos_milestone_on)
++		panic_timeout = 2 * n;
++}
++
++/*
++ * Initcalls get their own range so a death inside do_initcalls() reads out as
++ * a position in the sequence rather than as "somewhere in do_basic_setup".
++ * The counter spans both do_pre_smp_initcalls() and do_basic_setup(), so the
++ * value is unique even though the two phases are far apart.
++ */
++static void pmos_milestone_initcall(void)
++{
++	if (pmos_milestone_on)
++		panic_timeout = 48 + pmos_initcall_seq++ / 16;
++}
++
+ asmlinkage __visible __init __no_sanitize_address __noreturn __no_stack_protector
+ void start_kernel(void)
+ {
+@@ -1035,6 +1086,7 @@
+ 		late_time_init();
+ 	sched_clock_init();
+ 	calibrate_delay();
++	pmos_milestone(1);
+ 
+ 	arch_cpu_finalize_init();
+ 
+@@ -1043,23 +1095,28 @@
+ 	thread_stack_cache_init();
+ 	cred_init();
+ 	fork_init();
++	pmos_milestone(2);
+ 	proc_caches_init();
+ 	uts_ns_init();
+ 	time_ns_init();
+ 	key_init();
+ 	security_init();
++	pmos_milestone(3);
+ 	dbg_late_init();
+ 	net_ns_init();
+ 	vfs_caches_init();
++	pmos_milestone(4);
+ 	pagecache_init();
+ 	signals_init();
+ 	seq_file_init();
+ 	proc_root_init();
++	pmos_milestone(5);
+ 	nsfs_init();
+ 	pidfs_init();
+ 	cpuset_init();
+ 	mem_cgroup_init();
+ 	cgroup_init();
++	pmos_milestone(6);
+ 	taskstats_init_early();
+ 	delayacct_init();
+ 
+@@ -1068,6 +1125,7 @@
+ 	kcsan_init();
+ 
+ 	/* Do the rest non-__init'ed, we're now alive */
++	pmos_milestone(7);
+ 	rest_init();
+ 
+ 	/*
+@@ -1239,6 +1297,8 @@
+ 	if (initcall_blacklisted(fn))
+ 		return -EPERM;
+ 
++	pmos_milestone_initcall();
++
+ 	do_trace_initcall_start(fn);
+ 	ret = fn();
+ 	do_trace_initcall_finish(fn, ret);
+@@ -1451,6 +1511,7 @@
+ 	exit_boot_config();
+ 	free_initmem();
+ 	mark_readonly();
++	pmos_milestone(20);
+ 
+ 	/*
+ 	 * Kernel mappings are now finalized - update the userspace page-table
+@@ -1465,6 +1526,8 @@
+ 
+ 	do_sysctl_args();
+ 
++	pmos_milestone(21);
++
+ 	if (ramdisk_execute_command) {
+ 		ret = run_init_process(ramdisk_execute_command);
+ 		if (!ret)
+@@ -1533,29 +1596,40 @@
+ 
+ 	rcu_assign_pointer(cad_pid, get_pid(task_pid(current)));
+ 
++	pmos_milestone(8);
+ 	smp_prepare_cpus(setup_max_cpus);
++	pmos_milestone(9);
+ 
+ 	workqueue_init();
++	pmos_milestone(10);
+ 
+ 	init_mm_internals();
++	pmos_milestone(11);
+ 
+ 	do_pre_smp_initcalls();
++	pmos_milestone(12);
+ 	lockup_detector_init();
+ 
+ 	smp_init();
++	pmos_milestone(13);
+ 	sched_init_smp();
++	pmos_milestone(14);
+ 
+ 	workqueue_init_topology();
+ 	async_init();
+ 	padata_init();
+ 	page_alloc_init_late();
++	pmos_milestone(15);
+ 
+ 	do_basic_setup();
++	pmos_milestone(16);
+ 
+ 	kunit_run_all_tests();
+ 
+ 	wait_for_initramfs();
++	pmos_milestone(17);
+ 	console_on_rootfs();
++	pmos_milestone(18);
+ 
+ 	/*
+ 	 * check if there is an early userspace init.  If yes, let it do all
+@@ -1569,6 +1643,7 @@
+ 		ramdisk_execute_command = NULL;
+ 		prepare_namespace();
+ 	}
++	pmos_milestone(19);
+ 
+ 	/*
+ 	 * Ok, we have completed the initial bootup, and

@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=0
+pkgrel=1
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -45,10 +45,18 @@ _config="config-$_flavor.$arch"
 # scripts/sync-kernel-patches.sh out of the sm6450 branch in out/linux.
 # kernel/patches/ in this repository has the same change as 23 reviewable
 # commits; that is the copy to read, and the one that goes to the lists.
+#
+# bringup-milestones.patch is not part of that series and never will be. It
+# is a debugging instrument for a board with no console: inert unless
+# pmos.milestone is on the command line, and with it, it writes how far
+# start_kernel and kernel_init got into panic_timeout, which the A/B retry
+# counter turns into seconds on the host. docs/05-status.md has the decode.
+# Drop it once the kernel reaches /init.
 source="
 	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
 	$_config
 	sm6450-mainline.patch
+	bringup-milestones.patch
 "
 builddir="$srcdir/linux-$pkgver"
 
@@ -102,4 +110,5 @@ sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
 da7dc9aa27052c0fe46c7a1bb0403beeadf5f62eeb4bc724184e60a2f90b140b0cf9d05064625778944721c871d41af7532fc3e2f958035a6858a57ae0b6e765  config-postmarketos-qcom-sm6450.aarch64
 70c555aa2ec942710788a14373a755005b3f69fc4e74125843d8670bc5ff8494219a9752eccaa300cc922e92321e99755b9b7f0baeeaa7e3134a74dedd915c13  sm6450-mainline.patch
+8d5b54a5b709c05cc42bc597663af0ded9a936169d65497992975256ec8297e2e1144a757d06a580b223bd8ce3e5ef14be7ef0d76c34dc521449d52b6be09de1  bringup-milestones.patch
 "

@@ -1152,6 +1152,37 @@ as what it would have fixed.
   bootargs, which is where our command line lands, so it is a command-line
   round. If KASLR is the variable, `nokaslr` collapses every round to one of
   the two pure figures, and it has to do so twice before it counts.
+
+  The first `nokaslr` round came back at 540, seven clean panics. That is what
+  the guess predicts, but it is also what most rounds give anyway - about 10
+  of the 77 attempts so far reset rather than panicked - so it is weak
+  evidence and settles nothing. It does not need settling to move on: the
+  panic is the failure that happens every time, and the reset mode only
+  matters because it corrupts the reading. So every instrumented round from
+  here carries `nokaslr`, and a total that does not decode cleanly gets
+  repeated rather than read.
+- **The milestone kernel is the next instrument** — Reasoned, built
+  2026-10-07. Command-line knobs have bounded the panic to
+  `init/main.c:1037..1565` and cannot get closer, because nothing between
+  those lines takes a parameter that costs time. `bringup-milestones.patch`,
+  a separate `source=` entry in the kernel aport and never part of the
+  upstream series, makes the kernel write its progress into
+  `panic_timeout`, inert unless `pmos.milestone` is on the command line. Run
+  with `pmos.milestone panic=44 nokaslr`, the per-attempt panic wait reads
+  as:
+
+  - 44 seconds: no milestone was reached, so the panic is before the first
+    one, right after `calibrate_delay()`.
+  - 2 to 42 seconds, even: the last of 21 coarse marks through
+    `start_kernel`, `kernel_init` and `kernel_init_freeable` that was
+    passed, at twice its number. Mark 8 is just before `smp_prepare_cpus`,
+    13 just after `smp_init`, 16 after `do_basic_setup`.
+  - 48 seconds and up: the panic is inside the initcalls, and
+    `48 + n/16` locates initcall `n` to within sixteen, to be read against
+    the build's `System.map` order.
+
+  Each attempt is `12.9 + timeout` and the round is seven of them plus 30, so
+  one step of 2 seconds moves the total by 14, well above the 2-second poll.
 - **After that, `initcall_blacklist` can test the two generated drivers** —
   Reasoned. `CONFIG_KALLSYMS=y` is set, so the blacklist works, and the two
   hand-generated drivers are the dominant risk this document has named from

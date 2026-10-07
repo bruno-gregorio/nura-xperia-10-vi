@@ -545,6 +545,60 @@ made the first week of bring-up slow. The findings below are what closed it.
   `phy-msm-ssusb-qmp.o`. `parrot_GKI.config` enables only these two PHYs: no
   eUSB2, no QUSB.
 
+## The mainline kernel package
+
+Everything here is about `linux-postmarketos-qcom-sm6450`, our own 6.18 kernel.
+`docs/06-mainline.md` carries the derivation; this is what has been checked.
+
+- **The whole SM6450 series builds clean under Alpine clang** — Verified.
+  `pmb build --arch aarch64 linux-postmarketos-qcom-sm6450`, 63 minutes, exit
+  0, and not one warning or error in the log. clang 23.1.2 and pahole 131 in
+  the build chroot, against gcc 14.2.0 and no pahole in the distrobox, which is
+  why `CONFIG_CFI` and `CONFIG_DEBUG_INFO_BTF` had to be set by hand rather
+  than left to `olddefconfig`.
+- **The package contains what a boot needs** — Verified. `boot/vmlinuz`
+  28,588,544 bytes, `boot/linux.efi` 11,493,888, 427 modules, `kernel.release`
+  `6.18.55`, and `boot/dtbs/qcom/sm6450-sony-xperia-columbia-pdx246.dtb` at
+  30,410 bytes. The APKBUILD's own `die` on a missing device tree did not fire.
+- **gcc and clang produce the same device tree** — Verified. The DTB in the apk
+  is byte-identical to the one the out-of-tree gcc build emitted. Worth knowing
+  because the device tree is the part most likely to be wrong, and this rules
+  out the compiler as a variable in it.
+- **Every address in our tree is in the tree the device boots** — Verified.
+  `check-dt.py` against the live tree: 66 addresses in ours, 64 exact matches,
+  two inside a block of theirs and both already argued for in
+  `docs/06-mainline.md` (the USB QSCRATCH bank inside Sony's whole-peripheral
+  `ssusb@a600000`, and the tlmm rebased off `0xf000000`), none unaccounted for.
+  Interrupts: 14 nodes agree, 1 differs, and the difference is the watchdog
+  taking only the bark interrupt, which is the upstream convention.
+- **The device package really offers a choice of kernel** — Verified. Both
+  `device-sony-pdx246-kernel-downstream` and `-kernel-mainline` build, and each
+  resolves the suffixed deviceinfo keys correctly: the mainline subpackage ships
+  `deviceinfo_dtb="qcom/sm6450-sony-xperia-columbia-pdx246"` and
+  `deviceinfo_usb_network_udc="a600000.usb"`, the downstream one
+  `"vendor/qcom/parrot"` and `"a600000.dwc3"`, with no `_downstream`/`_mainline`
+  suffix left unresolved in either.
+- **Switching kernels needs `pmb install --zap`** — Verified, the hard way.
+  Both kernel packages own `/boot/vmlinuz`, so installing one into a rootfs
+  chroot that still holds the other fails with "trying to overwrite
+  boot/vmlinuz owned by linux-sony-pdx246". apk is right to refuse and the
+  packages are right to conflict; the chroot just has to be clean.
+- **`modules-initfs.mainline` can be empty because mkinitfs has its own list**
+  — Verified. The file names no modules at all, and the built initramfs still
+  holds fifteen: `libcomposite`, `u_ether`, `u_serial`, `usb_f_acm`,
+  `usb_f_ncm`, `usb_f_rndis`, `usb_f_mass_storage`, `evdev` and the filesystem
+  and raid helpers. mkinitfs takes the `usb_f_*` names from its own
+  `00-default.modules` and pulls `libcomposite`, `u_ether` and `u_serial` in as
+  modinfo dependencies. These are the only channel a first mainline boot has,
+  so this mattered more than its size suggests.
+- **`pmb install` cannot finish in the distrobox, and does not need to** —
+  Verified. Stage 2 builds the rootfs and runs boot-deploy, which is everything
+  `try-kernel.sh` reads; stage 3 wants a loop device and dies with "Failed to
+  find loop device". It leaves a correctly sized, entirely zero
+  `sony-pdx246.img` behind, which `verify-bootimg.py` refuses by design -
+  flashing it would write zeros over the rootfs. `make-rootfs-img.sh` is the
+  route to a real one.
+
 ## The boot images
 
 - **boot-deploy's v4 path builds the images the way this port needs** —
@@ -1108,6 +1162,44 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   and that attribute is writable - but writing a PMIC register was not
   authorised, so it stays unused and is recorded here only as a fact about the
   hardware.
+- **A pmOS that boots and stays up is a dead end for the loop** — Verified,
+  2026-10-06, and this is the open blocker. The loop's route to fastboot
+  assumed a *failed* experiment: a kernel that dies burns the retry counter,
+  the bootloader falls back to stock, and adb answers. A kernel that *works*
+  has no adbd and no authorised way to ask for the bootloader, so the port sat
+  for twenty-one hours with a finished mainline kernel on the host and nothing
+  able to flash it.
+- **Rebooting a healthy pmOS does not burn the slot down to a fallback** —
+  Verified, and it corrects the hope that it would. `scripts/to-fastboot.sh`
+  does reboot the phone over ssh, reliably: `journalctl --list-boots` counts
+  seven boots on this install, several of them eight to nineteen seconds long.
+  The bootloader never fell back and never dropped into fastboot. So the
+  "burning the retry counter" result below holds for *failed* boots, where the
+  probe reboots from inside the initramfs, and does not generalise to boots
+  that succeed - a successful pmOS boot evidently does not cost the slot an
+  attempt the bootloader minds.
+- **`systemctl reboot` has to go through sudo, and not too early** — Verified.
+  As `user` it returns silently and does nothing, because logind hands the
+  request to polkit and polkit wants an active local session. `sudo` is setuid
+  root and the user is in `wheel`, but it refuses `-n` with "interactive
+  authentication is required", so the password goes in on stdin with `-S`. Even
+  then a request made about 29 seconds into a boot is silently ignored while
+  one made at 40 seconds is honoured, and `systemctl is-system-running` already
+  says `degraded` at 29 seconds, so it is not the discriminator.
+- **The BCB already asks for fastboot and the bootloader ignores it** —
+  Verified, and it rules out the last software route that was not already
+  refused. Offset 0 of `misc` (`/dev/sda52`) is the AOSP
+  `bootloader_message.command` field, and it reads `bootonce-bootloader` right
+  now - the string Android writes there to request fastboot on the next boot.
+  Seven reboots went past it into pmOS. Either Sony's ABL does not read the BCB
+  or it reads and clears it, and the field is still set, so on either reading
+  the request is not being honoured. Writing it would not help, which is worth
+  knowing because it is the obvious next thing to try.
+
+  What that leaves is the restart reason in the PMIC's SDAM, which is the one
+  mechanism known to work on this SoC and is the one this project was told not
+  to write. Reaching fastboot from a working pmOS therefore needs either that
+  authorisation or Power+VolUp by hand.
 - **Burning the bootloader's retry counter is the sanctioned route, and it is
   fast if you do not wait** — Verified. Our slot never marks itself booted, so
   every attempt decrements the counter; after enough of them the bootloader
@@ -1203,11 +1295,21 @@ port boots" above. What is left starts from there.
    kernel to install and `deviceinfo_dtb` follows the choice. See "Building
    it" in [06-mainline.md](06-mainline.md).
 
-   What is left is the apk build itself - the first time this code meets
-   Alpine's clang rather than the container's gcc - and then a boot with the
-   flash-log hook on it. UFS and USB3 wait on identifying their PHY
-   generations; neither is needed for a shell, because the loop boots from
-   the SD card and `sdhc_2` is written.
+   The apk build is done as well, and it is clean: 63 minutes under Alpine's
+   clang 23.1.2, exit 0, no warnings, and `verify-build.sh mainline` and
+   `verify-bootimg.py` both pass on the result. `pmb install --zap` then built
+   a rootfs with that kernel in it, and boot-deploy embedded our device tree
+   in `vendor_boot.img` byte-identically. The whole flash-image pipeline has
+   been dry-run offline: stamp the ids, swap the tree into `vendor_boot`, read
+   the ids back, build the empty dtbo. UFS and USB3 still wait on identifying
+   their PHY generations; neither is needed for a shell, because the loop boots
+   from the SD card and `sdhc_2` is written.
+
+   What is left is only getting the device into fastboot. That turned out to be
+   the real gate: the phone was running pmOS happily, which means no adb and no
+   sanctioned way to ask for the bootloader, so `scripts/to-fastboot.sh` now
+   burns the slot's retry counter to get there. See "Getting back to fastboot
+   without touching the phone" above.
 
    The honest expectation for that boot is that it does not reach userspace.
    It is the first time a hand-written device tree for this SoC has been given

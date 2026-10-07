@@ -269,6 +269,12 @@ loop before the kernel.
 
 Two things do change:
 
+- Switching between them needs `pmb install --zap`. Both kernel packages own
+  `/boot/vmlinuz`, so installing one into a rootfs chroot that still holds the
+  other stops with "trying to overwrite boot/vmlinuz owned by
+  linux-sony-pdx246". That is apk behaving correctly, and it costs a rootfs
+  rebuild - about two minutes - on the rounds that change kernel, and nothing
+  on the rounds that do not.
 - `scripts/verify-build.sh` now takes `downstream` or `mainline`, and works
   it out on its own when only one is built. Each kernel promises a different
   DTB path and a different initramfs module list, and the script checks the
@@ -281,6 +287,41 @@ Two things do change:
   anything else, and `sync-kernel-patches.sh --check` is a Tier 0 check: it
   fails if the aport would build from a series that does not match the tree
   the work was done in.
+
+### Reaching fastboot from a pmOS that works
+
+The loop's route to fastboot had a hole in it that only opened once the port
+started succeeding. `try-kernel.sh`'s `need_fastboot()` assumes adb: either
+stock Android is up, or the experiment failed, burned the retry counter and
+fell back to stock, where adb is waiting. Both cases end in
+`adb reboot bootloader`.
+
+A pmOS that boots and stays up is neither. It has no adbd, and there is no
+sanctioned way to ask this kernel for the bootloader - the restart reason lives
+in a PMIC SDAM register, which was located and is writable but which this
+project is not authorised to poke. So the loop stalled on its own success: the
+phone sat up for twenty-one hours with a finished mainline kernel on the host
+and nothing able to flash it.
+
+`scripts/to-fastboot.sh` is the attempt at closing it, and it does not close
+it. It tries fastboot, then adb, then rebooting pmOS over ssh in the hope of
+burning the slot's retry counter down to a fallback. The first two work. The
+third does not: seven reboots went past without the bootloader ever falling
+back or dropping into fastboot, so the retry-counter result this loop was built
+on holds for boots that *fail* - where the probe reboots from inside the
+initramfs - and not for boots that succeed.
+
+The script is still worth having, because the first two branches are the common
+case and the third is at least honest about what it did. But the hole is open,
+and [05-status.md](05-status.md) records what closed it off: the BCB at offset
+0 of `misc` already reads `bootonce-bootloader` and this bootloader ignores it,
+so the only mechanism left is the restart reason in the PMIC's SDAM, which this
+project is not authorised to write.
+
+So for now, reaching fastboot from a pmOS that works is a Power+VolUp step, and
+it belongs in `## Exceptions` above rather than in the loop. It is cheap to
+make unnecessary - one authorisation - and expensive to leave as it is, because
+it puts a hand back in the middle of every round that ends in a working boot.
 
 ### What is still missing
 

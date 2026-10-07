@@ -648,8 +648,15 @@ keys off:
   one is `a600000.usb`, because a platform device is named after its device
   tree node and the two trees name the dwc3 core differently.
 - `modules-initfs.downstream` is a hundred lines in probe order;
-  `modules-initfs.mainline` names nothing, because our config builds all of
-  it into `vmlinux`.
+  `modules-initfs.mainline` names nothing. Not because everything is builtin -
+  `sdhci-msm`, `mmc_block`, `ext4`, `dwc3`, `gcc-sm6450` and `pinctrl-sm6450`
+  are, but the USB gadget functions are not. It names nothing because mkinitfs
+  already asks for them: its own `00-default.modules` lists `usb_f_acm`,
+  `usb_f_ncm`, `usb_f_rndis` and `usb_f_mass_storage`, and it follows modinfo
+  dependencies, so `libcomposite`, `u_ether` and `u_serial` come along. The
+  built initramfs holds fifteen modules on the strength of a file that names
+  none, which was worth checking rather than assuming: they are the only
+  channel a first boot has.
 - `kernel-cmdline.mainline.conf` asks for `earlycon=qcom_geni,mmio32,0x98c000`
   rather than a bare `earlycon`. The bare form relies on `/chosen`'s
   `stdout-path`, and the one the bootloader writes points at
@@ -661,6 +668,54 @@ keys off:
 A deviceinfo key that has a suffixed form must not also exist unsuffixed;
 `devicepkg_subpackage_kernel` fails the build if it does, which is how the
 unsupported half-converted state is caught.
+
+### The two properties the bootloader selects a tree on
+
+A mainline device tree is not selectable by this bootloader as it stands, and
+the reason has nothing to do with the tree being wrong.
+
+Qualcomm's boot chain reads the SoC id out of the fuses and the board id out of
+shared memory, walks the dtb area of `vendor_boot`, and boots the tree that
+advertises both in `qcom,msm-id` and `qcom,board-id`. Every mainline tree
+advertises neither - no upstream qcom dtsi has ever carried those properties,
+and a patch adding them should be rejected, because they describe the
+firmware's selection protocol rather than the hardware. `dtb-ids.py` on the
+`vendor_boot.img` boot-deploy builds confirms ours comes out with both empty.
+
+So `scripts/dtb-stamp-ids.sh` adds them with `fdtput` on the way into the
+image, and the `.dts` that goes to the lists stays clean. A `dtc` round-trip
+shows the stamp adds exactly two lines and changes nothing else.
+
+Getting the values right needed one correction, because the obvious source is
+the wrong one. `/proc/device-tree` on the running phone has
+`qcom,board-id = <0x1000b 0x0>` at its root, and that is what the script
+stamped first. But the live tree's root is the *resolved* tree, and its `model`
+reads "Parrot QRD" - so those are `parrot-qrd-overlay`'s properties, which
+overrode the base's. Read Sony's own `vendor_boot` instead and all fourteen
+base trees carry `<0x0 0x0>` or `<0x0 0x600>`: bases are generic and separated
+by `qcom,msm-id` alone, and it is the overlays that carry a board id. A base
+advertising `0x1000b` would have been selected by nothing.
+
+Which base to imitate is settled by the device rather than inferred.
+`/sys/devices/soc0` reports `soc_id` 537 = `0x219` and `platform_version`
+`0x10000`, which is exactly what "Qualcomm Technologies, Inc. Parrot SoC"
+advertises, so that is what we claim to be: `qcom,msm-id = <0x219 0x10000 0x265
+0x10000>`, `qcom,board-id = <0x0 0x0>`. `qcom,pmic-id` is left unset because no
+base tree in the stock image carries one.
+
+That is only half of it. Having chosen a base, the bootloader also applies a
+matching overlay from `dtbo`, resolving the overlay's `__fixups__` against the
+base's `__symbols__` - and our tree has no `__symbols__`, because upstream
+builds without `dtc -@`. A failed overlay is what red-states this phone: on
+2026-10-05 a `vendor_boot` identical to stock except for the device tree was
+declared corrupt over 61 unresolvable labels, and ours would fail on all 1234.
+The board id cannot be used to dodge it either, since base and overlay are both
+matched against the hardware rather than against each other. So the other half
+is `scripts/empty-dtbo.py`, which builds an Android DT table with
+`dt_entry_count = 0` for the spare slot to carry. Whether this bootloader
+accepts an empty dtbo is the one thing here checked against nothing - it is the
+experiment - and it is safe to run because it goes on the inactive slot with
+byte-for-byte dumps of both slots on disk.
 
 ## Ordered plan
 

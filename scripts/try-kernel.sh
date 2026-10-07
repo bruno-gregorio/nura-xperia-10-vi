@@ -58,10 +58,11 @@ KERNEL=${KERNEL:-downstream}
 MAINLINE_DTB="qcom/sm6450-sony-xperia-columbia-pdx246.dtb"
 
 # DTB=path overrides the tree that goes into vendor_boot, for bisection.
-# The reason this is a knob and not a constant: a kernel rebuild costs 63
-# minutes and a device tree costs one dtc invocation, so when the question is
-# "which node in our tree kills this boot" the device tree is the cheap half
-# of the search space, and it is also the half we wrote by hand. Point DTB at
+# The reason this is a knob and not a constant: a device tree costs one dtc
+# invocation and needs no package at all, against a couple of minutes for a
+# kernel rebuild through pmbootstrap's ccache, so when the question is "which
+# node in our tree kills this boot" the device tree is the cheap half of the
+# search space, and it is also the half we wrote by hand. Point DTB at
 # a variant built from a reduced .dts and a round answers it directly. The
 # default is the tree the installed kernel package built.
 

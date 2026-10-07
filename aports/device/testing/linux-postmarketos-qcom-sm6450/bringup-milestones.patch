@@ -1,6 +1,8 @@
---- a/init/main.c	2026-10-07 12:55:39.068474819 -0300
-+++ b/init/main.c	2026-10-07 13:37:56.802570623 -0300
-@@ -866,6 +866,57 @@
+diff --git a/init/main.c b/init/main.c
+index 269b30038..4794240e0 100644
+--- a/init/main.c
++++ b/init/main.c
+@@ -866,6 +866,73 @@ static void __init early_numa_node_init(void)
  #endif
  }
  
@@ -23,13 +25,21 @@
 + * read back, which is the point: this works on a kernel that cannot print.
 + *
 + * Inert unless pmos.milestone is on the command line.
++ *
++ * pmos.milestone=N zooms in on the initcalls: from the Nth one on, each
++ * initcall stores 100 plus its distance from N, one second per initcall, for
++ * 64 of them, and 170 after that. The default 48 + seq/16 encoding finds the
++ * band; this finds the call, without a rebuild.
 + */
 +static int pmos_milestone_on;
 +static int pmos_initcall_seq;
++static int pmos_zoom_base = -1;
 +
 +static int __init pmos_milestone_setup(char *str)
 +{
 +	pmos_milestone_on = 1;
++	if (str && kstrtoint(str, 0, &pmos_zoom_base))
++		pmos_zoom_base = -1;
 +	return 0;
 +}
 +early_param("pmos.milestone", pmos_milestone_setup);
@@ -51,14 +61,22 @@
 + */
 +static void pmos_milestone_initcall(void)
 +{
-+	if (pmos_milestone_on)
-+		panic_timeout = 48 + pmos_initcall_seq++ / 16;
++	int seq;
++
++	if (!pmos_milestone_on)
++		return;
++	seq = pmos_initcall_seq++;
++	if (pmos_zoom_base >= 0 && seq >= pmos_zoom_base)
++		panic_timeout = seq - pmos_zoom_base < 64 ?
++				100 + seq - pmos_zoom_base : 170;
++	else
++		panic_timeout = 48 + seq / 16;
 +}
 +
  asmlinkage __visible __init __no_sanitize_address __noreturn __no_stack_protector
  void start_kernel(void)
  {
-@@ -1035,6 +1086,7 @@
+@@ -1035,6 +1102,7 @@ void start_kernel(void)
  		late_time_init();
  	sched_clock_init();
  	calibrate_delay();
@@ -66,7 +84,7 @@
  
  	arch_cpu_finalize_init();
  
-@@ -1043,23 +1095,28 @@
+@@ -1043,23 +1111,28 @@ void start_kernel(void)
  	thread_stack_cache_init();
  	cred_init();
  	fork_init();
@@ -95,7 +113,7 @@
  	taskstats_init_early();
  	delayacct_init();
  
-@@ -1068,6 +1125,7 @@
+@@ -1068,6 +1141,7 @@ void start_kernel(void)
  	kcsan_init();
  
  	/* Do the rest non-__init'ed, we're now alive */
@@ -103,7 +121,7 @@
  	rest_init();
  
  	/*
-@@ -1239,6 +1297,8 @@
+@@ -1239,6 +1313,8 @@ int __init_or_module do_one_initcall(initcall_t fn)
  	if (initcall_blacklisted(fn))
  		return -EPERM;
  
@@ -112,7 +130,7 @@
  	do_trace_initcall_start(fn);
  	ret = fn();
  	do_trace_initcall_finish(fn, ret);
-@@ -1451,6 +1511,7 @@
+@@ -1451,6 +1527,7 @@ static int __ref kernel_init(void *unused)
  	exit_boot_config();
  	free_initmem();
  	mark_readonly();
@@ -120,7 +138,7 @@
  
  	/*
  	 * Kernel mappings are now finalized - update the userspace page-table
-@@ -1465,6 +1526,8 @@
+@@ -1465,6 +1542,8 @@ static int __ref kernel_init(void *unused)
  
  	do_sysctl_args();
  
@@ -129,7 +147,7 @@
  	if (ramdisk_execute_command) {
  		ret = run_init_process(ramdisk_execute_command);
  		if (!ret)
-@@ -1533,29 +1596,40 @@
+@@ -1533,29 +1612,40 @@ static noinline void __init kernel_init_freeable(void)
  
  	rcu_assign_pointer(cad_pid, get_pid(task_pid(current)));
  
@@ -170,7 +188,7 @@
  
  	/*
  	 * check if there is an early userspace init.  If yes, let it do all
-@@ -1569,6 +1643,7 @@
+@@ -1569,6 +1659,7 @@ static noinline void __init kernel_init_freeable(void)
  		ramdisk_execute_command = NULL;
  		prepare_namespace();
  	}

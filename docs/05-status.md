@@ -842,6 +842,98 @@ see anything, and it is downstream of the failure.
   shell on a running kernel beats any post-mortem - but it lives in userspace,
   so reaching it is exactly the thing that is failing. Until the kernel
   survives to `/init` there is nothing to read, anywhere.
+- **The SD card reopens a channel that survives a reset** — Reasoned, on
+  2026-10-07, once the kernel was reaching `/init`. The heading above was
+  written while it was not. A kernel that runs the initramfs can write to
+  storage, flash survives the bootloader's scrub, and the card is the one
+  piece of storage mainline can reach. "A log that survives on the card"
+  below is that channel. It is still downstream of `/init`, so it says
+  nothing about a kernel that dies before userspace.
+
+## A log that survives on the card
+
+The log hook used to write only to `rddata`, which is on UFS. Mainline has no
+UFS driver, so a mainline round ran with `BOOTLOG=0` and kept nothing. This
+section is the replacement. It was written on 2026-10-07, once reliable logs
+had become the priority.
+
+- **The log goes to the SD card first, and `rddata` is the fallback** — Done
+  2026-10-07, in `scripts/bootlog.py`; tested under busybox ash against a
+  sparse 477 GiB stand-in with a fake sysfs, not yet run on the device. The
+  card is the only storage both kernels can reach: `sdhci-msm` is builtin on
+  mainline (`CONFIG_MMC_SDHCI_MSM=y`, `CONFIG_MMC_BLOCK=y`), and `sdhc_2` is
+  described in our tree. The hook waits for the card and settles for `rddata`
+  only once 20 seconds have passed without one. That fallback is for a
+  downstream boot that is missing its card.
+- **The region is raw space past the rootfs, and every write re-proves it** —
+  Verified, from the card's geometry read off the phone. The card has
+  1000243200 sectors, and the GPT has `pmOS_root` as p1, from 1 MiB to
+  16385 MiB, with nothing after it. `resize_root_partition` never grows p1.
+  The log region starts at 32 GiB, sector 67108864, and runs for 2049 blocks
+  of 64 KiB, which is 128 MiB and one block. Before every write, not just the
+  first, the hook checks three things: the disk is exactly 1000243200
+  sectors, p1 exists, and no partition overlaps the region. The p1 check is
+  there because the disk appears in sysfs a moment before its partitions do,
+  and an empty partition list would pass the overlap test vacuously. If any
+  check fails, nothing is written. All of these were tested:
+  - a partition overlapping the region's first sector is refused;
+  - so is one reaching a single sector into its last;
+  - one starting just past its end is allowed;
+  - a card one sector too big is refused;
+  - with p1 missing, the hook waits for it;
+  - when p1 appears late, the hook writes once it has.
+- **One slot per attempt, so a whole round fits** — Done, tested. Block 0
+  of the region holds a counter, `PMBOOTCTR n`. Each boot reads it, adds one
+  and writes it back before anything else. The boot then logs to slot
+  `(n - 1) mod 8`, so a round's seven attempts keep seven separate logs, and
+  the decoder labels each by its attempt number. In ten simulated boots,
+  attempts 9 and 10 wrapped onto slots 0 and 1, as designed.
+- **A reset in the middle of a write cannot cost the log** — Done, tested.
+  Each slot has two halves of 8 MiB, and the hook writes them alternately,
+  once a second. The half being written is always the older one, so the
+  newest complete record is always in the other. `dd conv=sync` pads each
+  record's last block with zeros, so a record always ends in a zero and
+  cannot run on into an older one under it. Each record ends with
+  `--- end seq=N attempt=C md5=...`, the md5 of everything above that line.
+  The decoder takes the newest record whose md5 checks out. Two cases were
+  tested:
+  - a bit flipped inside the newest record;
+  - a fresh header written over an older body, which is how a torn write
+    looks when the record is spliced.
+
+  In both, the decoder fell back to the record before and still called it
+  complete.
+- **What a record holds** — Done. The header line, then:
+  - `/proc/version`, so the two kernels cannot be confused;
+  - the boot id, the command line and the last init mark from `/pmmark`;
+  - `dmesg`;
+  - `/pmOS_init.log`;
+  - the loaded modules;
+  - the deferred-probe list;
+  - every UDC with its `state`, and what the gadget is bound to;
+  - every platform device with its driver;
+  - `/proc/interrupts`.
+
+  The hook is armed right after `mount_proc_sys_dev` and writes for ten
+  minutes, which outlasts the USB watchdog. A boot the watchdog resets
+  therefore leaves a record from the second before.
+- **`rddata` now uses two halves as well** — Done, tested. The records sit at
+  0 and 8 MiB, 16 MiB of the 20, so the downstream fallback has the same
+  protection against a torn write. A dump from the old single-record hook
+  still decodes, labelled `old`, because it has no md5 to check.
+- **Whether the card comes up on mainline is unknown** — Guess. The node has
+  `cd-gpios` on GPIO 107, `vmmc` and `vqmmc` on `pm6150l` L9 and L6, the
+  `sdc2` pin states and an OPP table borrowed from SM6350. It has never been
+  seen to probe. The missing interconnect provider should not stop it:
+  without an `interconnects` property, `sdhci-msm` has nothing to vote.
+  A region left untouched after a round means one of two things: the card
+  never came up, or the boot died within two minutes of `/init`. The USB
+  watchdog's total tells those apart.
+- **The ring buffer is only 128 KiB** — Verified in the config
+  (`CONFIG_LOG_BUF_SHIFT=17`). A mainline boot that logs every probe can wrap
+  it, losing the earliest lines first, and those are the ones a post-mortem
+  wants. Until the config is raised, rounds should add `log_buf_len=4M` to
+  the command line.
 
 ## Why the kernel resets
 

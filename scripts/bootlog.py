@@ -8,10 +8,22 @@ warm reboot /sys/fs/pstore is still empty, so something - almost certainly the
 bootloader - scrubs that DRAM on every boot. Every RAM-backed log channel dies
 with it.
 
-So the log has to go to flash. The partition is 'rddata', 20 MiB of Qualcomm
-ramdump staging that is all zeros on this device and is only ever written when
-a debug-fused SoC collects a ramdump, which ours cannot. out/device-dump-root/
-stock/rddata.img is a backup of it taken before we ever wrote there.
+So the log has to go to flash, and there are two places it can go.
+
+The SD card is the first choice, because both kernels can reach it: sdhci-msm
+is builtin on mainline, which has no UFS driver at all. The log lives in a
+fixed raw region well past the rootfs partition, in space no partition
+claims, and the hook proves that again before every write - the disk must be
+this card, by exact size, and no partition on it may overlap the region. One
+slot per boot attempt, so the seventh attempt does not overwrite the first,
+and two alternating halves per slot, so a reset in the middle of a write
+always leaves the previous complete record behind.
+
+'rddata' on UFS is the fallback, for a downstream boot whose card is missing:
+20 MiB of Qualcomm ramdump staging that is all zeros on this device and is only
+ever written when a debug-fused SoC collects a ramdump, which ours cannot.
+out/device-dump-root/stock/rddata.img is a backup of it taken before we ever
+wrote there.
 
 The trick that makes this work at all is that the kernel ring buffer is
 retroactive. We cannot write to flash early - UFS is a module, loaded eighty
@@ -27,7 +39,8 @@ catches a later hang rather than only a panic.
   bootlog.py marks   <vendor_boot-in> <vendor_boot-out> <table-out> <base> <scale> [panic-scale]
   bootlog.py markdecode <round-total-seconds> <base> <scale> [table]
   bootlog.py stages  <vendor_boot> [seconds-to-fallback]
-  bootlog.py decode  <rddata-dump>
+  bootlog.py decode  <rddata-dump | card-region-dump | card> [all]
+  bootlog.py card-sh <read | clear>
 
 'install' only rewrites the vendor ramdisk. The dtb area is copied across
 untouched, which matters: this bootloader red-states any image whose device
@@ -35,6 +48,7 @@ tree is not Sony's, so the input should already be a working image.
 """
 
 import gzip
+import hashlib
 import io
 import os
 import re
@@ -49,92 +63,191 @@ LOG_PART_START = 249831384
 LOG_PART_SIZE = 40960  # 512-byte sectors, = 20 MiB
 LOG_MAGIC = b"PMBOOTLOG"
 
+# The SD card region. The card is a 477 GiB SDXC, GPT, 512-byte sectors, read
+# off the phone: 1000243200 sectors, with pmOS_root as p1 from 1 MiB to
+# 16385 MiB and nothing after it. The region starts at 32 GiB, half a card's
+# worth of nothing away from p1, and is counted in 64 KiB blocks because that
+# is the unit dd writes in: one counter block, then CARD_SLOTS attempts of two
+# halves each.
+CARD_SECTORS = 1000243200
+CARD_REGION = 524288           # first block, = 32 GiB / 64 KiB
+CARD_SLOTS = 8
+CARD_HALF_BLOCKS = 128         # 8 MiB, ample for a 4 MiB ring buffer
+CARD_REGION_BLOCKS = 1 + CARD_SLOTS * 2 * CARD_HALF_BLOCKS
+CTR_MAGIC = b"PMBOOTCTR"
+
 
 # The shell half. Sourced by the initramfs init, which is a busybox ash script,
 # so everything here has to be POSIX sh with busybox applets only.
-BOOTLOG_SH = r'''
+BOOTLOG_SH = (r'''
 # Bring-up only. Written by scripts/bootlog.py - see that file for why this
 # exists at all. Removing it costs nothing but the ability to debug a boot.
 
-pmbootlog_find() {
-	# Refuse to write anywhere we have not positively identified. A wrong
-	# guess here would be writing over a real partition, so check the
-	# geometry against rddata's own before handing the node back.
-	for d in sda97 sdb97 sdc97; do
-		[ -e "/sys/block/${d%??}/$d/start" ] || continue
-		[ "$(cat "/sys/block/${d%??}/$d/start")" = "''' + str(LOG_PART_START) + r'''" ] || continue
-		[ "$(cat "/sys/block/${d%??}/$d/size")" = "''' + str(LOG_PART_SIZE) + r'''" ] || continue
-		for n in "/dev/block/$d" "/dev/$d"; do
-			[ -b "$n" ] && { echo "$n"; return 0; }
+PMBL_CARD_SECTORS=@CARD_SECTORS@
+PMBL_REGION=@CARD_REGION@
+PMBL_SLOTS=@CARD_SLOTS@
+PMBL_HALF=@CARD_HALF_BLOCKS@
+PMBL_BLOCKS=@CARD_REGION_BLOCKS@
+
+pmbootlog_node() {
+	# A /dev node for the block device whose sysfs directory is $1. mdev
+	# may not have made one yet; sysfs knows the numbers, so make it rather
+	# than depend on hotplug having been wired up by the time we get here.
+	_n=${1##*/}
+	for _p in "/dev/block/$_n" "/dev/$_n"; do
+		[ -b "$_p" ] && { echo "$_p"; return 0; }
+	done
+	_mm=$(cat "$1/dev" 2>/dev/null) || return 1
+	[ -n "$_mm" ] || return 1
+	mknod "/dev/$_n" b "${_mm%:*}" "${_mm#*:}" 2>/dev/null \
+		&& { echo "/dev/$_n"; return 0; }
+	return 1
+}
+
+pmbootlog_find_card() {
+	# The card is recognised by its exact size, and the region is only
+	# used if no partition on it overlaps the region - checked before
+	# every write, so a card repartitioned later is refused rather than
+	# written over. The disk shows up in sysfs a moment before its
+	# partitions do, and an empty partition list would pass the overlap
+	# test vacuously, so wait for p1, which this card always has.
+	# Numbers in 512-byte sectors, which is what sysfs speaks.
+	_lo=$((PMBL_REGION * 128))
+	_hi=$((_lo + PMBL_BLOCKS * 128))
+	for _d in /sys/block/mmcblk*; do
+		[ "$(cat "$_d/size" 2>/dev/null)" = "$PMBL_CARD_SECTORS" ] || continue
+		[ -e "$_d/${_d##*/}p1/start" ] || continue
+		_ok=1
+		for _p in "$_d/${_d##*/}"p*; do
+			[ -e "$_p/start" ] || continue
+			_s=$(cat "$_p/start") _z=$(cat "$_p/size")
+			[ "$_s" -lt "$_hi" ] && [ $((_s + _z)) -gt "$_lo" ] && _ok=0
 		done
-		# mdev may not have made a node for it. sysfs knows the
-		# numbers, so make one rather than depend on hotplug having
-		# been wired up by the time we get here.
-		mm=$(cat "/sys/block/${d%??}/$d/dev" 2>/dev/null) || continue
-		[ -n "$mm" ] || continue
-		mknod "/dev/$d" b "${mm%:*}" "${mm#*:}" 2>/dev/null \
-			&& { echo "/dev/$d"; return 0; }
+		[ "$_ok" = 1 ] || continue
+		pmbootlog_node "$_d" && return 0
 	done
 	return 1
 }
 
-pmbootlog_write() {
-	# One record, rewritten in place each time. A torn write is detectable
-	# because the trailer naming the same sequence number will be missing.
-	{
-		echo "''' + LOG_MAGIC.decode() + r''' seq=$1 uptime=$(cut -d' ' -f1 /proc/uptime)"
-		echo "cmdline: $(cat /proc/cmdline 2>/dev/null)"
-		echo "--- dmesg ---"
-		dmesg 2>/dev/null
-		echo "--- modules ---"
-		cat /proc/modules 2>/dev/null
-		# What the probe itself got up to, which dmesg does not say.
-		echo "--- probe log ---"
-		cat /pmprobe.log 2>/dev/null
-		# The three things that answer "why did this driver never probe?".
-		# A driver that is waiting on a provider prints nothing at all, so
-		# without these a silent permanent deferral is invisible - which is
-		# exactly how dwc3-msm hid for a day.
-		echo "--- deferred probes ---"
-		mount -t debugfs none /sys/kernel/debug 2>/dev/null
-		cat /sys/kernel/debug/devices_deferred 2>/dev/null
-		echo "--- udc ---"
-		ls /sys/class/udc 2>/dev/null
-		echo "--- platform devices and their drivers ---"
-		for d in /sys/bus/platform/devices/*; do
-			drv=$(readlink "$d/driver" 2>/dev/null)
-			echo "${d##*/} ${drv##*/}"
-		done 2>/dev/null
-		echo "--- end seq=$1 ---"
-	} > /pmbootlog.tmp 2>/dev/null
-	dd if=/pmbootlog.tmp of="$2" bs=65536 conv=notrunc,fsync 2>/dev/null
+pmbootlog_find_rddata() {
+	# Refuse to write anywhere we have not positively identified. A wrong
+	# guess here would be writing over a real partition, so check the
+	# geometry against rddata's own before handing the node back.
+	for _d in sda97 sdb97 sdc97; do
+		[ "$(cat "/sys/block/${_d%??}/$_d/start" 2>/dev/null)" = "''' + str(LOG_PART_START) + r'''" ] || continue
+		[ "$(cat "/sys/block/${_d%??}/$_d/size" 2>/dev/null)" = "''' + str(LOG_PART_SIZE) + r'''" ] || continue
+		pmbootlog_node "/sys/block/${_d%??}/$_d" && return 0
+	done
+	return 1
+}
+
+pmbootlog_record() {
+	# The record itself. $1 is its sequence number and $2 the attempt.
+	echo "''' + LOG_MAGIC.decode() + r''' seq=$1 attempt=$2 uptime=$(cut -d' ' -f1 /proc/uptime)"
+	echo "kernel: $(cat /proc/version 2>/dev/null)"
+	echo "boot_id: $(cat /proc/sys/kernel/random/boot_id 2>/dev/null)"
+	echo "cmdline: $(cat /proc/cmdline 2>/dev/null)"
+	echo "init mark: $(cat /pmmark 2>/dev/null)"
+	echo "--- dmesg ---"
+	dmesg 2>/dev/null
+	echo "--- init log ---"
+	cat /pmOS_init.log 2>/dev/null
+	echo "--- modules ---"
+	cat /proc/modules 2>/dev/null
+	# What the probe itself got up to, which dmesg does not say.
+	echo "--- probe log ---"
+	cat /pmprobe.log 2>/dev/null
+	# The three things that answer "why did this driver never probe?".
+	# A driver that is waiting on a provider prints nothing at all, so
+	# without these a silent permanent deferral is invisible - which is
+	# exactly how dwc3-msm hid for a day.
+	echo "--- deferred probes ---"
+	mount -t debugfs none /sys/kernel/debug 2>/dev/null
+	cat /sys/kernel/debug/devices_deferred 2>/dev/null
+	echo "--- udc ---"
+	for _u in /sys/class/udc/*; do
+		[ -e "$_u" ] && echo "${_u##*/} $(cat "$_u/state" 2>/dev/null)"
+	done
+	echo "gadget g1 bound to: $(cat /sys/kernel/config/usb_gadget/g1/UDC 2>/dev/null)"
+	echo "--- platform devices and their drivers ---"
+	for _p in /sys/bus/platform/devices/*; do
+		_drv=$(readlink "$_p/driver" 2>/dev/null)
+		echo "${_p##*/} ${_drv##*/}"
+	done
+	echo "--- interrupts ---"
+	cat /proc/interrupts 2>/dev/null
 }
 
 pmbootlog_start() {
 	(
-		# Storage arrives in the middle of load_modules, so wait for it
-		# rather than trying to run after it. Give up after two minutes:
-		# if UFS never probed, no amount of waiting produces a log.
+		# The card comes up early on mainline, where sdhci-msm is
+		# builtin, and in the middle of load_modules downstream; UFS only
+		# ever downstream. So wait for either, preferring the card, and
+		# give up after two minutes - if neither appeared, no amount of
+		# waiting produces a log.
 		i=0
 		while :; do
-			dev=$(pmbootlog_find) && break
+			card=$(pmbootlog_find_card) && break
+			# Give the card a head start before settling for UFS.
+			if [ "$i" -ge 20 ]; then
+				rdd=$(pmbootlog_find_rddata) && break
+			fi
 			i=$((i + 1))
 			[ "$i" -gt 120 ] && exit 0
 			sleep 1
 		done
+		if [ -n "$card" ]; then
+			# This boot's attempt number: one more than the counter
+			# block says, written back before anything else.
+			c=$(dd if="$card" bs=65536 skip=$PMBL_REGION count=1 2>/dev/null \
+				| head -c 64 | sed -n 's/^''' + CTR_MAGIC.decode() + r''' \([0-9][0-9]*\)$/\1/p' | head -n 1)
+			c=$(( ${c:-0} + 1 ))
+			echo "''' + CTR_MAGIC.decode() + r''' $c" > /pmbootctr.tmp
+			dd if=/pmbootctr.tmp of="$card" bs=65536 seek=$PMBL_REGION count=1 \
+				conv=notrunc,sync,fsync 2>/dev/null
+			slot=$(( (c - 1) % PMBL_SLOTS ))
+		else
+			c=0
+		fi
 		# Keep going for ten minutes. A hang leaves the last record
 		# behind; a panic leaves the one before the reset.
 		n=0
 		while [ "$n" -lt 600 ]; do
 			n=$((n + 1))
-			pmbootlog_write "$n" "$dev"
+			pmbootlog_record "$n" "$c" > /pmbootlog.tmp 2>/dev/null
+			# The trailer carries the md5 of everything above it, so a
+			# record that a reset tore - or spliced with an older one
+			# underneath - can never pass for a complete one.
+			echo "--- end seq=$n attempt=$c md5=$(md5sum < /pmbootlog.tmp | cut -d' ' -f1) ---" \
+				>> /pmbootlog.tmp
+			if [ -n "$card" ]; then
+				# Same disk, same layout, or no write at all.
+				[ "$(pmbootlog_find_card)" = "$card" ] || { sleep 1; continue; }
+				# Alternate halves, so the write that a reset tears
+				# is never the only copy. conv=sync pads the last
+				# block with zeros, so every record ends in a zero
+				# and a shorter one cannot run on into the tail of
+				# a longer one written there before it.
+				seek=$(( PMBL_REGION + 1 + (slot * 2 + n % 2) * PMBL_HALF ))
+				dd if=/pmbootlog.tmp of="$card" bs=65536 seek=$seek \
+					count=$PMBL_HALF conv=notrunc,sync,fsync 2>/dev/null
+			else
+				# rddata has room for two halves as well.
+				dd if=/pmbootlog.tmp of="$rdd" bs=65536 \
+					seek=$(( n % 2 * PMBL_HALF )) count=$PMBL_HALF \
+					conv=notrunc,sync,fsync 2>/dev/null
+			fi
 			sleep 1
 		done
 	) &
 }
 
 pmbootlog_start
-'''
+''').replace("@CARD_SECTORS@", str(CARD_SECTORS)).replace(
+    "@CARD_REGION@", str(CARD_REGION)).replace(
+    "@CARD_SLOTS@", str(CARD_SLOTS)).replace(
+    "@CARD_HALF_BLOCKS@", str(CARD_HALF_BLOCKS)).replace(
+    "@CARD_REGION_BLOCKS@", str(CARD_REGION_BLOCKS))
 
 
 # ---------------------------------------------------------------- cpio newc
@@ -1105,20 +1218,117 @@ def stages(src, seconds=None, skip=""):
     elif n < 1:
         print("\n  Below the first step: it never ran the probe at all.")
 
-def decode(path):
-    d = open(path, "rb").read()
-    if not d.startswith(LOG_MAGIC):
+LOG_HDR = re.compile(re.escape(LOG_MAGIC) + rb" seq=(\d+)(?: attempt=(\d+))?")
+LOG_END = re.compile(rb"--- end seq=(\d+) attempt=(\d+) md5=([0-9a-f]{32}) ---\n")
+
+
+def _record(buf):
+    """The record at the start of buf, as (seq, attempt, status, text).
+
+    status is "complete" when the trailer's md5 matches everything above it,
+    "torn" when it does not or there is no trailer, and "old" for a record
+    from the hook before trailers existed, which cannot be checked.
+    """
+    m = LOG_HDR.match(buf)
+    if not m:
+        return None
+    seq, att = int(m.group(1)), int(m.group(2) or 0)
+    status = "old" if m.group(2) is None else "torn"
+    for e in LOG_END.finditer(buf):
+        if (int(e.group(1)) == seq
+                and hashlib.md5(buf[:e.start()]).hexdigest() == e.group(3).decode()):
+            buf, status = buf[:e.end()], "complete"
+            break
+    else:
+        z = buf.find(b"\0")
+        buf = buf[:z] if z >= 0 else buf
+    return seq, att, status, buf.decode("utf-8", "replace")
+
+
+def card_sh(what):
+    """One line of shell for recovery's adb that finds the card the way the
+    hook does - exact size, p1 present, nothing overlapping the region - and
+    then reads the region out, or zeroes its counter and every half's first
+    block so the next round starts from attempt 1 with nothing stale to
+    mistake for its own. It exits 3 without touching anything if no card
+    passes."""
+    lo = CARD_REGION * 128
+    hi = lo + CARD_REGION_BLOCKS * 128
+    find = ("c=; for d in /sys/block/mmcblk*; do"
+            f" [ \"$(cat $d/size 2>/dev/null)\" = {CARD_SECTORS} ] || continue;"
+            " [ -e $d/${d##*/}p1/start ] || continue; ok=1;"
+            " for p in $d/${d##*/}p*; do [ -e $p/start ] || continue;"
+            " s=$(cat $p/start); z=$(cat $p/size);"
+            f" [ $s -lt {hi} ] && [ $((s + z)) -gt {lo} ] && ok=0; done;"
+            " [ $ok = 1 ] || continue; c=/dev/block/${d##*/};"
+            " [ -b $c ] || c=/dev/${d##*/}; break; done;"
+            " [ -n \"$c\" ] && [ -b $c ] || exit 3;")
+    if what == "read":
+        return (f"{find} dd if=$c bs=65536 skip={CARD_REGION}"
+                f" count={CARD_REGION_BLOCKS} 2>/dev/null")
+    heads = [CARD_REGION] + [CARD_REGION + 1 + i * CARD_HALF_BLOCKS
+                             for i in range(CARD_SLOTS * 2)]
+    return (f"{find} for b in {' '.join(map(str, heads))}; do"
+            " dd if=/dev/zero of=$c bs=65536 seek=$b count=1 conv=notrunc"
+            " 2>/dev/null || exit 4; done; sync")
+
+
+def decode(path, show_all=False):
+    with open(path, "rb") as f:
+        size = f.seek(0, 2)
+        f.seek(0)
+        if size == CARD_SECTORS * 512:
+            # The whole card, or an image of it: just the region, then.
+            f.seek(CARD_REGION * 65536)
+            d = f.read(CARD_REGION_BLOCKS * 65536)
+        elif size > CARD_REGION_BLOCKS * 65536:
+            sys.exit(f"error: {path} is {size} bytes - neither the card, nor"
+                     " a dump of the log region or of rddata")
+        else:
+            d = f.read()
+    half = CARD_HALF_BLOCKS * 65536
+    if d.startswith(CTR_MAGIC) or len(d) == CARD_REGION_BLOCKS * 65536:
+        # A cleared region has a zero counter block, so go by size as well.
+        ctr = d[:64].split(b"\n")[0].rstrip(b"\0").decode("ascii", "replace")
+        print(f"  card region: counter block reads {ctr!r}")
+        starts = [65536 + i * half for i in range(CARD_SLOTS * 2)]
+    else:
+        # rddata: two halves at the front of the partition.
+        starts = [0, half]
+    recs = [r for r in (_record(d[a:a + half]) for a in starts) if r]
+    if not recs:
         nz = len(d) - d.count(0)
         sys.exit(f"error: no log here - {nz} non-zero bytes in {len(d)}.\n"
-                 "       The kernel never reached the point where storage works.")
-    end = d.find(b"\0")
-    text = d[:end if end > 0 else len(d)].decode("utf-8", "replace")
-    first = text.split("\n", 1)[0]
-    seq = first.split("seq=")[1].split()[0]
-    print(text)
-    if f"--- end seq={seq} ---" not in text:
-        print(f"\n  (record {seq} is torn - the device died while writing it)",
-              file=sys.stderr)
+                 "       Nothing reached storage: the card never appeared, or"
+                 " the boot died first.")
+    # The newest complete record of each attempt; a torn one only if the
+    # attempt has nothing better.
+    best = {}
+    for seq, att, status, text in recs:
+        key = (status != "torn", seq)
+        if att not in best or key > best[att][0]:
+            best[att] = (key, seq, status, text)
+    atts = sorted(best)
+    for att in atts:
+        _, seq, status, text = best[att]
+        up = re.search(r"uptime=(\S+)", text)
+        mark = re.search(r"^init mark: (.*)$", text, re.M)
+        mark = mark.group(1).strip() if mark else ""
+        kver = re.search(r"^kernel: Linux version (\S+)", text, re.M)
+        rnd = re.search(r"^cmdline: .*\bpmbl\.round=(\S+)", text, re.M)
+        print(f"  attempt {att}: record {seq}"
+              f"{'' if status == 'complete' else f' ({status})'},"
+              f" uptime {up.group(1) if up else '?'} s,"
+              f" init mark {mark or 'none'}"
+              + (f", {kver.group(1)}" if kver else "")
+              + (f", round {rnd.group(1)}" if rnd else ""))
+    for att in (atts if show_all else atts[-1:]):
+        _, seq, status, text = best[att]
+        print()
+        print(text)
+        if status == "torn":
+            print(f"\n  (record {seq} of attempt {att} is torn - the device died"
+                  " while writing it, and no complete one exists)", file=sys.stderr)
 
 
 if __name__ == "__main__":
@@ -1138,7 +1348,9 @@ if __name__ == "__main__":
         stage(a[1], a[2], a[3] if len(a) == 4 else "")
     elif a[:1] == ["stages"] and len(a) in (2, 3):
         stages(a[1], a[2] if len(a) == 3 else None)
-    elif len(a) == 2 and a[0] == "decode":
-        decode(a[1])
+    elif a[:1] == ["decode"] and len(a) in (2, 3):
+        decode(a[1], a[2:] == ["all"])
+    elif len(a) == 2 and a[0] == "card-sh" and a[1] in ("read", "clear"):
+        print(card_sh(a[1]))
     else:
         sys.exit(__doc__.strip().split("\n\n")[-2])

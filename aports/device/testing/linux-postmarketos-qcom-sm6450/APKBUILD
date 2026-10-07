@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=4
+pkgrel=5
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -116,7 +116,7 @@ package() {
 
 sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
-15a85f633d59dbb1bdae2a4e5c0f5e3a51c99ae80410bcac34bb4e1a66b080a5eccaadb6675c71a7af0774e38392ea76c41ff9ecc2890a6989c5adf675798f4e  config-postmarketos-qcom-sm6450.aarch64
+4a67a730ad1face8e3adac90727e7031b3a5ec9ea7061421cf8de2910dd9ad03459b1d10f69ea85ea09938025e436222a8883b7bc7953572d27dc7294757dbe3  config-postmarketos-qcom-sm6450.aarch64
 94ee74cd834259c575dff3259199bbd0d868954040c56bc8750aad6c2ac21e971da87086daac08f5b49557fee9645d867727e76bd1d4a38535813805351da328  sm6450-mainline.patch
 8a668e14d1a656a8843aabc427fa930b8976f120fcdabb4042c17a4c4aeee7518dcc2403b6f8090a633ff741b0766ece418d47ce603401f73407df2d94d19b26  backport-0001-firmware-qcom-scm-Register-gunyah-watchdog-device.patch
 c008b7cf41b8820bf26deb4fef5b8e68d093e88106eeda58b4828f4f7ac031a6374e0815f1d4a72e01ea03cf42070285455d7720ff382c08d88d4163d25bff77  backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch

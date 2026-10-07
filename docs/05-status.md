@@ -912,7 +912,13 @@ had become the priority.
   - the deferred-probe list;
   - every UDC with its `state`, and what the gadget is bound to;
   - every platform device with its driver;
-  - `/proc/interrupts`.
+  - `/proc/interrupts`;
+  - the power-domain and regulator summaries, which are software state;
+  - the clock summary, only on our own tree. There the only providers are
+    GCC and RPMh, whose registers are always on. Stock's tree also has GPU,
+    display and camera controllers behind power domains that may be off,
+    and a read from one of those can hang the bus, log and all. This is
+    what will say whether the HS PHY's CLKREF gate ever came on.
 
   The hook is armed right after `mount_proc_sys_dev` and writes for ten
   minutes, which outlasts the USB watchdog. A boot the watchdog resets

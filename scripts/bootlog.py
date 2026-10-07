@@ -176,6 +176,21 @@ pmbootlog_record() {
 	done
 	echo "--- interrupts ---"
 	cat /proc/interrupts 2>/dev/null
+	# Power state, which is software bookkeeping and safe to read anywhere.
+	echo "--- power domains ---"
+	cat /sys/kernel/debug/pm_genpd/pm_genpd_summary 2>/dev/null
+	echo "--- regulators ---"
+	cat /sys/kernel/debug/regulator/regulator_summary 2>/dev/null
+	# The clock tree reads hardware, so only on our own device tree, whose
+	# only providers are GCC and RPMh - always-on registers. Stock's tree
+	# has GPU, display and camera controllers as well, behind power domains
+	# that may be off, and a read there can hang the bus and take the log
+	# down with it. This is what says whether a gate a driver needs, like
+	# the HS PHY's CLKREF, ever came on.
+	if grep -q 'sony,pdx246' /proc/device-tree/compatible 2>/dev/null; then
+		echo "--- clocks ---"
+		cat /sys/kernel/debug/clk/clk_summary 2>/dev/null
+	fi
 }
 
 pmbootlog_start() {

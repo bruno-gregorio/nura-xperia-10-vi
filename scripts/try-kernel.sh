@@ -21,26 +21,28 @@
 # The other half is the log. There is no console on this device - no exposed
 # UART, no USB outside fastboot, and ramoops is scrubbed by the bootloader - so
 # every image flashed here carries scripts/bootlog.py's hook, which writes the
-# kernel ring buffer to the unused 'rddata' partition once storage comes up.
-# That makes a dead boot readable instead of merely counted.
+# kernel ring buffer to flash once storage comes up: to a raw region of the SD
+# card, which both kernels can reach, or failing that to the unused 'rddata'
+# partition on UFS, which only the downstream one can. That makes a dead boot
+# readable instead of merely counted.
 #
-# That log is a downstream-only instrument. 'rddata' is on UFS, and the
-# mainline kernel has no UFS driver - the PHY register tables are the one thing
-# on this device not derivable from any source we hold, see docs/06-mainline.md
-# - so under mainline the hook has nothing to write to. What is left for a
-# mainline boot is the USB gadget if it comes up, and otherwise the retry
-# counter as a one-bit channel: PROBE=1 reboots on purpose from inside the
-# initramfs, so seven attempts and a fallback mean userspace was reached and
-# one attempt and a hang mean it was not.
+# The card is what makes that work under mainline, which has no UFS driver -
+# the PHY register tables are the one thing on this device not derivable from
+# any source we hold, see docs/06-mainline.md. It is still an instrument that
+# runs in the initramfs, so a mainline kernel that dies before /init leaves
+# nothing on it. What is left then is the USB gadget if it comes up, and
+# otherwise the retry counter as a one-bit channel: PROBE=1 reboots on purpose
+# from inside the initramfs, so seven attempts and a fallback mean userspace
+# was reached and one attempt and a hang mean it was not.
 #
 # The two kernels also need opposite handling of the device tree and the dtbo
 # partition, which is read out of pmbootstrap's config rather than guessed; see
 # build_vendor_boot and the flash step.
 #
 # What this does NOT fix: a kernel that hangs without panicking still needs the
-# button combo to get back to fastboot. Downstream it does now leave a log
-# behind, because the hook rewrites it every second rather than only on the way
-# down.
+# button combo to get back to fastboot. It does now leave a log behind, on
+# either kernel once the card is up, because the hook rewrites it every second
+# rather than only on the way down.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -194,9 +196,9 @@ build_vendor_boot() {
 	fi
 	# ...and the only way to find out why a boot died. BOOTLOG=0 leaves it
 	# out, which is how you tell a kernel that fails on its own from one the
-	# hook broke: the hook writes to UFS from a background job while
-	# load_modules is still bringing the storage stack up, and a write into a
-	# half-probed controller is a plausible way to wedge the whole I/O path.
+	# hook broke: the hook writes to storage from a background job while the
+	# storage stack is still coming up, and a write into a half-probed
+	# controller is a plausible way to wedge the whole I/O path.
 	if [ "${STAGE:-0}" = "1" ]; then
 		# Answers "which module hangs?" - the question the reboot probe
 		# left behind once it showed the initramfs runs. Loads the
@@ -249,6 +251,13 @@ build_vendor_boot() {
 		else
 			"$ROOT/scripts/bootlog.py" install "$WORK/vendor_boot.img" "$WORK/vendor_boot-log.img"
 			mv "$WORK/vendor_boot-log.img" "$WORK/vendor_boot.img"
+			# Up to pkgrel 4 the ring buffer is 128 KiB, which a boot
+			# that logs every probe outgrows before the hook first
+			# reads it, and it is the oldest lines that go. pkgrel 5
+			# builds in 4 MiB, and this costs nothing there. Each record
+			# carries the command line, so a round id on it tells this
+			# round's records from an older round's left on the card.
+			CMDLINE_ADD="log_buf_len=4M pmbl.round=$(date +%Y%m%d-%H%M%S) ${CMDLINE_ADD:-}"
 		fi
 	fi
 	# CMDLINE_ADD and CMDLINE_DEL rewrite the kernel command line in place,
@@ -442,17 +451,47 @@ cmd_log() {
 		|| die "adb is not root here - this needs recovery, not Android"
 
 	mkdir -p "$WORK"
+	stamp=$(date +%Y%m%d-%H%M%S)
+	# The card first: both kernels write there, and a mainline boot can
+	# write nowhere else. card-sh finds it the way the hook does - by exact
+	# size, with p1 present and nothing overlapping the region - and reads
+	# or writes nothing if no card passes, which is also what happens if
+	# recovery does not bring the card up at all.
+	say "reading the log region on the SD card"
+	adb exec-out "$("$ROOT/scripts/bootlog.py" card-sh read)" \
+		> "$WORK/bootlog-card.bin" || true
+	card=$(wc -c < "$WORK/bootlog-card.bin")
+	if [ "$card" -gt 0 ]; then
+		# 2049 blocks of 64 KiB, bootlog.py's CARD_REGION_BLOCKS.
+		[ "$card" = 134283264 ] \
+			|| say "short read: $card bytes of 134283264, decoding what came"
+		echo
+		"$ROOT/scripts/bootlog.py" decode "$WORK/bootlog-card.bin" || true
+		"$ROOT/scripts/bootlog.py" decode "$WORK/bootlog-card.bin" all \
+			> "$WORK/bootlog-card-$stamp.txt" 2>&1 || true
+		say "every attempt's record is in $WORK/bootlog-card-$stamp.txt"
+		echo
+	else
+		say "no card in recovery that passes the checks, so none read"
+	fi
 	say "reading rddata"
-	adb exec-out 'dd if=/dev/block/by-name/rddata bs=65536 count=16 2>/dev/null' \
+	adb exec-out 'dd if=/dev/block/by-name/rddata bs=65536 count=256 2>/dev/null' \
 		> "$WORK/bootlog.bin"
 	echo
 	"$ROOT/scripts/bootlog.py" decode "$WORK/bootlog.bin" || true
 
-	# Wipe it, or the next run's "no log" is indistinguishable from this
-	# run's log still sitting there. An all-zero rddata has to mean the
-	# kernel did not get far enough to write, and nothing else.
+	# Wipe both, or the next run's "no log" is indistinguishable from this
+	# run's log still sitting there. An empty region has to mean the kernel
+	# did not get far enough to write, and nothing else. On the card that
+	# is the counter and the first block of every half, which is where each
+	# record's header is, and it restarts the attempt count at 1.
+	if [ "$card" -gt 0 ]; then
+		say "clearing the card's log region for the next round"
+		adb shell "$("$ROOT/scripts/bootlog.py" card-sh clear)" \
+			>/dev/null 2>&1 || die "could not clear the card's log region"
+	fi
 	say "clearing rddata for the next round"
-	adb shell 'dd if=/dev/zero of=/dev/block/by-name/rddata bs=65536 count=16 conv=fsync' \
+	adb shell 'dd if=/dev/zero of=/dev/block/by-name/rddata bs=65536 count=256 conv=fsync' \
 		>/dev/null 2>&1 || die "could not clear rddata"
 }
 

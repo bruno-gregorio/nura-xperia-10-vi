@@ -244,13 +244,19 @@ pmbootlog_start() {
 				# and a shorter one cannot run on into the tail of
 				# a longer one written there before it.
 				seek=$(( PMBL_REGION + 1 + (slot * 2 + n % 2) * PMBL_HALF ))
+				# The USB watchdog waits for this to go before it
+				# resets the phone.
+				: > /pmbl.busy
 				dd if=/pmbootlog.tmp of="$card" bs=65536 seek=$seek \
 					count=$PMBL_HALF conv=notrunc,sync,fsync 2>/dev/null
+				rm -f /pmbl.busy
 			else
 				# rddata has room for two halves as well.
+				: > /pmbl.busy
 				dd if=/pmbootlog.tmp of="$rdd" bs=65536 \
 					seek=$(( n % 2 * PMBL_HALF )) count=$PMBL_HALF \
 					conv=notrunc,sync,fsync 2>/dev/null
+				rm -f /pmbl.busy
 			fi
 			/bin/busybox sleep 1
 		done
@@ -858,6 +864,14 @@ USB_WATCHDOG = """
 	# Same hold file as the staged probe: a shell that got in can stop this.
 	while [ -e /pmhold ]; do /bin/busybox sleep 5; done
 	/bin/busybox sleep $((_m + _u))
+	# Let a log write that is under way finish first, so the reset never
+	# lands in the middle of one - the card it goes to also holds the
+	# rootfs. Two seconds at most, and nothing at all without the hook.
+	_w=0
+	while [ -e /pmbl.busy ] && [ "$_w" -lt 20 ]; do
+		/bin/busybox sleep 0.1
+		_w=$((_w + 1))
+	done
 	[ -w /proc/sysrq-trigger ] && /bin/busybox echo b > /proc/sysrq-trigger
 	/bin/busybox reboot -f
 	# reboot(2) refused. Do not sit here looking like a hang.

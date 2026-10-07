@@ -943,6 +943,15 @@ had become the priority.
   its musl loader. That is the build the initramfs ships, for x86_64 instead
   of aarch64. Every case passed, including a clear followed by a boot whose
   p1 appears late, which restarted cleanly at attempt 1.
+- **The USB watchdog waits for a write in flight** — Done, tested under
+  busybox. The hook holds `/pmbl.busy` for the length of each `dd`. Before
+  resetting, the watchdog waits up to two seconds, in tenths, for that file
+  to go. The halves already protect the log from a torn write. This protects
+  the card: the reset is a warm one, nothing guarantees the card loses power
+  cleanly in the middle of a write, and the rootfs is on it too. A record
+  write takes a fraction of a second, so the rung timing `markdecode` reads
+  moves by less than its resolution. Without the hook there is no file, and
+  nothing changes.
 - **`rddata` now uses two halves as well** — Done, tested. The records sit at
   0 and 8 MiB, 16 MiB of the 20, so the downstream fallback has the same
   protection against a torn write. A dump from the old single-record hook

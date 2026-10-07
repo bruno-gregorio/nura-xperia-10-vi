@@ -24,6 +24,8 @@ catches a later hang rather than only a panic.
   bootlog.py install <vendor_boot-in> <vendor_boot-out>
   bootlog.py probe   <vendor_boot-in> <vendor_boot-out>
   bootlog.py stage   <vendor_boot-in> <vendor_boot-out> [skip-these-modules]
+  bootlog.py marks   <vendor_boot-in> <vendor_boot-out> <table-out> <base> <scale> [panic-scale]
+  bootlog.py markdecode <round-total-seconds> <base> <scale> [table]
   bootlog.py stages  <vendor_boot> [seconds-to-fallback]
   bootlog.py decode  <rddata-dump>
 
@@ -35,6 +37,7 @@ tree is not Sony's, so the input should already be a working image.
 import gzip
 import io
 import os
+import re
 import struct
 import sys
 
@@ -638,6 +641,10 @@ pmstage_reset
 # ever. Nothing resets the phone, so the bootloader never begins another
 # attempt and the retry counter never moves - the one failure mode that cannot
 # be recovered without someone pressing buttons.
+# Seconds from the top of /init to the watchdog's decision. Also the offset
+# markdecode takes off a round's total, so the two live in one place.
+WATCHDOG_S = 150
+
 USB_WATCHDOG = """
 # --- pdx246: make a hung boot recoverable ----------------------------------
 # First thing in the file, and written to need nothing: no applet symlinks,
@@ -655,13 +662,43 @@ USB_WATCHDOG = """
 # drains ninety modules' events. It caught nothing this timer does not, since
 # both need the kernel to still be scheduling userspace, and with panic=5 on
 # the command line it reset boots that were only slow.
+#
+# It stands down only for a gadget that a host has configured. It used to
+# stand down as soon as a real UDC existed, and on mainline that is at once:
+# dwc3 with usb-role-switch registers its UDC in peripheral mode at probe,
+# before anything is known about the cable. A boot whose gadget never reached
+# the host then sat in debug_shell waiting for a login that could not come,
+# and nothing reset it.
+#
+# When it does reset, it says why, through the one channel a blind boot has:
+# how long it takes. The delay before the reset is the last progress mark the
+# init wrote to /pmmark - none without bootlog.py marks - plus the state of
+# the UDC: 0 for no UDC but the dummy, 1 for "not attached", 2 for anything
+# else short of configured. bootlog.py markdecode reads both back out of a
+# round's total.
 (
-	# A working boot has USB up in about sixteen seconds, so four minutes is
-	# far longer than this needs and far shorter than waiting for a person.
-	/bin/busybox sleep 240
-	[ -e /pmusbok ] && exit 0
+	# A working boot has USB up in about sixteen seconds, so this is far
+	# longer than it needs and far shorter than waiting for a person.
+	/bin/busybox sleep @WAIT@
+	_u=0
+	for _s in /sys/class/udc/*/state; do
+		case "$_s" in
+		*/dummy_udc*|'/sys/class/udc/*/state') continue ;;
+		esac
+		_st=""
+		read -r _st < "$_s" 2>/dev/null
+		case "$_st" in
+		configured) exit 0 ;;
+		"not attached") [ "$_u" -eq 0 ] && _u=1 ;;
+		*) _u=2 ;;
+		esac
+	done
+	_m=0
+	[ -r /pmmark ] && read -r _m < /pmmark
+	case "$_m" in ''|*[!0-9]*) _m=0 ;; esac
 	# Same hold file as the staged probe: a shell that got in can stop this.
 	while [ -e /pmhold ]; do /bin/busybox sleep 5; done
+	/bin/busybox sleep $((_m + _u))
 	[ -w /proc/sysrq-trigger ] && /bin/busybox echo b > /proc/sysrq-trigger
 	/bin/busybox reboot -f
 	# reboot(2) refused. Do not sit here looking like a hang.
@@ -701,8 +738,6 @@ while [ "$_w" -lt 12 ]; do
 	sleep 1
 done
 echo "[pdx246] udc after ${_w}s: ${_real:-none}"
-# Tell the watchdog to stand down: from here a person can get in and look.
-[ -n "$_real" ] && touch /pmusbok
 # ---------------------------------------------------------------------------
 """
 
@@ -741,7 +776,8 @@ def usbquirk(src, dst):
             wd = "set -a\n"
             if wd not in text:
                 sys.exit("error: could not find 'set -a' in init")
-            text = text.replace(wd, wd + USB_WATCHDOG.lstrip("\n"), 1)
+            text = text.replace(wd, wd + USB_WATCHDOG.lstrip("\n").replace(
+                "@WAIT@", str(WATCHDOG_S)), 1)
         e[2] = text.encode()
         patched.append(name)
 
@@ -756,9 +792,145 @@ def usbquirk(src, dst):
     print(f"  patched: {', '.join('/' + n for n in patched)}")
     print("  each now writes peripheral to *.ssusb/mode before"
           " setup_usb_network")
-    print("  and /init arms a 240s watchdog, so a hang resets itself")
+    print(f"  and /init arms a {WATCHDOG_S}s watchdog, so a boot the host"
+          " never sees resets itself")
     print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
     print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
+
+
+# Top-level steps of the pmOS init scripts that get a mark in front of them.
+# Matched on the start of the line, indented or not, so a step inside an "if"
+# is marked too. Stage 1 is only marked after mount_proc_sys_dev, because
+# before that there is no /proc to write to.
+MARK_STEPS = re.compile(
+    r"^(\s*)(parse_cmdline|setup_\w+|start_\w+|mount_\w+|jump_init_2nd|"
+    r"load_modules|run_hooks|debug_shell|check_keys|wait_\w+|splash_start|"
+    r"extract_initramfs_extra|delete_old_install_partition|resize_\w+|"
+    r"unlock_root_partition)\b")
+
+
+def marks(src, dst, table, base, scale, pscale=1):
+    """Rebuild a vendor_boot whose real init reports its progress.
+
+    Before each top-level step the init writes its step number k, counted
+    across both stages, into two channels:
+
+    /pmmark gets base + scale * k, which the USB watchdog adds to its delay
+    before resetting a boot no host has configured. That covers an init that
+    is alive but stuck - in debug_shell, or waiting for a root partition -
+    and one round is enough, because the watchdog's own offset is known:
+    markdecode reads the step straight off the round's total.
+
+    /proc/sys/kernel/panic gets pscale * k, the same instrument as the
+    kernel's pmos.milestone, for a kernel that dies instead. With
+    hardlockup_panic=1 softlockup_panic=1 on the command line a lockup
+    becomes a panic, and the timeout says which step was running. A lockup
+    panic comes some unknown time after the hang, and that offset lands in
+    every attempt, so this channel takes two rounds at two panic scales; it
+    cancels in the difference, 7 * 0.992 * (pscale2 - pscale1) * k.
+
+    The panic channel is kept small on purpose. A watchdog reset costs at
+    least ATTEMPT_S + WATCHDOG_S an attempt; a panic costs ATTEMPT_S plus the
+    time to the hang, about 20 seconds of detection and pscale * k. At one
+    second a step that stays under the watchdog's floor unless the hang
+    comes more than a minute and a half into the init, so the two channels
+    can be told apart by length alone.
+    """
+    d = open(src, "rb").read()
+    s = sections(d)
+    o_rd, vr = s["ramdisk"]
+    entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
+
+    k = 0
+    rows = []
+    for name in ("init", "init_2nd.sh"):
+        e = next((x for x in entries if x[1] == name), None)
+        if e is None:
+            sys.exit(f"error: no /{name} in the ramdisk")
+        text = e[2].decode()
+        if "pdx246: progress mark" in text:
+            sys.exit(f"error: /{name} already carries marks - rebuild from a "
+                     "clean image rather than stacking patches")
+        out = []
+        live = name != "init"
+        for line in text.split("\n"):
+            m = MARK_STEPS.match(line)
+            # The USB quirk is a block of its own ahead of setup_usb_network
+            # and worth a mark: it is the first thing that touches dwc3.
+            quirk = line.startswith("# --- pdx246: ask dwc3 for a role")
+            if live and (m or quirk):
+                k += 1
+                ind = m.group(1) if m else ""
+                what = m.group(2) if m else "usb quirk"
+                v = base + scale * k
+                out.append(f"{ind}echo {v} > /pmmark; echo {pscale * k} >"
+                           f" /proc/sys/kernel/panic 2>/dev/null"
+                           f"  # pdx246: progress mark {k}, {what}")
+                rows.append((k, v, pscale * k, name, what))
+            out.append(line)
+            if name == "init" and line.strip() == "mount_proc_sys_dev":
+                live = True
+        e[2] = "\n".join(out).encode()
+
+    newrd = gzip.compress(cpio_build(entries), 6)
+    open(dst, "wb").write(_rebuild(d, s, newrd))
+    lines = [f"  mark {k:2d}  v={v:<4d} panic={t:<4d} /{n}: {w}"
+             for k, v, t, n, w in rows]
+    head = (f"base {base}, scale {scale}, panic scale {pscale}: mark k writes"
+            f" v = {base} + {scale}k for the watchdog and {pscale}k to"
+            " kernel.panic; before the first, the watchdog adds 0 and a panic"
+            " waits the command line's panic=")
+    open(table, "w").write(head + "\n" + "\n".join(lines) + "\n")
+    print(f"  in   {src}")
+    print(f"  out  {dst}")
+    print(f"  {len(rows)} marks; {head}")
+    print("\n".join(lines))
+    print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
+
+
+# The retry counter as a clock. Measured over the probe rounds: an attempt
+# costs ATTEMPT_S on top of whatever the boot itself waits, and the fallback
+# into Android adds FALLBACK_S before adb answers.
+ATTEMPTS = 7
+ATTEMPT_S = 13.34
+FALLBACK_S = 30
+
+
+def markdecode(total, base, scale, table=None):
+    """Read a watchdog round's total back into (mark, UDC state)."""
+    per = (total - FALLBACK_S) / ATTEMPTS
+    extra = per - ATTEMPT_S - WATCHDOG_S
+    print(f"  {total} s over {ATTEMPTS} attempts: {per:.2f} s each,"
+          f" {extra:+.2f} s past the watchdog's {WATCHDOG_S} s")
+    if extra < -2:
+        print("  shorter than the watchdog: every attempt ended some other"
+              " way, most likely a panic. Decode it as panic marks instead:"
+              " a second round at another panic scale, then"
+              " k = (total2 - total1) / (7 * 0.992 * (pscale2 - pscale1)).")
+        return
+    if per > 500:
+        print("  longer than any mark can make it: the watchdog never fired,"
+              " so userspace stopped, and something else reset the phone.")
+        return
+    names = {}
+    if table:
+        for line in open(table):
+            f = line.split()
+            if f[:1] == ["mark"]:
+                names[int(f[1])] = " ".join(f[4:])
+    kmax = max(names) if names else 64
+    udc = ["no UDC but the dummy", "UDC not attached",
+           "UDC partway (attached/powered/addressed)"]
+    cands = []
+    for k in range(kmax + 1):
+        v = 0 if k == 0 else base + scale * k
+        for u in range(3):
+            cands.append((abs(extra - v - u), k, u, v))
+    cands.sort()
+    for err, k, u, v in cands[:3]:
+        what = "no mark yet" if k == 0 else names.get(k, f"mark {k}")
+        print(f"  {err * ATTEMPTS:5.1f} s off:  mark {k:2d} ({what}),"
+              f" {udc[u]}")
 
 
 def stage(src, dst, skip=""):
@@ -929,6 +1101,11 @@ if __name__ == "__main__":
         probe(a[1], a[2])
     elif len(a) == 3 and a[0] == "usbquirk":
         usbquirk(a[1], a[2])
+    elif a[:1] == ["marks"] and len(a) in (6, 7):
+        marks(a[1], a[2], a[3], *map(int, a[4:]))
+    elif a[:1] == ["markdecode"] and len(a) in (4, 5):
+        markdecode(float(a[1]), int(a[2]), int(a[3]),
+                   a[4] if len(a) == 5 else None)
     elif a[:1] == ["stage"] and len(a) in (3, 4):
         stage(a[1], a[2], a[3] if len(a) == 4 else "")
     elif a[:1] == ["stages"] and len(a) in (2, 3):

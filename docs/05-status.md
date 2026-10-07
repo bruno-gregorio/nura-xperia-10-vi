@@ -356,7 +356,12 @@ made the first week of bring-up slow. The findings below are what closed it.
   bisecting `initramfs.load` with it is the way to find what actually hangs.
 - **A hang does recover without touching the phone - it takes about 72
   minutes** — Verified 2026-10-05, and it replaces a flat claim here that it
-  could never happen. A round was left alone after the loop had given up, and
+  could never happen. Qualified 2026-10-07: what came back was not a hang.
+  It was the downstream staged probe, which resets on purpose after 600 idle
+  seconds (the next entry), so the 620 seconds an attempt are our own timer
+  and not anything in the hardware or the hypervisor. Nothing is known to
+  reset a boot that is alive and waiting with no timer of ours armed; see
+  "The real init on mainline". A round was left alone after the loop had given up, and
   the phone came back on its own: `slot-retry-count:a` 0, `slot-unbootable:a`
   yes, Android up on the fallback slot. Seven attempts across 4337 seconds is
   about 620 seconds each. Nothing was wrong with the reasoning that produced
@@ -1319,6 +1324,65 @@ as what it would have fixed.
   `out/kbuild/.config`, a scratch out-of-tree build directory that nothing
   ships from.
 
+## The real init on mainline
+
+- **Round 18: the real init on a kernel that reaches `/init` went silent** —
+  Verified 2026-10-07. pkgrel 3, the stock pmOS init with the USB quirk and
+  the log hook patched in, and the command line as the package ships it:
+  KASLR on, `panic=60`, `pmos.debug-shell`. Nothing answered in the 45
+  minutes `WAIT=2700` allowed - no adb, no fastboot, no network gadget - and
+  an hour in, the host's USB bus held no device from the phone at all.
+- **That silence is not evidence of a hang** — Verified in our own scripts,
+  and it withdraws the first reading, which was that the 240-second USB
+  watchdog never reset the phone and so the kernel had stopped scheduling.
+  The watchdog stood down whenever `/pmusbok` existed, and the quirk created
+  that file as soon as any UDC other than the dummy appeared. On the
+  downstream kernel that meant the controller had come up. On mainline it
+  means nothing: dwc3 with `usb-role-switch` and no
+  `role-switch-default-mode` puts itself in peripheral mode at probe
+  (`dwc3_setup_role_switch`, `drivers/usb/dwc3/drd.c`), so `a600000.usb` is
+  registered whether or not a host ever sees it. After that stage 2 waits in
+  `debug_shell` for `/tmp/continue_boot`, which only a telnet session can
+  create; without `pmos.debug-shell` it would wait 30 seconds for a root
+  partition that mainline cannot see, having no UFS, and then loop in
+  `fail_halt_boot`. Either way the init is alive and silent for ever, and
+  nothing of ours resets it.
+
+  So the likeliest reading of round 18 is Reasoned, not Verified: the init
+  ran, the gadget never reached the host, and the phone sat still. A real
+  hang is not excluded. The next round tells the two apart.
+- **The gadget stack is in the initramfs and loadable** — Verified in the
+  pkgrel 4 vendor ramdisk. `libcomposite`, `u_ether`, `usb_f_ncm`,
+  `usb_f_rndis` and `usb_f_acm` are there as `.ko.zst` with a `modules.dep`
+  beside them, `modprobe` is kmod rather than busybox, and the kernel has
+  `CONFIG_MODULE_DECOMPRESS=y`. The HS PHY driver is builtin
+  (`CONFIG_PHY_QCOM_USB_SNPS_FEMTO_V2=y`). The cheap explanation, a gadget
+  that could not even be built, is ruled out on paper.
+- **The USB watchdog now stands down only for a configured gadget, and says
+  why when it resets** — Done 2026-10-07, in `scripts/bootlog.py`; tested
+  under busybox ash against a fake UDC tree, not yet run on the device. It
+  decides at 150 seconds instead of 240, and stands down only if a UDC's
+  `state` reads `configured` - a host has really enumerated it. Otherwise it
+  resets after an extra delay that carries two numbers: the last progress
+  mark the init wrote to `/pmmark`, and the UDC's state, 0 for no UDC but the
+  dummy, 1 for `not attached`, 2 for anything short of configured.
+
+  `MARKS="4 4"` on `try-kernel.sh` numbers 38 steps across both stages, with
+  `debug_shell` as mark 24, and `bootlog.py markdecode` turns a round's total
+  back into the step and the UDC state. One round answers both "how far did
+  the init get" and "what did USB do", because the watchdog's offset is
+  known. A round in which it never fires runs past 500 seconds an attempt,
+  so a real hang still shows, as a total no mark can produce.
+- **The marks feed a second channel for a kernel that dies** — Reasoned.
+  pkgrel 4 builds in the soft- and buddy hard-lockup detectors, and each mark
+  also writes its bare step number into `/proc/sys/kernel/panic`, so with
+  `hardlockup_panic=1 softlockup_panic=1` a stalled CPU becomes a panic whose
+  timeout names the step. That channel has an unknown offset, the time to the
+  hang plus about 20 seconds of detection, and needs two rounds at two panic
+  scales. It is kept at one second a step so that it stays under the
+  watchdog's 163-second floor unless the hang comes more than a minute and a
+  half into the init, and the two can be told apart by length alone.
+
 ## The boot images
 
 - **boot-deploy's v4 path builds the images the way this port needs** —
@@ -2029,8 +2093,18 @@ up by `dd` under `out/device-dump/stock/`, the rootfs is on the SD card, the
 handoff into the stock second stage works, and **the port boots** - see "The
 port boots" above. What is left starts from there.
 
-1. **Get the mainline kernel as far as `/init`.** The boot itself is no longer
-   the open question: it has happened twice. The first flash on 2026-10-06 was
+1. **Get USB up on the mainline kernel.** Done, the part this item used to
+   be about: with the APSS watchdog node gone the kernel reaches `/init` and
+   runs the initramfs, see "Why the kernel resets". Round 18 then ran the
+   real init and nothing reached the host; "The real init on mainline" has
+   why that says less than it first seemed to. The next round is the real
+   init with `MARKS="4 4"`, `BOOTLOG=0` (the log hook needs UFS, which
+   mainline does not have) and
+   `CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1"`, and its
+   total names the init step and the UDC state in one go. What follows is
+   the history of getting this far.
+
+   The boot itself was the open question for a while: it has happened twice. The first flash on 2026-10-06 was
    refused by ABL outright, and the second - after the dtbo and the board-id
    stamp were rewritten from ABL's own sources - was accepted, selected our
    device tree and handed our kernel the CPU. See "The second mainline flash"

@@ -225,6 +225,24 @@ build_vendor_boot() {
 		say "patching /init to ask dwc3 for peripheral mode"
 		"$ROOT/scripts/bootlog.py" usbquirk "$WORK/vendor_boot.img" "$WORK/vendor_boot-q.img"
 		mv "$WORK/vendor_boot-q.img" "$WORK/vendor_boot.img"
+		# MARKS="base scale [panic-scale]" makes the init report how far
+		# it got through the retry counter: before each step k it writes
+		# base + scale*k where the USB watchdog adds it to its reset
+		# delay, so a boot no host ever configures comes back after a time
+		# that names the step, and the UDC's state with it. One round is
+		# enough:
+		#   bootlog.py markdecode <total> <base> <scale> marks-table.txt
+		# panic-scale*k goes into kernel.panic for a boot that dies
+		# instead; that needs hardlockup_panic=1 softlockup_panic=1 on
+		# CMDLINE_ADD for a hang to count, and two rounds at different
+		# panic scales to decode, see bootlog.py marks. The step table
+		# lands next to the image.
+		if [ -n "${MARKS:-}" ]; then
+			say "MARKS=$MARKS: numbering the init's steps into kernel.panic"
+			# shellcheck disable=SC2086 # two words on purpose
+			"$ROOT/scripts/bootlog.py" marks "$WORK/vendor_boot.img" "$WORK/vendor_boot-m.img" "$WORK/marks-table.txt" $MARKS >/dev/null
+			mv "$WORK/vendor_boot-m.img" "$WORK/vendor_boot.img"
+		fi
 		if [ "${BOOTLOG:-1}" = "0" ]; then
 			say "BOOTLOG=0: flashing without the log hook"
 		else

@@ -2107,6 +2107,25 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   depending on the UFS mode, and the stock console is
   `console=ttyMSM0,115200n8` with `stdout-path` on
   `/soc/qcom,qup_uart@98c000`. Verified, read directly off the device.
+- **No interconnect provider for SM6450.** `CONFIG_INTERCONNECT_QCOM=y` is
+  set but there is no `sm6450` driver and `sm6450.dtsi` names no
+  `interconnects`, so nothing votes bandwidth for any master. Stock's dwc3
+  votes three paths (`usb-ddr`, `usb-ipa`, `ddr-usb`). Whatever ABL left in
+  RPMh is all a mainline DMA master gets, which is enough until it is not;
+  USB enumeration is the first thing that will lean on it. Downstream's
+  `drivers/interconnect/qcom/parrot.c` (2502 lines) is the source, and the
+  generator that produced the clock and pinctrl drivers is the way in.
+- **No reboot-mode, so a mainline shell cannot ask for fastboot.** There is
+  no PON node with `mode-bootloader` in `pm6450.dtsi` or the SoC tree, so
+  even a working boot can only `reboot -f` into the same slot, which walks
+  the retry counter down one attempt at a time. Worth adding as soon as the
+  gadget works, because it is what makes a live mainline boot as cheap to
+  leave as the downstream one.
+- **The dwc3 node uses the deprecated split binding.** `usb@a6f8800` with a
+  `snps,dwc3` child is `qcom,dwc3`, which 6.18 handles in
+  `dwc3-qcom-legacy.c`; new SoCs upstream are expected to use the flattened
+  `qcom,snps-dwc3` form. Not a bring-up problem, since both glues are built,
+  but it has to change before the series goes to the lists.
 
 ## Next steps, in order
 

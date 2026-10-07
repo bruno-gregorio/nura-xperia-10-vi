@@ -265,14 +265,24 @@ def install(src, dst):
 #
 # Everything is spelled /bin/busybox explicitly because 'busybox --install -s'
 # has not run, so none of the usual applet names resolve yet.
+# How long the probe sleeps before rebooting, overridable with PROBE_SLEEP.
+#
+# It is a parameter and not a constant because it is the slope of the only
+# measurement this device allows. A round's total is
+# ATTEMPTS * (boot + sleep + reboot) + FALLBACK_BOOT, so running the same
+# probe at two different sleeps and differencing cancels every unknown in
+# that expression except ATTEMPTS - which is how we know the probe ran at
+# all, rather than inferring it from one number and an assumed constant.
+PROBE_SLEEP = int(os.environ.get("PROBE_SLEEP", "8"))
+
 PROBE_INIT = """#!/bin/busybox ash
 # Bring-up probe, written by scripts/bootlog.py. Not a real init.
-/bin/busybox sleep 8
+/bin/busybox sleep %d
 /bin/busybox reboot -f
 # If reboot(2) was refused, do not sit here looking like a hang.
 /bin/busybox sleep 120
 /bin/busybox reboot -f
-"""
+""" % PROBE_SLEEP
 
 
 def probe(src, dst):

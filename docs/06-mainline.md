@@ -703,40 +703,112 @@ stamped first. But the live tree's root is the *resolved* tree, and its `model`
 reads "Parrot QRD" - so those are `parrot-qrd-overlay`'s properties, which
 overrode the base's. Read Sony's own `vendor_boot` instead and all fourteen
 base trees carry `<0x0 0x0>` or `<0x0 0x600>`: bases are generic and separated
-by `qcom,msm-id` alone, and it is the overlays that carry a board id. A base
-advertising `0x1000b` would have been selected by nothing.
+by `qcom,msm-id` alone, and it is the overlays that carry a board id.
+
+That correction was right about where to look and wrong about what to conclude,
+and it took the rest of this section to find out why. Imitating the generic
+bases is correct for the matcher Sony's firmware actually uses on the way to
+Android, and that matcher is not the one our kernel is routed through, so the
+board id ends up back at `0x1000b` by a different argument.
 
 Which base to imitate is settled by the device rather than inferred.
 `/sys/devices/soc0` reports `soc_id` 537 = `0x219` and `platform_version`
 `0x10000`, which is exactly what "Qualcomm Technologies, Inc. Parrot SoC"
-advertises, so that is what we claim to be: `qcom,msm-id = <0x219 0x10000 0x265
-0x10000>`, `qcom,board-id = <0x0 0x0>`. `qcom,pmic-id` is left unset because no
-base tree in the stock image carries one.
+advertises, so `qcom,msm-id = <0x219 0x10000 0x265 0x10000>` is what we claim
+to be. `qcom,pmic-id` is left unset, because no base tree in the stock image
+carries one.
 
-That is only half of it. Having chosen a base, the bootloader also applies a
-matching overlay from `dtbo`, resolving the overlay's `__fixups__` against the
-base's `__symbols__` - and our tree has no `__symbols__`, because upstream
-builds without `dtc -@`. A failed overlay is what red-states this phone: on
+The board id took a second correction, and the reason is that ABL does not
+have one matcher. It has two, and which one runs depends on the dtbo
+partition. `BootLinux.c` branches like this:
+
+    DtboImgInvalid = LoadAndValidateDtboImg (Info, BootParamlistPtr);
+    if (!DtboImgInvalid) {
+      // appended device tree
+      Dtb = DeviceTreeAppended (...);
+    } else {
+      SocDtb = GetSocDtb (...);
+      BoardDtb = GetBoardDtb (Info, BootParamlistPtr->DtboImgBuffer);
+      if (!BoardDtb) {
+        DEBUG ((EFI_D_ERROR, "Error: Board Dtbo blob not found\n"));
+        return EFI_NOT_FOUND;
+      }
+      ...
+      Status = ApplyOverlay (BootParamlistPtr, SocDtb, DtsList);
+    }
+
+The name is inverted - `LoadAndValidateDtboImg` returns true when the image is
+*good* - so a dtbo ABL can parse takes the `else` branch and a dtbo it cannot
+parse takes `DeviceTreeAppended`, which selects a tree and applies nothing on
+top of it. The two branches score candidates differently. `GetSocDtb` and
+`GetBoardDtb` use a scoring matcher where a zero field counts as a default and
+still scores, which is why Sony's generic bases pass with `<0x0 0x0>`.
+`DeviceTreeAppended` uses the older LK matcher, and `platform_dt_absolute_match`
+there wants the SoC id, the platform type, the platform subtype and the DDR
+type to be *equal* to the board's, discarding the tree outright otherwise.
+Zero is not a wildcard on that path; it is a value that does not match.
+
+Which matters because the mainline kernel has to take the appended path. It is
+the only one of the two that applies no overlay, and no overlay is a hard
+requirement: our tree has no `__symbols__`, because upstream builds without
+`dtc -@`, so every one of the 37 stock overlays would fail to resolve its
+`__fixups__` against it, and a failed overlay is what red-states this phone. On
 2026-10-05 a `vendor_boot` identical to stock except for the device tree was
-declared corrupt over 61 unresolvable labels, and ours would fail on all 1234.
-The board id cannot be used to dodge it either, since base and overlay are both
-matched against the hardware rather than against each other. So the other half
-is `scripts/empty-dtbo.py`, which builds an Android DT table with
-`dt_entry_count = 0` for the spare slot to carry.
+declared corrupt over 61 unresolvable labels; ours would fail on all 1234.
 
-That was the one thing here checked against nothing, and it has now been run.
-It does not work: on 2026-10-06 the device red-stated, and since there were no
-overlays to fail to apply and the stamped ids did match the hardware's
-`soc_id`, the empty table itself is what ABL will not take. Recovery was one
-command and one button press, as the design intended.
+The first attempt to arrange that was `empty-dtbo.py`, an Android DT table with
+`dt_entry_count = 0`, on the theory that a bootloader iterating an empty table
+would find nothing to apply and carry on. It was run on 2026-10-06 and the
+device red-stated. The sources say why, and it is the one shape that could not
+have worked: `LoadAndValidateDtboImg` checks the magic, the total size against
+zero, the header size, the entry size, the entry offset and the entry count
+against the partition size, and a count of zero passes every one of them. ABL
+declared the image good, committed to the overlay branch, and then `GetBoardDtb`
+looped zero times, left `BestDtbInfo.Dtb` NULL and returned `EFI_NOT_FOUND`. An
+empty table is not a table with nothing to apply; it is a table ABL trusts and
+then cannot satisfy. A table full of overlays for *other* SoCs would have been
+fine - Sony's own carries fourteen, for Montague and Ravelin - so long as one
+entry matches.
 
-The next shape to try is a dtbo that is well-formed but inapplicable: one real
-overlay whose `qcom,board-id` matches nothing the hardware reports, so ABL can
-parse the table, find no entry for this board, and apply none. That is a
-different condition from an empty table, and it should have been the first
-attempt. Before that, though, flashing Sony's own `vendor_boot` with only the
-dtbo swapped would say whether the dtbo is the whole story - the run that
-failed changed two things at once, and separating them costs one boot.
+So the dtbo is now made unreadable rather than empty, which is also what the
+postmarketOS wiki means when it tells you to `fastboot erase dtbo` for mainline
+on Qualcomm. `scripts/no-dtbo.py` writes zeros: the magic check is the first
+thing done with the image, so four zero bytes are the whole mechanism.
+
+There was a tidier route and it is closed. `GetSocDtb` logs "Exact DTB match
+found. DTBO search is not required" and sets `DtboNeed = FALSE` when a base
+matches on every field it scores, and `BootLinux.c` then skips `GetBoardDtb`
+entirely, leaving the stock dtbo in place. "Every field" is `ALL_BITS_SET`,
+which includes all sixteen `PMIC_MATCH_EXACT_MODEL_IDX0..F` bits; those come
+only from a `qcom,pmic-id`, no base tree here has one, and `qcom,pmic-id-size`
+caps the index at `0xF`, one short of the sixteen required. It cannot be
+satisfied on this device.
+
+Taking the appended path means the stamp has to satisfy the strict matcher, so
+`qcom,board-id` is no longer `<0x0 0x0>` but `<0x1000b 0x0>`: `0x0b` is QRD,
+which is what `hw_platform` says, and the `0x01_00` above it is platform
+version 1.0 from `platform_version`. Every field there is something the device
+reports about itself except one. The DDR type, bits 10:8 of the subtype cell,
+is not published anywhere in sysfs, so the stamp sweeps it - eight
+`<variant subtype>` pairs in one property, one per DDR type, of which the
+strict matcher keeps the board's and discards the other seven. That costs 56
+bytes.
+
+The evidence says the value is 0. The overlay stock Android booted is "Parrot
+QRD", `<0x1000b 0x0>`; the table also holds "Parrot QRD 4GB DDR",
+`<0x1000b 0x600>`, identical in every scored field except the DDR type and
+*earlier* in the table, so it would have won both an exact DDR match and a tie
+on equal scores. It lost, which leaves one reading: the board's DDR type is 0.
+The sweep stays because that is an inference about firmware rather than a
+reading off the device, and because 56 bytes is cheaper than a button press.
+
+What is still unverified is whether Sony's ABL is this ABL. The sources read
+here are the public EDK2 `QcomModulePkg`, which predates SM6450; the empty-dtbo
+failure is predicted by them exactly, which is good corroboration and not
+proof. The two fields that would fail silently if it differs are
+`BoardSoftSkuId`, which the appended matcher compares for equality against a
+`SkuId` that `DeviceTreeCompatible` never fills in from the tree - so zero, and
+fine if the board also reports zero - and the DDR type the sweep covers.
 
 ## Ordered plan
 

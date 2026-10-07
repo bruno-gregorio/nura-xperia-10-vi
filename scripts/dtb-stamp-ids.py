@@ -30,60 +30,110 @@ try-kernel.sh, which needs both, could not run anywhere: it got as far as
 surgery here instead costs about eighty lines and makes the loop runnable from
 one side, which is worth more than the brevity.
 
+Which of the bootloader's two matchers these values are for
+-----------------------------------------------------------
+
+ABL has two, and they are not equally strict. docs/05-status.md cites the
+source for both; the short version decides every number below.
+
+With a dtbo partition it can read, ABL calls GetSocDtb to pick a base out of
+the dtb area and GetBoardDtb to pick an overlay out of dtbo, and both use a
+*scoring* matcher: a property that is zero in the tree counts as "default" and
+still scores, so a base advertising qcom,board-id = <0x0 0x0> is selected
+quite happily. That is the path stock Android takes and the path our
+downstream kernel takes.
+
+With a dtbo it cannot read, ABL calls DeviceTreeAppended instead, which uses
+the older LK matcher - and that one is all-or-nothing. platform_dt_absolute_match
+requires the tree's SoC id, platform type, platform subtype and DDR type to
+equal the board's exactly, and discards the tree outright otherwise. Zero is
+not a wildcard there; zero is just a value that does not match.
+
+The mainline kernel takes the appended path on purpose, because it is the only
+one that applies no overlay - see scripts/no-dtbo.py. So these values are
+written for the strict matcher, which is why they are no longer the <0x0 0x0>
+that the scoring matcher was happy with.
+
 Where the values come from
 --------------------------
 
-Not invented, and - the one trap here - not the ones the live tree shows.
+Every one of them is something the device reports about itself, read off the
+running phone from /sys/devices/soc0 rather than inferred:
 
-/proc/device-tree on the running device has qcom,board-id = <0x1000b 0x0> at
-its root, but that is the *overlay's* id, not the base's: the resolved tree's
-root says model = "Qualcomm Technologies, Inc. Parrot QRD", which is
-parrot-qrd-overlay, applied on top. Stamping that would have given our base an
-id no base is selected on.
+    soc_id 537 = 0x219         hw_platform QRD
+    platform_version 65536     platform_subtype_id 0
+      = 0x10000                foundry_id 3
 
-What the bootloader selects a base on is visible in the stock vendor_boot, read
-with scripts/dtb-ids.py: all fourteen of Sony's base trees carry
-qcom,board-id = <0x0 0x0> or <0x0 0x600> - generic, SoC-level - and are
-distinguished from each other by qcom,msm-id alone. The overlays are the ones
-that carry a board id.
+qcom,msm-id is <soc-id soc-revision>. 0x219 is soc_id and 0x10000 is the
+revision the device calls 1.0. 0x265 comes along because the stock base tree
+for this SoC groups the two and only one entry has to match.
 
-So these are "Qualcomm Technologies, Inc. Parrot SoC", the generic base for
-this SoC. That it is the right one is settled by the device rather than
-inferred: /sys/devices/soc0 on the running phone reports soc_id 537 = 0x219,
-platform_version 65536 = 0x10000, hw_platform QRD and platform_subtype_id 0,
-and 0x219 0x10000 is exactly what that base advertises. 0x265 comes along
-because Qualcomm groups the two in one tree and only one entry has to match.
+Bits 23:16 of the first cell are the foundry id, and they are deliberately
+left at zero even though this chip was fused at foundry 3. ABL treats a zero
+foundry as the default match and keeps the tree; a foundry that is set and
+wrong is thrown away. Zero is the safe value, and it is what all fourteen of
+Sony's base trees use.
+
+qcom,board-id is <variant subtype>, and the variant is three fields packed
+into one cell:
+
+    0x00_01_00_0b
+         |  |  +-- platform type: 0x0b is QRD, which is what hw_platform says
+         |  +----- platform minor version: 0 (low byte of platform_version)
+         +-------- platform major version: 1 (0x10000 >> 16)
+
+The subtype cell is the platform subtype in its low byte - 0, from
+platform_subtype_id - and the DDR type in bits 10:8. The DDR type is the one
+number the device does not publish, so it is swept: this writes eight
+<variant subtype> pairs, one per possible DDR type, and the strict matcher
+keeps whichever of the eight is the board's and discards the other seven. A
+tree may carry as many pairs as it likes, so the sweep costs 56 bytes and
+removes the last guess from the chain.
+
+The evidence says that value is 0, for what it is worth. The overlay stock
+Android booted is "Parrot QRD", qcom,board-id = <0x1000b 0x0>; the table also
+holds "Parrot QRD 4GB DDR", <0x1000b 0x600>, which is identical in every field
+the matcher scores except the DDR type and comes *earlier* in the table, so it
+would have won both an exact DDR match and a tie. It lost, which leaves only
+one reading: the board's DDR type is 0 and the plain QRD overlay beat it on
+that bit. The sweep is there because that is an inference about firmware and
+the stamp is cheap, not because the inference is weak.
 
 ABL matches on a third property as well, qcom,pmic-id, and this does not set
-it: no base tree in the stock vendor_boot carries one, so it is not part of
-what this board is matched on.
+it. Leaving it out is better than setting it: for a tree without one the
+appended matcher fills the pmic revisions in from the board itself, so they
+compare equal by construction.
 
 The other half
 --------------
 
-Having selected a base, the bootloader also applies a matching overlay from the
-dtbo partition, resolving the overlay's __fixups__ against the base's
+Having selected a base, the scoring path also applies a matching overlay from
+the dtbo partition, resolving the overlay's __fixups__ against the base's
 __symbols__ - and our tree has no __symbols__ at all, because upstream builds
 without dtc -@. A failed overlay is what red-states this phone: verified on
 2026-10-05, when a vendor_boot identical to stock except for the device tree
 was declared corrupt over 61 unresolvable labels. Ours would fail on all of
 them.
 
-The board-id cannot be used to dodge that. Base and overlay are both matched
-against the *hardware's* ids rather than against each other, so a base
-advertising a board-id no overlay asks for would not be selected either. The
-other half therefore has to be the dtbo partition itself: see
-scripts/empty-dtbo.py, which builds an image with no overlays in it for the
-spare slot to carry.
+So the overlay has to be taken off the table, and the way to do that is to
+give ABL a dtbo it refuses to parse, which sends it down the appended path
+instead. scripts/no-dtbo.py builds one and says why an *empty* dtbo - which is
+what this project tried first, on 2026-10-06 - is the one shape that cannot
+work.
 """
 import struct
 import sys
 
-# From "Parrot SoC" in the stock vendor_boot, confirmed against the running
-# device's own soc_id. Check with:
-#   scripts/dtb-ids.py out/device-dump-root/stock/vendor_boot_b.img
+# From the running device's own /sys/devices/soc0; see above for each field.
+# Check what a tree ended up advertising with:
+#   scripts/dtb-ids.py out/try-kernel/pdx246-stamped.dtb
 MSM_ID = [0x219, 0x10000, 0x265, 0x10000]
-BOARD_ID = [0x0, 0x0]
+
+# QRD, platform version 1.0, subtype 0 - once per DDR type, because that is
+# the field the device does not report and the strict matcher wants exactly.
+BOARD_ID = [cell
+            for ddr in range(8)
+            for cell in (0x0001000B, ddr << 8)]
 
 FDT_MAGIC = 0xD00DFEED
 FDT_BEGIN_NODE = 1
@@ -223,7 +273,11 @@ def main(argv):
         fh.write(out)
     print(f"==> {argv[2]}")
     print("    qcom,msm-id   = " + " ".join(f"{v:#x}" for v in MSM_ID))
-    print("    qcom,board-id = " + " ".join(f"{v:#x}" for v in BOARD_ID))
+    pairs = [f"<{BOARD_ID[i]:#x} {BOARD_ID[i + 1]:#x}>"
+             for i in range(0, len(BOARD_ID), 2)]
+    print(f"    qcom,board-id = {pairs[0]}"
+          + (f" and {len(pairs) - 1} more, one per DDR type"
+             if len(pairs) > 1 else ""))
     return 0
 
 

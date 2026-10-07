@@ -129,8 +129,15 @@ The unattended cycle, once a known-good system is on one slot.
 Invariants that keep an unattended loop from destroying the device. These are
 the reasons the loop is safe to run without watching it.
 
-- **Never flash `dtbo`.** The stock `parrot-qrd` overlay there is what turns
-  our base `parrot.dtb` into this device's tree.
+- **Never flash `dtbo` while iterating on the downstream kernel.** The stock
+  `parrot-qrd` overlay there is what turns our base `parrot.dtb` into this
+  device's tree. The mainline kernel inverts this and has to flash it: our own
+  tree is complete and has no `__symbols__`, so the overlay must not be applied,
+  and the only way to stop ABL applying one is to give it a dtbo it refuses to
+  read. What keeps that inside the rule's intent is that it goes on the spare
+  slot only, both slots are dumped byte-for-byte in
+  `out/device-dump-root/stock/`, and `try-kernel.sh --restore` puts them back.
+  See `scripts/no-dtbo.py`.
 - **Never write a `vbmeta` that is not the device's own.** Anti-rollback is
   enforced in hardware and the disable flags do not exempt you; see
   [04-flashing.md](04-flashing.md).

@@ -162,7 +162,8 @@ build_vendor_boot() {
 		# It does need the two bootloader properties stamped on, or the boot
 		# chain will not select it out of the dtb area at all. They are not
 		# device tree and do not belong in the source; see
-		# scripts/dtb-stamp-ids.py.
+		# scripts/dtb-stamp-ids.py, which stamps for the strict matcher the
+		# appended path uses rather than the lenient one stock takes.
 		dtb="$BOOT/dtbs/$MAINLINE_DTB"
 		[ -f "$dtb" ] || die "missing $dtb - is linux-postmarketos-qcom-sm6450 installed in the rootfs?"
 		say "stamping the bootloader ids onto our own device tree"
@@ -294,13 +295,16 @@ cmd_try() {
 
 	# The dtbo the spare slot carries. Downstream wants stock's, because the
 	# parrot-qrd overlay in it is where the board detail lives. Mainline wants
-	# none: our tree is complete on its own and has no __symbols__ for an
-	# overlay's __fixups__ to resolve against, so any overlay that matched
-	# would fail to apply and a failed overlay is what red-states this phone.
-	# scripts/empty-dtbo.py says more; --restore puts stock's back.
+	# one the bootloader cannot read: our tree is complete on its own and has
+	# no __symbols__ for an overlay's __fixups__ to resolve against, so any
+	# overlay that matched would fail to apply and a failed overlay is what
+	# red-states this phone. An unreadable dtbo is what sends ABL down its
+	# appended-device-tree path, which applies no overlay at all; an *empty*
+	# one does not, which is why the first attempt failed.
+	# scripts/no-dtbo.py has the sources; --restore puts stock's back.
 	if [ "$KERNEL" = mainline ]; then
-		"$ROOT/scripts/empty-dtbo.py" "$WORK/dtbo-empty.img"
-		dtbo="$WORK/dtbo-empty.img"
+		"$ROOT/scripts/no-dtbo.py" "$WORK/dtbo-none.img"
+		dtbo="$WORK/dtbo-none.img"
 	else
 		dtbo="$STOCK/dtbo_$cur.img"
 	fi

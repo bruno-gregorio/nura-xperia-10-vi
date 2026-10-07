@@ -16,6 +16,12 @@ carries none of these properties, because they describe the firmware's
 selection protocol rather than the hardware, so they are stamped on at flash
 time and checked back with this.
 
+"Match" means one of two things and the difference decides what a stamp has to
+say. With a readable dtbo partition ABL scores candidates and treats a zero
+field as a wildcard; without one it uses the older LK matcher, which wants
+every field exactly. The mainline kernel takes the second path on purpose - see
+scripts/no-dtbo.py - so values that look plausible here can still be refused.
+
 The scan steps one byte at a time rather than four: Qualcomm's concatenated
 trees are not padded to an alignment, so a 4-byte scan silently skips every
 tree that happens to start at an odd offset.

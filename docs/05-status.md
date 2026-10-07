@@ -619,13 +619,19 @@ chain will accept the images at all.
   labels, which is an overlay failing to apply. This time there were no overlays
   to apply at all and `dtb-stamp-ids.py` had matched the hardware's `soc_id`
   `0x219`, so a base was there to select - and it still red-stated. A dt table
-  with `dt_entry_count = 0` is evidently not something this ABL will accept.
-- **One variable is still uncontrolled, and it is cheap to control** — Reasoned.
-  The run changed two things against a boot that works: the dtb area in
-  `vendor_boot` and the dtbo. Flashing Sony's own `vendor_boot` with nothing but
-  the empty dtbo swapped in would separate them outright - if that red-states,
-  the empty dtbo is the whole story; if it boots, our tree is not being
-  selected and the ids are wrong in some way `dtb-ids.py` cannot see.
+  with `dt_entry_count = 0` is not something this ABL will accept. The reason is
+  now read out of ABL's own sources rather than inferred from the screen; see
+  the next section.
+- **The control run that was planned next would have been uninformative** —
+  Reasoned, and this is why reading the sources first was worth a turn. The plan
+  was to flash Sony's own `vendor_boot` with nothing but the empty dtbo swapped
+  in, to separate the dtbo from our device tree. With the matcher understood,
+  that run is predicted to red-state for a *third* reason: an unreadable or
+  unsatisfiable dtbo sends ABL to `DeviceTreeAppended`, whose strict matcher
+  requires the platform type to be equal, and all fourteen of Sony's base trees
+  carry `qcom,board-id = <0x0 0x0>` or `<0x0 0x600>`, so none of them matches a
+  board reporting QRD. Stock's own trees cannot be appended-booted on this
+  phone. The experiment would have cost a button press and told us nothing.
 - **A red state leaves no USB and costs one button press** — Verified, again.
   Nothing appeared on the bus: no fastboot, no adb, no gadget. Power+VolUp then
   VolUp-while-plugging-in is the only way back, which puts a hard price on each
@@ -643,6 +649,74 @@ chain will accept the images at all.
   was already stock, and left the broken slot untouched. It now restores
   whichever slot is not marked successful and hands activity back to the one
   that is.
+
+## How the bootloader chooses, from its own sources
+
+Read on 2026-10-06 from the public EDK2 `QcomModulePkg` - `BootLinux.c`,
+`LocateDeviceTree.c`, `PartitionTableUpdate.c`, `Board.c` and
+`Include/Library/LocateDeviceTree.h`. This is not Sony's ABL and predates
+SM6450, so every item below is "verified against the published implementation"
+rather than against this phone; what raises confidence is that it predicts the
+2026-10-06 red state exactly, from code paths nobody was looking at when the
+experiment was designed.
+
+- **There are two matchers, and the dtbo decides which one runs** — Verified
+  against the sources. `BootLinux.c` calls `LoadAndValidateDtboImg`, which
+  returns true when the dtbo image is *good* despite being assigned to a
+  variable called `DtboImgInvalid`. A readable dtbo takes `GetSocDtb` +
+  `GetBoardDtb` + `ApplyOverlay`; an unreadable one takes
+  `DeviceTreeAppended`, which selects a tree out of the dtb area and applies no
+  overlay at all. That second branch is the one a mainline kernel needs, and
+  the way to reach it is a dtbo without the magic - which is what
+  `fastboot erase dtbo` does, and what `scripts/no-dtbo.py` now writes.
+- **An empty dt table is the one shape that cannot work** — Verified against
+  the sources, and this is the 2026-10-06 result explained.
+  `LoadAndValidateDtboImg` checks the magic, the total size against zero, the
+  header size, the entry size, the entry offset and the entry count against the
+  partition size; `dt_entry_count = 0` passes all six. ABL therefore trusts the
+  image, commits to the overlay branch, and `GetBoardDtb` loops zero times,
+  leaves `BestDtbInfo.Dtb` NULL and returns it, which `BootLinux.c` turns into
+  `EFI_NOT_FOUND`. Overlays for the wrong SoC would have been harmless - Sony's
+  table carries fourteen such, for Montague and Ravelin - so long as one entry
+  matches.
+- **The strict matcher wants four fields exactly** — Verified against the
+  sources. `platform_dt_absolute_match` keeps a tree only if its SoC id equals
+  `BoardPlatformRawChipId() & 0xffff`, its platform type equals
+  `BoardPlatformType()`, its platform subtype equals `BoardPlatformSubType()`,
+  its DDR bits equal `BoardPlatformHlosSubType() & 0x700` and its `SkuId`
+  equals `BoardSoftSkuId()`; the SoC revision, the packed major/minor version
+  and the PMIC revisions need only be less than or equal. Zero is not a
+  wildcard. This is why the stamp moved from `<0x0 0x0>` to `<0x1000b 0x0>`.
+- **Two of those fields are free** — Verified against the sources. The foundry
+  id, bits 23:16 of `qcom,msm-id`, is not part of the absolute match at all and
+  is handled afterwards by `platform_dt_absolute_compat_match`, which prefers an
+  exact match and falls back to zero - so leaving it zero is safe even though
+  this chip reports `foundry_id` 3. And for a tree with no `qcom,pmic-id`,
+  `DeviceTreeCompatible` fills the entry's PMIC revisions in from
+  `BoardPmicTarget()` itself, so they compare equal by construction.
+- **`SkuId` is never read from the tree** — Verified against the sources.
+  `DeviceTreeCompatible` populates `platform_id`, `variant_id`,
+  `board_hw_subtype`, `soc_rev`, `pmic_rev`, `offset`, `size` and `Idx`, and
+  never `SkuId`, which therefore stays at the zero the allocation gave it. The
+  absolute match then needs `BoardSoftSkuId()` to be zero as well. Nothing on
+  this device reports it, and no stock tree carries `qcom,softsku-id`, so a
+  non-zero value would mean Sony's own trees cannot be appended-booted either.
+  Assumed zero; it is the last unread field in the chain.
+- **The exact-match shortcut cannot be reached here** — Verified against the
+  sources. `GetSocDtb` sets `DtboNeed = FALSE` and skips the overlay entirely
+  when a base satisfies `CheckAllBitsSet`, which would have been the tidy route
+  and leaves the stock dtbo alone. `ALL_BITS_SET` includes all sixteen
+  `PMIC_MATCH_EXACT_MODEL_IDX0..F` bits; those are set only from
+  `qcom,pmic-id`, no base tree on this device carries one, and `PmicMaxIdx` is
+  capped at `0xF` by `MAX_PMIC_IDX`, one short of the sixteen needed.
+- **The board's DDR type is 0** — Reasoned from the device's own selection, not
+  read. It is bits 10:8 of the subtype cell and appears nowhere in
+  `/sys/devices/soc0`. The overlay stock Android booted is "Parrot QRD",
+  `<0x1000b 0x0>`; the table also holds "Parrot QRD 4GB DDR", `<0x1000b 0x600>`,
+  identical in every scored field except the DDR type and earlier in the table,
+  so it would have won an exact DDR match and also won a tie on equal scores.
+  It lost. `dtb-stamp-ids.py` sweeps all eight values anyway, in one property,
+  for 56 bytes.
 
 ## The boot images
 
@@ -702,11 +776,17 @@ chain will accept the images at all.
   defect: every stock base tree uses it, because the board identity arrives
   later from the `dtbo` overlay, which is what rewrites the root to
   `board-id = <0x1000b 0x00>` and a merged seven-SoC `msm-id` in the live tree.
-- **Sony also ships a second Parrot base we have no equivalent for** —
-  Verified, consequence untested. Tree six is "Parrot 4Gb SoC", same `msm-id`
-  but `board-id = <0x0 0x600>`. If this unit is the variant that wants the
-  `0x600` subtype, stock has a tree for it and our `vendor_boot` offers only
-  the `<0x0 0x0>` one.
+  This is the downstream kernel's tree, which keeps the stock dtbo and so is
+  selected by the scoring matcher, where a zero field is a wildcard. The
+  mainline kernel is routed through the strict matcher instead and needs
+  different values; "How the bootloader chooses" above has both.
+- **Sony's second Parrot base is not the one this unit wants** — Reasoned, and
+  resolved. Tree six is "Parrot 4Gb SoC", same `msm-id` but
+  `board-id = <0x0 0x600>`, and the open question was whether this unit is the
+  variant that wants the `0x600` subtype, which our `vendor_boot` has no tree
+  for. Those bits are the DDR type, and the overlay stock Android actually
+  booted says it is 0 rather than 6 - see "The board's DDR type is 0" above. The
+  `<0x0 0x0>` tree we carry is the right one of the two.
 - **Our `parrot.dtb` is a strict subset of Sony's** — Verified. 2201 nodes
   against 2562: 361 nodes under `/soc` are missing and nothing is extra, which
   is the expected shape given the build compiles only the base tree without the
@@ -1356,7 +1436,7 @@ port boots" above. What is left starts from there.
    a rootfs with that kernel in it, and boot-deploy embedded our device tree
    in `vendor_boot.img` byte-identically. The whole flash-image pipeline has
    been dry-run offline: stamp the ids, swap the tree into `vendor_boot`, read
-   the ids back, build the empty dtbo. UFS and USB3 still wait on identifying
+   the ids back, build the dtbo the bootloader refuses. UFS and USB3 still wait on identifying
    their PHY generations; neither is needed for a shell, because the loop boots
    from the SD card and `sdhc_2` is written.
 

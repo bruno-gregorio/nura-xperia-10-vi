@@ -1046,17 +1046,42 @@ as what it would have fixed.
   `ssleep(root_delay)` before anything else (`init/do_mounts.c:466`), so it
   costs exactly N seconds per attempt if and only if that path is taken.
 
-  With `rootdelay=30` on top of `panic=60` and the reboot probe as `/init`,
-  the three outcomes are far apart and all three are informative. About 750
-  seconds - `7 x (12.9 + 30 + 60) + 30` - means the initramfs never gave the
-  kernel an `/init`, so the fault is in how it is passed, unpacked or
-  reserved. 540 again means the opposite: `/init` was there and accessible,
-  `prepare_namespace` was skipped, and the panic is "No working init found",
-  which puts the fault in `execve` rather than in the archive. About 176
-  means the probe ran after all and every reading on this page needs redoing.
-  Unlike the obvious test for the same thing - `root=/dev/... rootwait`, which
-  turns the panic into an unbounded wait - none of these needs a button press,
-  because `rootdelay` sleeps and then carries on to the same panic.
+  `rootdelay=30` went on with the reboot probe as `/init` and `panic=60`
+  unchanged. About 750 seconds - `7 x (12.9 + 30 + 60) + 30` - would mean the
+  initramfs never gave the kernel an `/init`. Unlike the obvious test for the
+  same thing, `root=/dev/... rootwait`, which turns the panic into an unbounded
+  wait, this one needs no button press: `rootdelay` sleeps and then carries on
+  to the same panic.
+- **`prepare_namespace` does not run, which has two readings** — Verified
+  2026-10-07. The `rootdelay=30` round came back at 540, the same figure as
+  every other `panic=60` round, so those 30 seconds were never spent and that
+  function was never called. Either the initramfs *did* give the kernel an
+  accessible `/init` and the panic is somewhere after the check at
+  `init/main.c:1565`, or the kernel never got as far as the check at all and
+  the panic is before it - in `smp_init`, the initcalls, `kunit_run_all_tests`,
+  `wait_for_initramfs` or `console_on_rootfs`.
+
+  Nothing in the round distinguishes those, so the next one is a positive
+  control for it: `rdinit=/nonexistent` makes `init_eaccess` fail by
+  construction, since `rdinit=` is what sets `ramdisk_execute_command` and it
+  defaults to `/init`. With `rootdelay=30` still on, 750 then proves the check
+  is reached and 540 proves it is not - the same measurement run against a
+  known answer, which is the only way a one-bit channel can be trusted.
+- **The initramfs we are flashing is sound, down to the symlink the shebang
+  needs** — Verified 2026-10-07 by unpacking the image that was flashed, which
+  is worth doing before blaming the archive for anything. The vendor ramdisk
+  gzip-decompresses to 29,959,680 bytes with a matching ISIZE trailer and
+  parses as 363 cpio entries. `/init` is a 240-byte regular file, mode 0755,
+  starting `#!/b`. pmOS uses the merged-`/usr` layout, so the shebang's
+  `/bin/busybox` resolves through `bin -> usr/bin`, which survives our repack
+  as a real symlink; `usr/bin/busybox` is mode 0755 and
+  `usr/lib/ld-musl-aarch64.so.1` is present for it to interpret against.
+
+  Worth noting for reading any "No working init found" panic: the kernel's
+  fallbacks after `/init` are `/sbin/init`, `/etc/init`, `/bin/init` and
+  `/bin/sh`, and this archive has none of them - `sbin` is a symlink to
+  `usr/bin`, which contains no `init` and no `sh`. So an `/init` that will not
+  exec goes straight to that panic with nothing in between.
 - **The bootloader ignores the load addresses in the vendor_boot header** —
   Verified 2026-10-07, and it closes a hypothesis that looked alarming for
   about ten minutes. The header asks for the kernel at base+0x8000, the

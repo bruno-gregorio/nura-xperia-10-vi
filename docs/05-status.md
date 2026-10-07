@@ -625,6 +625,39 @@ Everything here is about `linux-postmarketos-qcom-sm6450`, our own 6.18 kernel.
   `sony-pdx246.img` behind, which `verify-bootimg.py` refuses by design -
   flashing it would write zeros over the rootfs. `make-rootfs-img.sh` is the
   route to a real one.
+- **pkgrel 5 builds in what a post-mortem needs, and pkgrel 6 keeps it** —
+  Done 2026-10-07.
+  - `CONFIG_MAGIC_SYSRQ=y`, so the USB watchdog can dump blocked tasks and
+    reset without `device_shutdown`. `CONFIG_MAGIC_SYSRQ_DEFAULT_ENABLE=0x1`
+    covers only the keyboard and serial routes; `/proc/sysrq-trigger`
+    works whatever the mask.
+  - `CONFIG_DETECT_HUNG_TASK=y` with a 30-second timeout, and
+    `CONFIG_DETECT_HUNG_TASK_BLOCKER=y`, which names the task holding the
+    mutex a hung task is waiting for. Hung-task panic stays off: a stuck
+    bind should end up in the log, not in a reset that takes the log with
+    it.
+
+  pkgrel 5 also raised `CONFIG_LOG_BUF_SHIFT` from 17 to 22, a 4 MiB ring
+  buffer, and pkgrel 6 takes that back. Verified in the two packages:
+  `boot/vmlinuz` grew from 28,588,544 to 42,811,904 bytes, while the
+  compressed `linux.efi` grew by 32 KiB. The text buffer itself is `.bss`,
+  but the descriptor arrays beside it, `_printk_rb_static_descs` and
+  `_infos` (`kernel/printk/printk_ringbuffer.h`), each have one entry
+  initialised, so the whole of both goes into `.data`. At 112 bytes a
+  record, going from 2^12 records to 2^17 predicts the growth to within
+  2 KiB. The image's in-memory size went from 29.2 MB to 47.4 MB, the 4 MiB
+  text buffer included. That is past the 44.6 MB of the stock kernel the
+  bootloader is known to load, and nothing in our notes says where ABL's
+  limit is. `log_buf_len=4M` on the command line
+  gives the same 4 MiB, allocated at boot, and `try-kernel.sh` always adds
+  it, so the built-in size bought nothing for that risk. pkgrel 6 also
+  carries the SD rail fix below in its device tree.
+
+  The values are the ones `olddefconfig` computes for these symbols. They
+  were written into the config by hand, because `olddefconfig` in the
+  distrobox, with gcc and no pahole, also drops `CONFIG_CFI` and
+  `CONFIG_DEBUG_INFO_BTF`, which only clang and pahole in the build chroot
+  can satisfy.
 
 ## The first mainline flash
 
@@ -964,11 +997,43 @@ had become the priority.
   A region left untouched after a round means one of two things: the card
   never came up, or the boot died within two minutes of `/init`. The USB
   watchdog's total tells those apart.
-- **The ring buffer is only 128 KiB** — Verified in the config
-  (`CONFIG_LOG_BUF_SHIFT=17`). A mainline boot that logs every probe can wrap
-  it, losing the earliest lines first, and those are the ones a post-mortem
-  wants. Until the config is raised, rounds should add `log_buf_len=4M` to
-  the command line.
+- **The SD card's two rails were allowed far above what stock gives them** —
+  Verified against the stock tree, and fixed in the series on 2026-10-07,
+  before any round had the card hook on. Our board file had copied the
+  limits of stock's regulator nodes: L6, the IO rail, 1.65 to 3.3 V, and
+  L9, the card's supply, 2.7 to 3.544 V. Stock never goes near the top of
+  either. Its `sdhci-msm` narrows them itself, with
+  `qcom,vdd-voltage-level = <2960000 2960000>` and
+  `qcom,vdd-io-voltage-level = <1800000 2960000>`, and the SD controller is
+  the only consumer of both rails. Mainline has no such property. The MMC
+  core takes the regulator's own limits as the range it may use, so it
+  would have put the card at about 3.4 V and the IO rail at about 3.1 V.
+  The board file now carries stock's consumer ranges, L6 1.8 to 2.96 V and
+  L9 2.7 to 2.96 V. Upstream's Fairphone 4 and Xperia 10 III use the same
+  PMIC for the same two rails, and both cap them the same way, at 2.95 and
+  2.96 V. The fix is squashed
+  into the board commit; `out/milestone/clkref-sdvolt.dtb` is the CLKREF
+  tree with it, and differs from `clkref.dtb` in those three values alone.
+- **The ring buffer was only 128 KiB up to pkgrel 4** — Verified in the
+  config (`CONFIG_LOG_BUF_SHIFT=17`). A mainline boot that logs every probe
+  can wrap it, losing the earliest lines first, and those are the ones a
+  post-mortem wants. `try-kernel.sh` adds `log_buf_len=4M` to the command
+  line whenever it installs the hook, which allocates 4 MiB at boot and
+  copies the early messages into it. Building the size in instead, as
+  pkgrel 5 did, costs 14 MB of kernel image; see "The mainline kernel
+  package".
+- **`try-kernel.sh --log` reads the card back, and each round is labelled**
+  — Done 2026-10-07, not yet run against the device. In recovery it runs
+  the one line that `bootlog.py card-sh read` prints, through
+  `adb exec-out`. That line finds the card with the hook's own checks and
+  reads nothing if none passes. It then decodes the region: the newest
+  complete record of every attempt goes to the screen, and every record to
+  `out/try-kernel/bootlog-card-<time>.txt`. Then it clears the counter and
+  the first block of every half with `card-sh clear`, so the next round
+  starts at attempt 1. `rddata` is read in full, both halves, and cleared
+  the same way. When it installs the hook, `try-kernel.sh` also puts
+  `pmbl.round=<time>` on the command line, which every record carries, so a
+  record left over from an older round cannot pass for this one's.
 
 ## Why the kernel resets
 
@@ -1515,14 +1580,15 @@ as what it would have fixed.
   reads `configured` - a host has really enumerated it. Otherwise it resets
   after an extra delay that carries two numbers: the last progress mark the
   init wrote to `/pmmark`, and how far up the USB stack the boot got, as one
-  rung of a six-rung ladder. 0 is the dwc3 glue (`usb@a6f8800`) unbound, 1
-  the glue bound and the HS PHY not, 2 both bound but no UDC, which means
+  rung of a seven-rung ladder. 0 is the dwc3 glue (`usb@a6f8800`) unbound,
+  1 the glue bound and the HS PHY not, 2 both bound but no UDC, which means
   the dwc3 core failed, 3 a UDC that configfs never bound the gadget to, 4 a
   bound gadget whose UDC is `not attached`, so no host saw it, and 5 one
-  that got partway with a host.
+  that got partway with a host. Rung 6, added after round 19, is a bind
+  that never returned; see below.
 
   `MARKS="4 8"` on `try-kernel.sh` numbers 38 steps across both stages, with
-  `debug_shell` as mark 24, eight seconds apart so the six rungs fit between
+  `debug_shell` as mark 24, eight seconds apart so the seven rungs fit between
   them, and `bootlog.py markdecode` turns a round's total back into the step
   and the rung. One round answers both "how far did the init get" and "where
   did USB stop", because the watchdog's offset is known. A round in which it never fires runs past 500 seconds an attempt,
@@ -1536,6 +1602,76 @@ as what it would have fixed.
   scales. It is kept at one second a step so that it stays under the
   watchdog's 163-second floor unless the hang comes more than a minute and a
   half into the init, and the two can be told apart by length alone.
+- **Round 19: the real init with the marks, and nothing came back at all** —
+  Verified 2026-10-07. pkgrel 4, `DTB=out/milestone/clkref.dtb`,
+  `MARKS="4 8"`, `BOOTLOG=0`,
+  `CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1"`, and
+  `WAIT=4800`. In 80 minutes nothing answered: no adb, no fastboot, and no
+  fallback to stock Android. The host's kernel log has no USB event from the
+  phone after 16:47:57, when it left the bus for the reboot out of fastboot.
+  The phone had to be put back into fastboot by hand.
+- **No mark can make a round that long, so something stopped the watchdog**
+  — Reasoned, from the timing model under "Why the kernel resets". With the
+  stand-down narrowed to a configured UDC, and no host ever seeing one, every
+  attempt the watchdog ends takes 13 + 150 + mark + rung seconds. The
+  highest mark is 300, so that is under 470 seconds, and seven attempts and
+  the fallback come to about 55 minutes. A lockup panic ends an attempt
+  sooner still. Eighty minutes means at least one attempt was ended by
+  neither. Round 18 cannot say as much, because its watchdog stood down as
+  soon as a UDC appeared.
+- **The likeliest stop is the gadget bind, and it took the watchdog with it**
+  — Reasoned, from the 6.18 sources. The init binds the gadget by writing
+  the UDC's name to `/sys/kernel/config/usb_gadget/g1/UDC`.
+  `gadget_dev_desc_UDC_store` (`drivers/usb/gadget/configfs.c`) holds the
+  gadget's `gi->lock` across the whole of `usb_gadget_register_driver`, which
+  probes the gadget driver, starts the UDC and pulls D+ up. The watchdog
+  read the same file to tell rung 3 from rung 4, and
+  `gadget_dev_desc_UDC_show` takes the same lock. So a bind that never
+  returns leaves the init and the watchdog both asleep on one mutex, for
+  ever. Neither lockup detector sees that, because a task asleep is not a
+  CPU stalled. It fits the host's log too: a dwc3 that never finished
+  starting never pulled D+ up.
+
+  Had the watchdog got past the read, it would still have had nothing to
+  reset with. pkgrel 4 has no sysrq, so it fell back to `reboot -f`, and
+  `reboot(2)` runs `device_shutdown`, which takes every device's lock in
+  turn (`drivers/base/core.c`). The bind holds the gadget's device lock
+  while it probes, so the reset would have waited on the same stuck call.
+
+  A hard hang of the whole SoC fits the silence just as well, and nothing
+  from these rounds tells the two apart. The changes below are built to.
+- **Nothing the logging does waits on a kernel lock any more** — Done
+  2026-10-07, in `scripts/bootlog.py`; tested under Alpine's busybox 1.38
+  against fake sysfs trees, with a FIFO standing in for a `g1/UDC` that never
+  answers. Not yet run on the device.
+  - The watchdog reads `g1/UDC` from a child and gives it two seconds. One
+    that has not answered by then is rung 6, "binding the gadget never
+    returned". The time spent waiting comes off the delay at the end, so the
+    total still names the rung, and seven rungs fit inside `MARKS="4 8"`'s
+    eight-second steps.
+  - Before it resets, it writes `w` to `/proc/sysrq-trigger`. That puts the
+    kernel stack of every task in `D` state into the ring buffer. It then
+    waits for the log hook to finish two more records, through
+    `/pmbl.seq`, because the second is the first one certain to have been
+    put together after the dump. It waits six seconds at most, and never
+    longer than its delay has left.
+  - It resets with sysrq `b`, which restarts at once and skips
+    `device_shutdown`. `reboot -f -n` is only the fallback, and `-n` keeps
+    `sync` out of it.
+  - The hook reads every source that takes a lock through `pmbootlog_try`:
+    the gadget's UDC, the module list, the deferred probes, and the
+    power-domain, regulator and clock summaries. Each gets two seconds. One
+    that does not answer is reported as `BLOCKED`, with the uptime, and never
+    read again, so it costs two seconds once and not every record.
+  - Each record now lists every task in `D` state, with its stack from
+    `/proc/<pid>/stack`, so a stuck bind names its own function even
+    without sysrq.
+
+  The test caught one bug of exactly the kind it was written for. The
+  hook's background reader inherited the stdout of the `$(...)` the gadget
+  line runs in, so the substitution waited for the stuck reader anyway, and
+  the record stopped there. The job now has all three of its descriptors
+  redirected.
 
 ## The boot images
 
@@ -2268,15 +2404,24 @@ port boots" above. What is left starts from there.
 
 1. **Get USB up on the mainline kernel.** Done, the part this item used to
    be about: with the APSS watchdog node gone the kernel reaches `/init` and
-   runs the initramfs, see "Why the kernel resets". Round 18 then ran the
-   real init and nothing reached the host; "The real init on mainline" has
-   why that says less than it first seemed to. The next round is the real
-   init with `MARKS="4 8"`, `BOOTLOG=0` (the log hook needs UFS, which
-   mainline does not have),
-   `CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1"` and
-   `DTB=out/milestone/clkref.dtb`, and its total names the init step and the
-   rung USB stopped on, in one go. What follows is
-   the history of getting this far.
+   runs the initramfs, see "Why the kernel resets". Rounds 18 and 19 then
+   ran the real init, and nothing reached the host. Round 19 did not even
+   fall back to stock, which the watchdog should have forced; "The real init
+   on mainline" has why the gadget bind is the likeliest culprit and what
+   now keeps it from silencing the logging. The next round is pkgrel 6 with
+   the log hook on, writing to the SD card:
+
+       DTB=out/milestone/clkref-sdvolt.dtb MARKS="4 8" \
+       CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1" \
+       WAIT=4800 scripts/try-kernel.sh
+
+   If the card comes up, its records say where the init stopped and which
+   task was stuck, and `scripts/try-kernel.sh --log` reads them back. If it
+   does not, the round's total still names the init step and the rung USB
+   stopped on, rung 6 included. A total past 500 seconds an attempt now
+   means the watchdog's sysrq reset did not land either, which points at a
+   hard hang rather than a stuck sleep. What follows is the history of
+   getting this far.
 
    The boot itself was the open question for a while: it has happened twice. The first flash on 2026-10-06 was
    refused by ABL outright, and the second - after the dtbo and the board-id
@@ -2316,18 +2461,33 @@ port boots" above. What is left starts from there.
    from the host. That is enough to bisect a blind boot, coarsely, one number
    at a time, without touching the phone.
 
-2. **Find where stock stage 1 wedges.** Still unknown, and now diagnosable:
+2. **Let a hard hang reset itself.** Round 19 needed hands on the phone,
+   because nothing resets a kernel that has stopped. The Gunyah watchdog
+   can, and both halves of it are already in the package: the backports
+   are applied and `CONFIG_GUNYAH_WATCHDOG=m`. With the APSS watchdog node
+   gone, `qcom_scm` registers the `gunyah-wdt` device itself. What is
+   missing is the module in the initramfs, where `modules-initfs.mainline`
+   can put it without a kernel rebuild, and something to pet it. Alpine's
+   busybox has a `watchdog` applet, so the init can start
+   `watchdog -T 32 -t 4 /dev/watchdog0` near the top. 32 seconds is the
+   most Gunyah allows. Two things are unknown, and they are why this waits
+   for its own round, after the card has given a log: whether a Gunyah
+   bite resets the phone the way the bootloader counts an attempt, or drops
+   it into a crash-dump mode that needs the buttons anyway, and whether the
+   driver's status call even answers on this hypervisor.
+3. **Find where stock stage 1 wedges.** Still unknown, and now diagnosable:
    the watchdog arms on line 5 instead of line 35, so a hang becomes a reset
    loop that ends in Android with a flash log to read. The log hook arms right
    after `mount_proc_sys_dev`, so the presence or absence of a record is
-   itself the answer - the hook waits for UFS, which only appears once stage 2
-   has let udev load the storage modules.
-3. **Rebuild the kernel without `dummy_hcd`.** `# CONFIG_USB_DUMMY_HCD is not
+   itself the answer - the hook waits for storage, the card or UFS, and
+   downstream both only appear once stage 2 has let udev load the storage
+   modules.
+4. **Rebuild the kernel without `dummy_hcd`.** `# CONFIG_USB_DUMMY_HCD is not
    set` is already in `pmos.config` and needs a build to take effect. Not
    urgent: `deviceinfo_usb_network_udc` names the real controller, so the
    gadget cannot land on `dummy_udc.0` by accident any more. It does mean
    rebuilding the rootfs image too, because the modules live in it.
-4. **Display on the mainline kernel, from in-tree drivers only.** MDSS, DPU
+5. **Display on the mainline kernel, from in-tree drivers only.** MDSS, DPU
    and DSI nodes in `sm6450.dtsi`, whatever DPU catalog entry and DSI PHY
    support SM6450 needs, and an upstream-style panel driver for the Samsung
    command-mode panel. It also retires `deviceinfo_no_framebuffer`. Building
@@ -2335,7 +2495,7 @@ port boots" above. What is left starts from there.
    was the destination; it is not the plan now, because the mainline kernel
    exists to stop depending on Android vendor modules. It stays an option only
    for the downstream bring-up kernel, and only if that ever needs a screen.
-5. **Small things the live system asked for.** Nothing sets the clock, so it
+6. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and
    `systemd-firstboot.service` both fail benignly and should either be fixed

@@ -838,28 +838,65 @@ as what it would have fixed.
   went into the cmdline and `verify-bootimg.py` confirmed all three reached the
   image. The device then behaved *identically*: adb answered on slot `_b` after
   158 seconds, the same figure as the round before, to the resolution of a
-  2-second poll. Had the kernel got past the clock and genpd passes and died
-  later, the per-attempt time would have moved and seven attempts would have
-  multiplied the difference; nothing moved. So the kernel dies before
-  `late_initcall_sync`, which also means it dies before `/init` and before any
-  of the three passes could have run. The flags stay on - they are correct for
-  bring-up regardless, and the regulator one guards a death the device has not
-  lived long enough to reach - but they are no longer an explanation.
+  2-second poll. The flags stay on - they are correct for a tree this young
+  regardless - but they explain nothing.
+
+  What this does *not* establish is where the kernel dies, and an earlier
+  version of this entry claimed it did. The argument was that a kernel which
+  got past the clock and genpd passes and died later would have shifted the
+  per-attempt time. That is wrong: these flags change behaviour, not timing,
+  and if the teardown was never the thing killing us then nothing about the
+  timing should move no matter where the death is. The flags rule out the
+  teardown as a cause. They locate nothing.
 - **`rddata` is now a clean instrument** — Verified. The round read it and
   found 0 non-zero bytes in 1 MB, then cleared it. The stale downstream
   `PMBOOTLOG` that the previous round printed is gone, so a future round that
   finds something there has genuinely written it.
-- **What the next round should ask is what *kind* of death this is** —
-  Reasoned. A panic and a hardware reset are indistinguishable in the data so
-  far, and they point in opposite directions: a panic means the kernel is alive
-  and its reporting machinery works, while a silent hardware reset means a bad
-  register access, the watchdog, or TZ killing us. The cmdline already
-  separates them, for free. `panic=5` adds a 5-second delay before a panic
-  reboots (`panic_timeout > 0` in `kernel/panic.c:558`), and a hardware reset
-  has no such delay. Raise it to `panic=60` and the two outcomes diverge by 55
-  seconds per attempt, which seven attempts multiply into 385: a panicking
-  kernel falls back at around 543 seconds, a hard-resetting one at 158 again.
-  One cmdline change, no rebuild, hands-free either way.
+- **The kernel panics; it is not a hardware reset** — Verified 2026-10-06, and
+  this is the first positive thing known about the failure. A panic and a
+  hardware reset look identical from the host - the phone reboots - but they
+  point opposite ways, so they had to be separated before anything else was
+  worth trying. The cmdline does it for free: `panic_timeout` waits that many
+  seconds before rebooting (`kernel/panic.c:558`) and a hardware reset waits
+  for nothing, so the number is an output channel one digit wide. `panic=5`
+  gave 158 seconds. `panic=60` was predicted to give about 543. It gave **540**.
+
+  That single number settles three things. The panic path runs, so the kernel
+  is alive, `printk` works and the console is merely going nowhere - this is a
+  software fault, not a bad register write, the watchdog, or TZ. The retry
+  count really is seven: 540 - 158 = 382, and 382/55 = 6.95. And subtracting
+  the panic delays leaves `7 x (ABL + kernel) + stock = 123` seconds, so with
+  stock booting to adb in 40 to 60 seconds, ABL plus kernel is 9 to 12 seconds
+  per attempt. ABL alone reaches fastboot in 6, which leaves the kernel running
+  for something like 3 to 6 seconds before it gives up.
+- **`panic_on_oops=1` is not a kernel parameter and never did anything** —
+  Verified 2026-10-06, by reading `kernel/panic.c` rather than assuming. The
+  `core_param` list there covers `panic`, `pause_on_oops`, `panic_on_warn`,
+  `crash_kexec_post_notifiers`, `panic_console_replay` and `panic_print`.
+  `panic_on_oops` is not among them; the only cmdline route to it is
+  `early_param("oops", ...)`, which accepts `oops=panic` and nothing else. So
+  the `panic_on_oops=1` this project has been passing since the first mainline
+  round was handed to init as an environment variable and ignored by the
+  kernel. `CONFIG_PANIC_ON_OOPS` is not set either, so `panic_on_oops` has been
+  0 throughout.
+
+  That is not a harmless typo, because it changes what the panic *is*. With
+  `panic_on_oops` at 0 an oops prints and the kernel carries on, so the panic
+  the timing proves cannot be an oops promoted to a panic. Something is calling
+  `panic()` outright. It is being removed rather than corrected to `oops=panic`:
+  a non-fatal oops is strictly better for bring-up, because a kernel that
+  survives one may still reach `/init`, where the only real output channel is.
+- **The next round asks whether `/init` runs, and the tooling already exists** —
+  Reasoned. A genuine `panic()` this early has two very different families of
+  cause. One is a driver probe. The other is the end of the boot - "No working
+  init found", "Attempted to kill init!" - which would mean the kernel got
+  through every initcall and the device tree is largely fine. `bootlog.py
+  probe` separates them: `PROBE=1` replaces `/init` with something that reboots
+  on purpose, and at `panic=60` the two outcomes are 400 seconds apart. If
+  `/init` runs, each attempt is only ABL plus kernel and the fallback comes at
+  roughly 120 seconds; if it never runs, the panic delay applies and it comes at
+  540 again. No rebuild, hands-free, and it is the single most valuable bit left
+  to buy.
 - **After that, `initcall_blacklist` can test the two generated drivers** —
   Reasoned. `CONFIG_KALLSYMS=y` is set, so the blacklist works, and the two
   hand-generated drivers are the dominant risk this document has named from

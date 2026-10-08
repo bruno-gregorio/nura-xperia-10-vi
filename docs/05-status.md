@@ -2356,6 +2356,25 @@ as what it would have fixed.
     3 MiB. ath10k gives the firmware that size as the MSA. A WIP commit
     on `sm6450-wifi` sets 3 MiB on the board, and the SoC keeps the map's
     12.
+  - **What its round needs** — written down 2026-10-08, when the week's
+    work stopped, so that nothing has to be found again.
+    - **Verified against pkgrel 18:** the modules are there. Their own
+      `depends=` fields give the load order: `rfkill`, `cfg80211`,
+      `libarc4`, `mac80211`, `ath`, `ath10k_core`, then `ath10k_snoc`
+      after `qcom_common`. The package's `modules.dep` lists no
+      dependencies, so a round has to load them in that order itself.
+    - **Verified against the source:** the pd-mapper's SM6450 entry
+      reuses SM8550's list, which has the ADSP, CDSP and modem domains
+      and nothing for the WPSS. The `.jsn` files stock keeps in
+      `modem_b` have nothing for the WPSS either, so it may not need a
+      domain. That is a guess until a round shows the WLAN firmware's
+      QMI service coming up.
+    - **Still to do:** squash `adrastea/wpss.mdt` into the board's
+      `wpss.mbn` with `pil-squash.py`, as round 37 did for the ADSP.
+      Then fetch linux-firmware's `ath10k/WCN3990/hw1.0/` files inside
+      `pmport` and push them into the shell, as Bluetooth's files are.
+      The round boots the `sm6450-wifi` tree on pkgrel 18, with round
+      62's modules for the ADSP and the WPSS.
 - **Bluetooth** — Written 2026-10-08. Round 35 ran it (see "Round 35:
   Bluetooth binds, and the version reply is a WCN3991's"). Bluetooth needs
   no remote processor. The controller is the

@@ -2284,12 +2284,34 @@ as what it would have fixed.
   deferred devices and dmesg. `qrtr` goes first because sysmon opens a QRTR
   socket at probe and defers without one. "The remote processors" in
   [06-mainline.md](06-mainline.md) has the mapping.
+
+  Round 37, at the end of plan n, boots the ADSP if three things hold: the
+  firmware was collected, it has an `adsp.mdt`, and round 34 showed the
+  ADSP probed and offline. The plan squashes the image with
+  `pil-squash.py`. `cmds-r37.sh` pushes it to the board's firmware name
+  with round 34's modules, and auto-boot starts it at probe. The image is
+  tens of megabytes and the shell takes it 768 bytes a round trip, so the
+  file starts with `touch /pmhold`. The plan's branches were exercised
+  against stubs: each skip, and a run with a synthetic split image in
+  capitals. The image lands in `pil_adsp_mem`, which is stock's
+  `adsp_region`, address and size. Stock's ADSP votes on the LCX and LMX
+  levels, which are the power domains its fallback, `sm8350-adsp-pas`,
+  names. Sony's PAS driver marks the parrot images `uses_elf64`. That only
+  sets the class of a crash dump, so mainline's ELF32-only `mdt_loader`
+  is not a concern.
 - **The WLAN** — Written 2026-10-08, not yet run, and not queued. It is
   the WCN3990-class core on `ath10k_snoc`, with its firmware on the WPSS.
   06-mainline had called it WCN6750, which the live node's `qcom,icnss`
   compatible rules out. The WIP node is on branch `sm6450-wifi` in
   `out/linux`; `CHECK_DTBS=y` is clean and its interrupts equal stock's.
   It needs the WPSS running its firmware first.
+  - **Verified against the sources:** the MSA size. `pil_wlan_mem` in our
+    SoC dtsi is 12 MiB at `0x82a00000`, from Qualcomm's
+    `parrot-reserved-memory.dtsi`, which is sized for a WCN6750. Sony's
+    `parrot-wcn3990.dtsi` shrinks it to 3 MiB, and the live tree has
+    3 MiB. ath10k gives the firmware that size as the MSA. A WIP commit
+    on `sm6450-wifi` sets 3 MiB on the board, and the SoC keeps the map's
+    12.
 - **Bluetooth** — Written 2026-10-08, not yet run; queued as round 35 in
   plan n. Bluetooth needs no remote processor. The controller is the
   WCN39xx radio on a UART, and `hci_qca` loads its firmware over that

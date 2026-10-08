@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 09:56:51 -0300
+Subject: [PATCH] phy: qcom: qmp-ufs: Add SM6450 support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SM6450's UFS PHY is the two-lane QMP PHY of SM8350 and SM8450, and
+Qualcomm's own driver for it programs the SM8350 serdes, rx and pcs tables
+and the same HS-B and G4 overlays. The tx table differs in two values, the
+resistor code offsets, which are 0x03 and 0x06 here rather than 0x09 and
+0x09. Add a tx table with those, and a configuration that otherwise shares
+SM8350's tables.
+
+The regulator loads are the ones the downstream device tree requests.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/phy/qualcomm/phy-qcom-qmp-ufs.c | 54 +++++++++++++++++++++++++
+ 1 file changed, 54 insertions(+)
+
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+index 8af777f7d..026969dc2 100644
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-ufs.c
+@@ -428,6 +428,18 @@ static const struct qmp_phy_init_tbl sdm845_ufsphy_pcs[] = {
+ 	QMP_PHY_INIT_CFG(QPHY_V3_PCS_UFS_MULTI_LANE_CTRL1, 0x02),
+ };
+ 
++static const struct qmp_phy_init_tbl sm6450_ufsphy_tx[] = {
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_PWM_GEAR_1_DIVIDER_BAND0_1, 0x06),
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_PWM_GEAR_2_DIVIDER_BAND0_1, 0x03),
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_PWM_GEAR_3_DIVIDER_BAND0_1, 0x01),
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_PWM_GEAR_4_DIVIDER_BAND0_1, 0x00),
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_LANE_MODE_1, 0xf5),
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_LANE_MODE_3, 0x3f),
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_RES_CODE_LANE_OFFSET_TX, 0x03),
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_RES_CODE_LANE_OFFSET_RX, 0x06),
++	QMP_PHY_INIT_CFG(QSERDES_V5_TX_TRAN_DRVR_EMP_EN, 0x0c),
++};
++
+ static const struct qmp_phy_init_tbl sm7150_ufsphy_rx[] = {
+ 	QMP_PHY_INIT_CFG(QSERDES_V3_RX_SIGDET_LVL, 0x24),
+ 	QMP_PHY_INIT_CFG(QSERDES_V3_RX_SIGDET_CNTRL, 0x0f),
+@@ -1195,6 +1207,11 @@ static const struct regulator_bulk_data sm6115_ufsphy_vreg_l[] = {
+ 	{ .supply = "vdda-pll", .init_load_uA = 14200 },
+ };
+ 
++static const struct regulator_bulk_data sm6450_ufsphy_vreg_l[] = {
++	{ .supply = "vdda-phy", .init_load_uA = 140000 },
++	{ .supply = "vdda-pll", .init_load_uA = 18300 },
++};
++
+ static const struct regulator_bulk_data sm7150_ufsphy_vreg_l[] = {
+ 	{ .supply = "vdda-phy", .init_load_uA = 62900 },
+ 	{ .supply = "vdda-pll", .init_load_uA = 18300 },
+@@ -1437,6 +1454,40 @@ static const struct qmp_phy_cfg sm6115_ufsphy_cfg = {
+ 	.no_pcs_sw_reset	= true,
+ };
+ 
++static const struct qmp_phy_cfg sm6450_ufsphy_cfg = {
++	.lanes			= 2,
++
++	.offsets		= &qmp_ufs_offsets,
++	.max_supported_gear	= UFS_HS_G4,
++
++	.tbls = {
++		.serdes		= sm8350_ufsphy_serdes,
++		.serdes_num	= ARRAY_SIZE(sm8350_ufsphy_serdes),
++		.tx		= sm6450_ufsphy_tx,
++		.tx_num		= ARRAY_SIZE(sm6450_ufsphy_tx),
++		.rx		= sm8350_ufsphy_rx,
++		.rx_num		= ARRAY_SIZE(sm8350_ufsphy_rx),
++		.pcs		= sm8350_ufsphy_pcs,
++		.pcs_num	= ARRAY_SIZE(sm8350_ufsphy_pcs),
++	},
++	.tbls_hs_b = {
++		.serdes		= sm8350_ufsphy_hs_b_serdes,
++		.serdes_num	= ARRAY_SIZE(sm8350_ufsphy_hs_b_serdes),
++	},
++	.tbls_hs_overlay[0] = {
++		.tx		= sm8350_ufsphy_g4_tx,
++		.tx_num		= ARRAY_SIZE(sm8350_ufsphy_g4_tx),
++		.rx		= sm8350_ufsphy_g4_rx,
++		.rx_num		= ARRAY_SIZE(sm8350_ufsphy_g4_rx),
++		.pcs		= sm8350_ufsphy_g4_pcs,
++		.pcs_num	= ARRAY_SIZE(sm8350_ufsphy_g4_pcs),
++		.max_gear	= UFS_HS_G4,
++	},
++	.vreg_list		= sm6450_ufsphy_vreg_l,
++	.num_vregs		= ARRAY_SIZE(sm6450_ufsphy_vreg_l),
++	.regs			= ufsphy_v5_regs_layout,
++};
++
+ static const struct qmp_phy_cfg sm7150_ufsphy_cfg = {
+ 	.lanes			= 1,
+ 
+@@ -2198,6 +2249,9 @@ static const struct of_device_id qmp_ufs_of_match_table[] = {
+ 	}, {
+ 		.compatible = "qcom,sm6350-qmp-ufs-phy",
+ 		.data = &sdm845_ufsphy_cfg,
++	}, {
++		.compatible = "qcom,sm6450-qmp-ufs-phy",
++		.data = &sm6450_ufsphy_cfg,
+ 	}, {
+ 		.compatible = "qcom,sm7150-qmp-ufs-phy",
+ 		.data = &sm7150_ufsphy_cfg,

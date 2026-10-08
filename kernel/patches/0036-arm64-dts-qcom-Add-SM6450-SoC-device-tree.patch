@@ -10,11 +10,29 @@ Add the base device tree for SM6450: eight CPUs in one cluster (four
 Cortex-A55 and four Cortex-A78) with their idle states and PSCI power
 domains, the carve-outs the firmware owns, GCC, TLMM, the GIC, PDC,
 IPCC, the TCSR mutex, the memory-mapped timer, the RPMh RSC with its
-clock and power domain controllers, the EPSS CPU frequency controller,
-the QUPv3 wrapper holding the debug UART, the SPMI arbiter with both
-its buses, the AOSS side channel and its sleep stats, SMEM with the
-four SMP2P edges that ride on it, the apps SMMU, the SD card
-controller, and USB with its high-speed PHY.
+clock and power domain controllers, the ten NoCs and two virtual
+interconnect providers, the EPSS CPU frequency controller, the QUPv3
+wrapper holding the debug UART, the SPMI arbiter with both its buses,
+the AOSS side channel and its sleep stats, SMEM with the four SMP2P
+edges that ride on it, the apps SMMU, the SD card controller, USB with
+its high-speed PHY, the two TSENS controllers with the thermal zones
+they feed, and the four remote processors the peripheral authentication
+service boots: the ADSP, the CDSP, the modem and the WPSS.
+
+The SD card's bandwidth votes are SM6350's, like the rest of its OPP
+table.
+
+TSENS0 has two sensors on each Cortex-A78 core and TSENS1 one on each
+Cortex-A55 core. The CPU zones throttle through cpufreq at 110 C, and
+every zone is critical at 115 C.
+
+The remote processors' watchdog interrupts, SMP2P bits, IPCC clients
+and GLINK edges are the downstream tree's, and their power domains are
+the rails its cx-supply and mx-supply name: LCX and LMX for the ADSP, CX
+and MSS for the modem, CX and MX for the CDSP and the WPSS. Downstream
+lists a shutdown-ack interrupt for all four, but the ADSP and CDSP
+bindings these fall back to allow five interrupts, so those two leave it
+out, as SM8450 does; sysmon treats it as optional.
 
 The USB3 + DP combo PHY at 0x88e8000 is left out: which upstream QMP
 generation it is has not been established. Until it has, the controller
@@ -29,16 +47,16 @@ MMIO watchdog is described.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- arch/arm64/boot/dts/qcom/sm6450.dtsi | 1320 ++++++++++++++++++++++++++
- 1 file changed, 1320 insertions(+)
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 2240 ++++++++++++++++++++++++++
+ 1 file changed, 2240 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450.dtsi
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..c770a0099
+index 000000000..395b503cc
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,1320 @@
+@@ -0,0 +1,2240 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -46,10 +64,13 @@ index 000000000..c770a0099
 +
 +#include <dt-bindings/clock/qcom,rpmh.h>
 +#include <dt-bindings/clock/qcom,sm6450-gcc.h>
++#include <dt-bindings/interconnect/qcom,icc.h>
++#include <dt-bindings/interconnect/qcom,sm6450-rpmh.h>
 +#include <dt-bindings/interrupt-controller/arm-gic.h>
 +#include <dt-bindings/mailbox/qcom-ipcc.h>
 +#include <dt-bindings/power/qcom-rpmpd.h>
 +#include <dt-bindings/soc/qcom,rpmh-rsc.h>
++#include <dt-bindings/thermal/thermal.h>
 +
 +/ {
 +	interrupt-parent = <&intc>;
@@ -347,6 +368,18 @@ index 000000000..c770a0099
 +			compatible = "qcom,scm-sm6450", "qcom,scm";
 +			#reset-cells = <1>;
 +		};
++	};
++
++	clk_virt: interconnect-0 {
++		compatible = "qcom,sm6450-clk-virt";
++		#interconnect-cells = <2>;
++		qcom,bcm-voters = <&apps_bcm_voter>;
++	};
++
++	mc_virt: interconnect-1 {
++		compatible = "qcom,sm6450-mc-virt";
++		#interconnect-cells = <2>;
++		qcom,bcm-voters = <&apps_bcm_voter>;
 +	};
 +
 +	memory@80000000 {
@@ -764,6 +797,9 @@ index 000000000..c770a0099
 +			clocks = <&gcc GCC_QUPV3_WRAP_0_M_AHB_CLK>,
 +				 <&gcc GCC_QUPV3_WRAP_0_S_AHB_CLK>;
 +			clock-names = "m-ahb", "s-ahb";
++			interconnects = <&clk_virt MASTER_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS
++					 &clk_virt SLAVE_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS>;
++			interconnect-names = "qup-core";
 +			#address-cells = <2>;
 +			#size-cells = <2>;
 +			status = "disabled";
@@ -774,16 +810,163 @@ index 000000000..c770a0099
 +				clocks = <&gcc GCC_QUPV3_WRAP0_S3_CLK>;
 +				clock-names = "se";
 +				interrupts = <GIC_SPI 604 IRQ_TYPE_LEVEL_HIGH>;
++				interconnects = <&clk_virt MASTER_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS
++						 &clk_virt SLAVE_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS>,
++						<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++						 &cnoc2 SLAVE_QUP_0 QCOM_ICC_TAG_ACTIVE_ONLY>;
++				interconnect-names = "qup-core", "qup-config";
 +				pinctrl-0 = <&qup_uart3_tx>, <&qup_uart3_rx>;
 +				pinctrl-names = "default";
 +				status = "disabled";
 +			};
 +		};
 +
++		cnoc2: interconnect@1500000 {
++			compatible = "qcom,sm6450-cnoc2";
++			reg = <0x0 0x01500000 0x0 0x1000>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		cnoc3: interconnect@1502000 {
++			compatible = "qcom,sm6450-cnoc3";
++			reg = <0x0 0x01502000 0x0 0x1000>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		system_noc: interconnect@1680000 {
++			compatible = "qcom,sm6450-system-noc";
++			reg = <0x0 0x01680000 0x0 0x1e200>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		pcie_anoc: interconnect@16c0000 {
++			compatible = "qcom,sm6450-pcie-anoc";
++			reg = <0x0 0x016c0000 0x0 0xe280>;
++			#interconnect-cells = <2>;
++			clocks = <&gcc GCC_AGGRE_NOC_PCIE_0_AXI_CLK>,
++				 <&gcc GCC_CFG_NOC_PCIE_ANOC_AHB_CLK>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		aggre1_noc: interconnect@16e0000 {
++			compatible = "qcom,sm6450-aggre1-noc";
++			reg = <0x0 0x016e0000 0x0 0x1c080>;
++			#interconnect-cells = <2>;
++			clocks = <&gcc GCC_AGGRE_UFS_PHY_AXI_CLK>,
++				 <&gcc GCC_AGGRE_USB3_PRIM_AXI_CLK>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		aggre2_noc: interconnect@1700000 {
++			compatible = "qcom,sm6450-aggre2-noc";
++			reg = <0x0 0x01700000 0x0 0x31080>;
++			#interconnect-cells = <2>;
++			clocks = <&rpmhcc RPMH_IPA_CLK>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		mmss_noc: interconnect@1740000 {
++			compatible = "qcom,sm6450-mmss-noc";
++			reg = <0x0 0x01740000 0x0 0x1f080>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
 +		tcsr_mutex: hwlock@1f40000 {
 +			compatible = "qcom,tcsr-mutex";
 +			reg = <0x0 0x01f40000 0x0 0x20000>;
 +			#hwlock-cells = <1>;
++		};
++
++		remoteproc_adsp: remoteproc@3000000 {
++			compatible = "qcom,sm6450-adsp-pas", "qcom,sm8350-adsp-pas";
++			reg = <0x0 0x03000000 0x0 0x10000>;
++
++			interrupts-extended = <&pdc 6 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_adsp_in 0 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_adsp_in 1 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_adsp_in 2 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_adsp_in 3 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "wdog", "fatal", "ready",
++					  "handover", "stop-ack";
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "xo";
++
++			power-domains = <&rpmhpd RPMHPD_LCX>,
++					<&rpmhpd RPMHPD_LMX>;
++			power-domain-names = "lcx", "lmx";
++
++			memory-region = <&pil_adsp_mem>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			qcom,smem-states = <&smp2p_adsp_out 0>;
++			qcom,smem-state-names = "stop";
++
++			status = "disabled";
++
++			glink-edge {
++				interrupts-extended = <&ipcc IPCC_CLIENT_LPASS
++							     IPCC_MPROC_SIGNAL_GLINK_QMP
++							     IRQ_TYPE_EDGE_RISING>;
++				mboxes = <&ipcc IPCC_CLIENT_LPASS
++						IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++				label = "lpass";
++				qcom,remote-pid = <2>;
++			};
++		};
++
++		lpass_ag_noc: interconnect@3c40000 {
++			compatible = "qcom,sm6450-lpass-ag-noc";
++			reg = <0x0 0x03c40000 0x0 0x17200>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		remoteproc_mpss: remoteproc@4080000 {
++			compatible = "qcom,sm6450-mpss-pas", "qcom,sm8450-mpss-pas";
++			reg = <0x0 0x04080000 0x0 0x10000>;
++
++			interrupts-extended = <&intc GIC_SPI 264 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 0 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 1 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 2 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 3 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 7 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "wdog", "fatal", "ready", "handover",
++					  "stop-ack", "shutdown-ack";
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "xo";
++
++			power-domains = <&rpmhpd RPMHPD_CX>,
++					<&rpmhpd RPMHPD_MSS>;
++			power-domain-names = "cx", "mss";
++
++			memory-region = <&pil_mpss_mem>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			qcom,smem-states = <&smp2p_modem_out 0>;
++			qcom,smem-state-names = "stop";
++
++			status = "disabled";
++
++			glink-edge {
++				interrupts-extended = <&ipcc IPCC_CLIENT_MPSS
++							     IPCC_MPROC_SIGNAL_GLINK_QMP
++							     IRQ_TYPE_EDGE_RISING>;
++				mboxes = <&ipcc IPCC_CLIENT_MPSS
++						IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++				label = "modem";
++				qcom,remote-pid = <1>;
++			};
 +		};
 +
 +		sdhc_2: mmc@8804000 {
@@ -800,6 +983,12 @@ index 000000000..c770a0099
 +				 <&rpmhcc RPMH_CXO_CLK>;
 +			clock-names = "iface", "core", "xo";
 +			resets = <&gcc GCC_SDCC2_BCR>;
++
++			interconnects = <&aggre2_noc MASTER_SDCC_2 QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
++					<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++					 &cnoc2 SLAVE_SDCC_2 QCOM_ICC_TAG_ACTIVE_ONLY>;
++			interconnect-names = "sdhc-ddr", "cpu-sdhc";
 +
 +			/*
 +			 * The stock tree packs these into one qcom,dll-hsr-list;
@@ -821,18 +1010,23 @@ index 000000000..c770a0099
 +
 +				/*
 +				 * The two frequencies are the stock tree's. The
-+				 * corner each one needs is not in it, and these
-+				 * are SM6350's, which has the same two
-+				 * frequencies and the same DLL and DDR words.
++				 * corner and the bandwidth each one needs are not
++				 * in it, and these are SM6350's, which has the
++				 * same two frequencies and the same DLL and DDR
++				 * words.
 +				 */
 +				opp-100000000 {
 +					opp-hz = /bits/ 64 <100000000>;
 +					required-opps = <&rpmhpd_opp_svs_l1>;
++					opp-peak-kBps = <790000 131000>;
++					opp-avg-kBps = <50000 50000>;
 +				};
 +
 +				opp-202000000 {
 +					opp-hz = /bits/ 64 <202000000>;
 +					required-opps = <&rpmhpd_opp_nom>;
++					opp-peak-kBps = <3190000 294000>;
++					opp-avg-kBps = <261438 300000>;
 +				};
 +			};
 +		};
@@ -851,9 +1045,50 @@ index 000000000..c770a0099
 +			status = "disabled";
 +		};
 +
-+		usb_1: usb@a6f8800 {
-+			compatible = "qcom,sm6450-dwc3", "qcom,dwc3";
-+			reg = <0x0 0x0a6f8800 0x0 0x400>;
++		remoteproc_wpss: remoteproc@8a00000 {
++			compatible = "qcom,sm6450-wpss-pas", "qcom,sc7280-wpss-pas";
++			reg = <0x0 0x08a00000 0x0 0x10000>;
++
++			interrupts-extended = <&intc GIC_SPI 587 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 0 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 1 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 2 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 3 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 7 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "wdog", "fatal", "ready", "handover",
++					  "stop-ack", "shutdown-ack";
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "xo";
++
++			power-domains = <&rpmhpd RPMHPD_CX>,
++					<&rpmhpd RPMHPD_MX>;
++			power-domain-names = "cx", "mx";
++
++			memory-region = <&pil_wpss_mem>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			qcom,smem-states = <&smp2p_wpss_out 0>;
++			qcom,smem-state-names = "stop";
++
++			status = "disabled";
++
++			glink-edge {
++				interrupts-extended = <&ipcc IPCC_CLIENT_WPSS
++							     IPCC_MPROC_SIGNAL_GLINK_QMP
++							     IRQ_TYPE_EDGE_RISING>;
++				mboxes = <&ipcc IPCC_CLIENT_WPSS
++						IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++				label = "wpss";
++				qcom,remote-pid = <13>;
++			};
++		};
++
++		usb_1: usb@a600000 {
++			compatible = "qcom,sm6450-dwc3", "qcom,snps-dwc3";
++			reg = <0x0 0x0a600000 0x0 0xfc100>;
 +
 +			clocks = <&gcc GCC_CFG_NOC_USB3_PRIM_AXI_CLK>,
 +				 <&gcc GCC_USB30_PRIM_MASTER_CLK>,
@@ -870,19 +1105,28 @@ index 000000000..c770a0099
 +					  <&gcc GCC_USB30_PRIM_MASTER_CLK>;
 +			assigned-clock-rates = <19200000>, <133333333>;
 +
++			interconnects = <&aggre1_noc MASTER_USB3_0 QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
++					<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++					 &cnoc2 SLAVE_USB3_0 QCOM_ICC_TAG_ACTIVE_ONLY>;
++			interconnect-names = "usb-ddr", "apps-usb";
++
 +			/*
-+			 * The stock tree names four of these five: it has no
-+			 * hs_phy_irq. SPI 130 for pwr_event and SPI 133 for
-+			 * the core are what SM6350 uses, which puts hs_phy_irq
-+			 * at 131, and 131 is claimed by nothing else in the
-+			 * stock tree. That is the one inferred line here.
++			 * The stock tree names four of the five glue
++			 * interrupts: it has no hs_phy_irq. SM6350 and SM8450
++			 * use SPI 130 for pwr_event and SPI 133 for the core,
++			 * as this SoC does, and both put hs_phy_irq at 131,
++			 * which nothing else in the stock tree claims. That is
++			 * the one inferred line here.
 +			 */
-+			interrupts-extended = <&intc GIC_SPI 130 IRQ_TYPE_LEVEL_HIGH>,
++			interrupts-extended = <&intc GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>,
++					      <&intc GIC_SPI 130 IRQ_TYPE_LEVEL_HIGH>,
 +					      <&intc GIC_SPI 131 IRQ_TYPE_LEVEL_HIGH>,
 +					      <&pdc 14 IRQ_TYPE_EDGE_BOTH>,
 +					      <&pdc 15 IRQ_TYPE_EDGE_BOTH>,
 +					      <&pdc 17 IRQ_TYPE_LEVEL_HIGH>;
-+			interrupt-names = "pwr_event",
++			interrupt-names = "dwc_usb3",
++					  "pwr_event",
 +					  "hs_phy_irq",
 +					  "dp_hs_phy_irq",
 +					  "dm_hs_phy_irq",
@@ -892,6 +1136,12 @@ index 000000000..c770a0099
 +
 +			resets = <&gcc GCC_USB30_PRIM_BCR>;
 +
++			iommus = <&apps_smmu 0x80 0x0>;
++
++			phys = <&usb_1_hsphy>;
++			phy-names = "usb2-phy";
++			maximum-speed = "high-speed";
++
 +			/*
 +			 * There is a USB3 + DP combo PHY at 0x88e8000, but
 +			 * which upstream QMP generation it is has not been
@@ -900,32 +1150,18 @@ index 000000000..c770a0099
 +			 */
 +			qcom,select-utmi-as-pipe-clk;
 +
-+			#address-cells = <2>;
-+			#size-cells = <2>;
-+			ranges;
++			snps,dis-u1-entry-quirk;
++			snps,dis-u2-entry-quirk;
++			snps,dis_u2_susphy_quirk;
++			snps,dis_u3_susphy_quirk;
++			snps,has-lpm-erratum;
++			snps,hird-threshold = /bits/ 8 <0x0>;
++			snps,is-utmi-l1-suspend;
++			snps,usb2-gadget-lpm-disable;
++			snps,usb2-lpm-disable;
++			tx-fifo-resize;
 +
 +			status = "disabled";
-+
-+			usb_1_dwc3: usb@a600000 {
-+				compatible = "snps,dwc3";
-+				reg = <0x0 0x0a600000 0x0 0xcd00>;
-+				interrupts = <GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>;
-+				iommus = <&apps_smmu 0x80 0x0>;
-+				phys = <&usb_1_hsphy>;
-+				phy-names = "usb2-phy";
-+				maximum-speed = "high-speed";
-+
-+				snps,dis-u1-entry-quirk;
-+				snps,dis-u2-entry-quirk;
-+				snps,dis_u2_susphy_quirk;
-+				snps,dis_u3_susphy_quirk;
-+				snps,has-lpm-erratum;
-+				snps,hird-threshold = /bits/ 8 <0x0>;
-+				snps,is-utmi-l1-suspend;
-+				snps,usb2-gadget-lpm-disable;
-+				snps,usb2-lpm-disable;
-+				tx-fifo-resize;
-+			};
 +		};
 +
 +		pdc: interrupt-controller@b220000 {
@@ -937,6 +1173,28 @@ index 000000000..c770a0099
 +			#interrupt-cells = <2>;
 +			interrupt-parent = <&intc>;
 +			interrupt-controller;
++		};
++
++		tsens0: thermal-sensor@c263000 {
++			compatible = "qcom,sm6450-tsens", "qcom,tsens-v2";
++			reg = <0x0 0x0c263000 0x0 0x1000>, /* TM */
++			      <0x0 0x0c222000 0x0 0x1000>; /* SROT */
++			#qcom,sensors = <16>;
++			interrupts = <GIC_SPI 506 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 508 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "uplow", "critical";
++			#thermal-sensor-cells = <1>;
++		};
++
++		tsens1: thermal-sensor@c265000 {
++			compatible = "qcom,sm6450-tsens", "qcom,tsens-v2";
++			reg = <0x0 0x0c265000 0x0 0x1000>, /* TM */
++			      <0x0 0x0c223000 0x0 0x1000>; /* SROT */
++			#qcom,sensors = <16>;
++			interrupts = <GIC_SPI 507 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 509 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "uplow", "critical";
++			#thermal-sensor-cells = <1>;
 +		};
 +
 +		aoss_qmp: power-management@c300000 {
@@ -1348,6 +1606,686 @@ index 000000000..c770a0099
 +			interrupt-names = "dcvsh-irq-0", "dcvsh-irq-1";
 +			#freq-domain-cells = <1>;
 +			#clock-cells = <1>;
++		};
++
++		gem_noc: interconnect@19100000 {
++			compatible = "qcom,sm6450-gem-noc";
++			reg = <0x0 0x19100000 0x0 0xbb800>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		nsp_noc: interconnect@320c0000 {
++			compatible = "qcom,sm6450-nsp-noc";
++			reg = <0x0 0x320c0000 0x0 0x10000>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		remoteproc_cdsp: remoteproc@32300000 {
++			compatible = "qcom,sm6450-cdsp-pas", "qcom,sm6350-cdsp-pas";
++			reg = <0x0 0x32300000 0x0 0x10000>;
++
++			interrupts-extended = <&intc GIC_SPI 578 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_cdsp_in 0 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_cdsp_in 1 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_cdsp_in 2 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_cdsp_in 3 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "wdog", "fatal", "ready",
++					  "handover", "stop-ack";
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "xo";
++
++			power-domains = <&rpmhpd RPMHPD_CX>,
++					<&rpmhpd RPMHPD_MX>;
++			power-domain-names = "cx", "mx";
++
++			memory-region = <&pil_cdsp_mem>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			qcom,smem-states = <&smp2p_cdsp_out 0>;
++			qcom,smem-state-names = "stop";
++
++			status = "disabled";
++
++			glink-edge {
++				interrupts-extended = <&ipcc IPCC_CLIENT_CDSP
++							     IPCC_MPROC_SIGNAL_GLINK_QMP
++							     IRQ_TYPE_EDGE_RISING>;
++				mboxes = <&ipcc IPCC_CLIENT_CDSP
++						IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++				label = "cdsp";
++				qcom,remote-pid = <5>;
++			};
++		};
++	};
++
++	thermal-zones {
++		aoss0-thermal {
++			thermal-sensors = <&tsens0 0>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				aoss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		cpuss0-thermal {
++			thermal-sensors = <&tsens0 1>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				cpuss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		cpuss1-thermal {
++			thermal-sensors = <&tsens0 2>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				cpuss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		cpu4-0-thermal {
++			thermal-sensors = <&tsens0 3>;
++
++			trips {
++				cpu4_0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu4-0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu4_0_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu4-1-thermal {
++			thermal-sensors = <&tsens0 4>;
++
++			trips {
++				cpu4_1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu4-1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu4_1_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu5-0-thermal {
++			thermal-sensors = <&tsens0 5>;
++
++			trips {
++				cpu5_0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu5-0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu5_0_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu5-1-thermal {
++			thermal-sensors = <&tsens0 6>;
++
++			trips {
++				cpu5_1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu5-1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu5_1_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu6-0-thermal {
++			thermal-sensors = <&tsens0 7>;
++
++			trips {
++				cpu6_0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu6-0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu6_0_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu6-1-thermal {
++			thermal-sensors = <&tsens0 8>;
++
++			trips {
++				cpu6_1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu6-1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu6_1_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu7-0-thermal {
++			thermal-sensors = <&tsens0 9>;
++
++			trips {
++				cpu7_0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu7-0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu7_0_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu7-1-thermal {
++			thermal-sensors = <&tsens0 10>;
++
++			trips {
++				cpu7_1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu7-1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu7_1_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		gpuss0-thermal {
++			thermal-sensors = <&tsens0 11>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				gpuss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		gpuss1-thermal {
++			thermal-sensors = <&tsens0 12>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				gpuss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		camera0-thermal {
++			thermal-sensors = <&tsens0 13>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				camera0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		aoss1-thermal {
++			thermal-sensors = <&tsens1 0>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				aoss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		cpu0-thermal {
++			thermal-sensors = <&tsens1 1>;
++
++			trips {
++				cpu0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu0_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu1-thermal {
++			thermal-sensors = <&tsens1 2>;
++
++			trips {
++				cpu1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu1_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu2-thermal {
++			thermal-sensors = <&tsens1 3>;
++
++			trips {
++				cpu2_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu2-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu2_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu3-thermal {
++			thermal-sensors = <&tsens1 4>;
++
++			trips {
++				cpu3_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu3-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu3_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		nspss0-thermal {
++			thermal-sensors = <&tsens1 5>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				nspss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		nspss1-thermal {
++			thermal-sensors = <&tsens1 6>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				nspss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		nspss2-thermal {
++			thermal-sensors = <&tsens1 7>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				nspss2-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		video-thermal {
++			thermal-sensors = <&tsens1 8>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				video-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		ddr-thermal {
++			thermal-sensors = <&tsens1 9>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				ddr-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		mdmss0-thermal {
++			thermal-sensors = <&tsens1 10>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				mdmss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		mdmss1-thermal {
++			thermal-sensors = <&tsens1 11>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				mdmss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		mdmss2-thermal {
++			thermal-sensors = <&tsens1 12>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				mdmss2-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		mdmss3-thermal {
++			thermal-sensors = <&tsens1 13>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				mdmss3-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
 +		};
 +	};
 +

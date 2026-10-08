@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 09:56:04 -0300
+Subject: [PATCH] dt-bindings: phy: qcom,sc8280xp-qmp-ufs-phy: Add SM6450
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SM6450's UFS PHY is the two-lane QMP PHY of SM8350 and SM8450, with the
+same three clocks: the reference, the PHY aux clock and the QREF clock.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../devicetree/bindings/phy/qcom,sc8280xp-qmp-ufs-phy.yaml      | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/phy/qcom,sc8280xp-qmp-ufs-phy.yaml b/Documentation/devicetree/bindings/phy/qcom,sc8280xp-qmp-ufs-phy.yaml
+index fba7b2549..6fd49215e 100644
+--- a/Documentation/devicetree/bindings/phy/qcom,sc8280xp-qmp-ufs-phy.yaml
++++ b/Documentation/devicetree/bindings/phy/qcom,sc8280xp-qmp-ufs-phy.yaml
+@@ -40,6 +40,7 @@ properties:
+           - qcom,sm6115-qmp-ufs-phy
+           - qcom,sm6125-qmp-ufs-phy
+           - qcom,sm6350-qmp-ufs-phy
++          - qcom,sm6450-qmp-ufs-phy
+           - qcom,sm7150-qmp-ufs-phy
+           - qcom,sm8150-qmp-ufs-phy
+           - qcom,sm8250-qmp-ufs-phy
+@@ -108,6 +109,7 @@ allOf:
+               - qcom,sm6115-qmp-ufs-phy
+               - qcom,sm6125-qmp-ufs-phy
+               - qcom,sm6350-qmp-ufs-phy
++              - qcom,sm6450-qmp-ufs-phy
+               - qcom,sm7150-qmp-ufs-phy
+               - qcom,sm8150-qmp-ufs-phy
+               - qcom,sm8250-qmp-ufs-phy

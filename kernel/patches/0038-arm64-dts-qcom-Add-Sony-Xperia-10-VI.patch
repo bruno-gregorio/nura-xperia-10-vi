@@ -8,10 +8,20 @@ Content-Transfer-Encoding: 8bit
 
 Add the Sony Xperia 10 VI (pdx246, codenamed columbia), the one device
 shipping SM6450. Described so far: the debug UART, the PMIC complement
-(PM6450, PM6150L and PMK8350), the 38 RPMh-managed regulators with the
-windows the board's own firmware uses, the power and volume keys, the SD
-card slot with its card detect, and USB in OTG mode with the high-speed
-PHY tuned the way the board's own firmware tunes it.
+(PM6450, PM6150L and PMK8350), the 38 RPMh-managed regulators, the power
+and volume keys, the SD card slot with its card detect, USB as a
+peripheral with the high-speed PHY tuned the way the board's own
+firmware tunes it, and the four remote processors, with their firmware
+under qcom/sm6450/Sony/columbia/ as on the other Sony boards.
+
+The regulator windows are the ones the board's own firmware uses, except
+for the floors. Few mainline consumers set a voltage: not ufshcd, not the
+QMP and Femto PHYs, not the DSI host. For an RPMh rail it cannot read
+back, the regulator core applies the bottom of the window, so a rail
+whose stock floor is below the voltage the vendor driver starts it at,
+its qcom,init-voltage, would come up under it; UFS's VCCQ would sit at
+1.08 V and VCCQ2 at 1.62 V, both below the UFS minimum. Those fourteen
+floors are raised to that voltage.
 
 The PMR735A that SM6450 designs can carry is not fitted on this board:
 nothing answers at its SID, and command DB has none of its regulators.
@@ -22,8 +32,8 @@ to probe as a whole.
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  arch/arm64/boot/dts/qcom/Makefile             |   1 +
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 363 ++++++++++++++++++
- 2 files changed, 364 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 384 ++++++++++++++++++
+ 2 files changed, 385 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 
 diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
@@ -40,10 +50,10 @@ index dffdb219f..8b5b821a9 100644
  dtb-$(CONFIG_ARCH_QCOM)	+= sm7225-fairphone-fp4.dtb
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 new file mode 100644
-index 000000000..1d1c9c5d7
+index 000000000..3d761b4c3
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -0,0 +1,363 @@
+@@ -0,0 +1,384 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -97,33 +107,33 @@ index 000000000..1d1c9c5d7
 +		qcom,pmic-id = "b";
 +
 +		pm6450_s6: smps6 {
-+			regulator-min-microvolt = <1010000>;
++			regulator-min-microvolt = <1052000>;
 +			regulator-max-microvolt = <1170000>;
 +		};
 +
 +		pm6450_s7: smps7 {
-+			regulator-min-microvolt = <880000>;
++			regulator-min-microvolt = <972000>;
 +			regulator-max-microvolt = <1174000>;
 +		};
 +
 +		pm6450_s8: smps8 {
-+			regulator-min-microvolt = <1224000>;
++			regulator-min-microvolt = <1272000>;
 +			regulator-max-microvolt = <1654000>;
 +		};
 +
 +		pm6450_s9: smps9 {
-+			regulator-min-microvolt = <850000>;
++			regulator-min-microvolt = <2208000>;
 +			regulator-max-microvolt = <2208000>;
 +		};
 +
 +		pm6450_l1: ldo1 {
-+			regulator-min-microvolt = <300000>;
++			regulator-min-microvolt = <504000>;
 +			regulator-max-microvolt = <650000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
 +		pm6450_l3: ldo3 {
-+			regulator-min-microvolt = <870000>;
++			regulator-min-microvolt = <904000>;
 +			regulator-max-microvolt = <970000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -135,7 +145,7 @@ index 000000000..1d1c9c5d7
 +		};
 +
 +		pm6450_l5: ldo5 {
-+			regulator-min-microvolt = <830000>;
++			regulator-min-microvolt = <880000>;
 +			regulator-max-microvolt = <920000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -147,7 +157,7 @@ index 000000000..1d1c9c5d7
 +		};
 +
 +		pm6450_l7: ldo7 {
-+			regulator-min-microvolt = <830000>;
++			regulator-min-microvolt = <912000>;
 +			regulator-max-microvolt = <920000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -170,7 +180,7 @@ index 000000000..1d1c9c5d7
 +		};
 +
 +		pm6450_l13: ldo13 {
-+			regulator-min-microvolt = <1080000>;
++			regulator-min-microvolt = <1200000>;
 +			regulator-max-microvolt = <1304000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -182,7 +192,7 @@ index 000000000..1d1c9c5d7
 +		};
 +
 +		pm6450_l16: ldo16 {
-+			regulator-min-microvolt = <1140000>;
++			regulator-min-microvolt = <1200000>;
 +			regulator-max-microvolt = <1260000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -194,7 +204,7 @@ index 000000000..1d1c9c5d7
 +		};
 +
 +		pm6450_l19: ldo19 {
-+			regulator-min-microvolt = <1620000>;
++			regulator-min-microvolt = <1800000>;
 +			regulator-max-microvolt = <1980000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -218,7 +228,7 @@ index 000000000..1d1c9c5d7
 +		};
 +
 +		pm6450_l23: ldo23 {
-+			regulator-min-microvolt = <1650000>;
++			regulator-min-microvolt = <1800000>;
 +			regulator-max-microvolt = <1950000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -228,7 +238,7 @@ index 000000000..1d1c9c5d7
 +		};
 +
 +		pm6450_l25: ldo25 {
-+			regulator-min-microvolt = <2700000>;
++			regulator-min-microvolt = <3072000>;
 +			regulator-max-microvolt = <3544000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -257,7 +267,7 @@ index 000000000..1d1c9c5d7
 +		qcom,pmic-id = "e";
 +
 +		pm6150l_s8: smps8 {
-+			regulator-min-microvolt = <1816000>;
++			regulator-min-microvolt = <1872000>;
 +			regulator-max-microvolt = <2040000>;
 +		};
 +
@@ -343,6 +353,30 @@ index 000000000..1d1c9c5d7
 +	status = "okay";
 +};
 +
++&remoteproc_adsp {
++	firmware-name = "qcom/sm6450/Sony/columbia/adsp.mbn";
++
++	status = "okay";
++};
++
++&remoteproc_cdsp {
++	firmware-name = "qcom/sm6450/Sony/columbia/cdsp.mbn";
++
++	status = "okay";
++};
++
++&remoteproc_mpss {
++	firmware-name = "qcom/sm6450/Sony/columbia/modem.mbn";
++
++	status = "okay";
++};
++
++&remoteproc_wpss {
++	firmware-name = "qcom/sm6450/Sony/columbia/wpss.mbn";
++
++	status = "okay";
++};
++
 +&sdc2_off_state {
 +	sd-cd-pins {
 +		pins = "gpio107";
@@ -378,12 +412,9 @@ index 000000000..1d1c9c5d7
 +};
 +
 +&usb_1 {
-+	status = "okay";
-+};
++	dr_mode = "peripheral";
 +
-+&usb_1_dwc3 {
-+	dr_mode = "otg";
-+	usb-role-switch;
++	status = "okay";
 +};
 +
 +/*

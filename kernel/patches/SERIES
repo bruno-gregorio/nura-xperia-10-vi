@@ -24,9 +24,20 @@ dt-bindings: soc: qcom: aoss-qmp: Add SM6450
 dt-bindings: iommu: arm,smmu: Add SM6450 SMMU
 dt-bindings: mmc: sdhci-msm: Add SM6450
 dt-bindings: phy: qcom,usb-snps-femto-v2: Add SM6450
-dt-bindings: usb: qcom,dwc3: Add SM6450
+dt-bindings: usb: qcom,snps-dwc3: Add SM6450
 dt-bindings: arm: qcom: Document SM6450 and Sony Xperia 10 VI
 dt-bindings: firmware: qcom,scm: Document SM6450 SCM
+dt-bindings: thermal: qcom-tsens: Add SM6450
+dt-bindings: phy: qcom,sc8280xp-qmp-ufs-phy: Add SM6450
+phy: qcom: qmp-ufs: Add SM6450 support
+dt-bindings: crypto: qcom,inline-crypto-engine: Add SM6450
+dt-bindings: ufs: qcom,sc7180-ufshc: Add SM6450
+dt-bindings: remoteproc: qcom,sm8350-pas: Add SM6450 ADSP and MPSS
+dt-bindings: remoteproc: qcom,sm6350-pas: Add SM6450 CDSP
+dt-bindings: remoteproc: qcom,sc7180-pas: Add SM6450 WPSS
+soc: qcom: pd-mapper: Add SM6450 support
+dt-bindings: clock: qcom: Add SM6450 graphics clock controller
+clk: qcom: Add Graphics Clock Controller driver for SM6450
 arm64: dts: qcom: Add SM6450 SoC device tree
 arm64: dts: qcom: Add PM6450 PMIC device tree
 arm64: dts: qcom: Add Sony Xperia 10 VI

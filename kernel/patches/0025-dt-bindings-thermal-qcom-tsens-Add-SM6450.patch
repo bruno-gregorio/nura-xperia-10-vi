@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 09:27:17 -0300
+Subject: [PATCH] dt-bindings: thermal: qcom-tsens: Add SM6450
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SM6450 has two TSENS v2 instances with separate uplow and critical
+interrupts, like the other v2 parts.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ Documentation/devicetree/bindings/thermal/qcom-tsens.yaml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/thermal/qcom-tsens.yaml b/Documentation/devicetree/bindings/thermal/qcom-tsens.yaml
+index 78e2f6573..e9819ee86 100644
+--- a/Documentation/devicetree/bindings/thermal/qcom-tsens.yaml
++++ b/Documentation/devicetree/bindings/thermal/qcom-tsens.yaml
+@@ -68,6 +68,7 @@ properties:
+               - qcom,sm6115-tsens
+               - qcom,sm6350-tsens
+               - qcom,sm6375-tsens
++              - qcom,sm6450-tsens
+               - qcom,sm8150-tsens
+               - qcom,sm8250-tsens
+               - qcom,sm8350-tsens

@@ -2458,6 +2458,17 @@ as what it would have fixed.
   `IAC DO NAWS`, an `SB`/`SE` subnegotiation, then a prompt), with the command
   bytes stripped from the display and the typed line arriving byte-exact.
   `scripts/console.sh` prefers a real client if one appears.
+- **`tsh.py`'s `@push` works against Alpine's own busybox** — Verified
+  2026-10-08, off the device. The test ran the native chroot's
+  `busybox-extras telnetd` and `busybox sh` inside the pmport container,
+  through the chroot's musl loader. That is the same build and config as
+  the initramfs's, with a working pty, which the pmbootstrap chroot itself
+  does not give telnetd. A 70 KB module and 300 KB of random data arrived
+  with matching checksums, at about 370 KB a second. The question was
+  busybox's line editor, which caps a line at 1024 characters; each chunk's
+  command is longer than that. With `stty -echo`, which tsh's handshake
+  runs, ash reads through `fgets` and joins the pieces, so the cap never
+  bites. Rounds 27 and 34 are the first to push on the device.
 - **The container shares the host network namespace** — Verified. `ip -o link
   show` is identical inside and out, so the gadget is reachable from either
   side once it enumerates.

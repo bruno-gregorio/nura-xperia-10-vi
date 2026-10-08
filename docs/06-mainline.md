@@ -514,26 +514,40 @@ None of these is a guess, and each one is a different kind of argument.
 
 ### What is deliberately not written yet
 
-**The UFS PHY.** The controller is straightforward - every clock, reset,
-supply and interrupt resolves - but upstream has no generic UFS PHY
-compatible. Each SoC gets its own entry in `phy-qcom-qmp-ufs.c` carrying the
-PHY's register init sequence, and that sequence is the one thing on this
-device that is not derivable from anything on disk: Qualcomm released the
-clock, pinctrl, regulator and SPMI sources for parrot but not the PHY driver,
-and the init tables are not in the device tree the way the USB combo PHY's
-are. The stock compatible says `qcom,ufs-phy-qmp-v4-parrot`, so it is a QMP
-v4, but picking a v4 table from another SoC and calling it this one's would
-be a guess of exactly the kind this file exists to avoid. It costs nothing
-for now: the loop boots from the SD card, which is written.
+**The UFS PHY, which was on disk after all.** This paragraph used to say the
+PHY's init tables were the one thing on this device not derivable from any
+source we hold, because Qualcomm had released the clock, pinctrl, regulator
+and SPMI sources for parrot but not the PHY driver. That was wrong. Sony's
+kernel tarball carries it, as
+`drivers/phy/qualcomm/phy-qcom-ufs-qmp-v4-parrot.{c,h}` - the downstream
+`ufs_qcom_phy_calibration` driver, not a QMP one, which is how a search for
+QMP tables missed it. Its header is a copy of SM8450's (`-v4-waipio.h`);
+only the size of the serdes block differs. `scripts/qmp-score.py` now reads
+such a header directly (`vendor:FILE:TABLE+TABLE`), and on the G4 table plus
+the second-lane table, which is what the driver writes for this two-lane
+PHY, it scores the vendor's sequence against every upstream configuration:
 
-One route is left that does not guess. The bootloader reads the kernel from
-UFS, so by the time the kernel starts, Qualcomm's own table has been written
-into the PHY, and every round's command line keeps unclaimed clocks and power
-domains on. `scripts/regdump.c` reads the PHY back in a live round, and
-`scripts/qmp-score.py` scores that dump against every UFS configuration
-upstream has, the same way it scored the USB PHY's sequence below. It needs a
-kernel with `CONFIG_DEVMEM`, which pkgrel 10 lacks; `out/try-kernel/cmds-r27.sh`
-is the round, written and waiting for that kernel.
+- **SM8350, SM8450, SC8280XP and SA8775P tie at 121 of 125** — they share
+  one set of tables, and the next best scores 10.
+- **The four differences are one pair of values on both lanes** —
+  `RES_CODE_LANE_OFFSET_TX` 0x03 and `_RX` 0x06 here, against 0x09 and 0x09
+  upstream. Downstream waipio has the same 0x03 and 0x06, so SM8450 runs
+  upstream on values its own vendor table does not use.
+- **Three writes are the vendor's alone** — `POWER_DOWN_CONTROL`, which
+  upstream's driver writes itself, and `RX_GM_CAL` 0x0f on each lane in G4,
+  which no upstream table writes.
+
+Branch `sm6450-ufs` in `out/linux` adds `qcom,sm6450-qmp-ufs-phy` with a tx
+table carrying the two values and SM8350's tables otherwise; scored the same
+way, it agrees on all 125 registers it writes. The branch also has the
+binding lines for the PHY, the controller and the Inline Crypto Engine, and
+the three nodes, whose every clock decodes through the vendor GCC header to
+the clock we picked. It is not in the kernel package yet. Rounds 28 and 29
+run the tree first on pkgrel 11, which has no SM6450 match in the PHY
+driver, with SM8450's PHY configuration (`out/milestone/ufs8450.dtb`). The
+register dump in `out/try-kernel/cmds-r27.sh` - the PHY as the bootloader
+left it, read through `/dev/mem` with `scripts/regdump.c` - is now a check on
+what the bootloader programs rather than the only source.
 
 **The USB3 + DP combo PHY**, though it is no longer for the same reason.
 Unlike UFS, the stock tree carries this PHY's init sequence, as

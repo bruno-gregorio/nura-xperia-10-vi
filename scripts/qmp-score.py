@@ -12,12 +12,16 @@ which one this PHY is, and exactly where it differs:
         dts:out/device-dump-root/live.dts:ssphy@88e8000
     scripts/qmp-score.py out/kbuild/drivers/phy/qualcomm/phy-qcom-qmp-ufs.i \\
         dump:out/try-kernel/live-r27.txt:0x1d87000
+    scripts/qmp-score.py out/kbuild/drivers/phy/qualcomm/phy-qcom-qmp-ufs.i \\
+        vendor:phy-qcom-ufs-qmp-v4-parrot.h:phy_cal_table_rate_A+phy_cal_table_2nd_lane
 
 The first argument is the driver after the preprocessor, which turns every
 register macro into a number and keeps its name (`make <file>.i` in the
 kernel build tree, with CONFIG_PHY_QCOM_QMP debug names as built). The second
 is the state to score: a node's `qcom,qmp-phy-init-seq` (offset, value
-pairs), or scripts/regdump.c output with the PHY's base address.
+pairs), scripts/regdump.c output with the PHY's base address, or tables
+from a downstream UFS PHY header (`ufs_qcom_phy_calibration`), joined with
+`+` in the order the downstream driver writes them.
 
 A configuration's score is the entries it writes with the same value, less
 those with another value and those absent from the state. A dump holds every
@@ -109,8 +113,47 @@ def variants(kind, tables, offs, body):
             yield label, exp
 
 
+class Macros(dict):
+    """A header's #defines, evaluated on demand as Python expressions."""
+
+    def __init__(self, defs, bound=()):
+        super().__init__(bound)
+        self.defs = defs
+
+    def __missing__(self, name):
+        params, body = self.defs[name]
+        if params is None:
+            return eval(body, {"__builtins__": {}}, self)
+        names = [x.strip() for x in params.split(",")]
+        return lambda *a: eval(body, {"__builtins__": {}},
+                               Macros(self.defs, zip(names, a)))
+
+
+def vendor_tables(path, names):
+    src = open(path).read()
+    defs = {}
+    for name, params, body in re.findall(
+            r"^#define[ \t]+(\w+)(?:\(([^)]*)\))?[ \t]+(.*?)[ \t]*$", src, re.M):
+        defs[name] = (params if params else None,
+                      body.split("/*")[0].strip())
+    macros = Macros(defs)
+    state = {}
+    for table in names.split("+"):
+        m = re.search(r"ufs_qcom_phy_calibration %s\[\] = \{(.*?)\n\};"
+                      % re.escape(table), src, re.S)
+        if not m:
+            sys.exit(f"qmp-score: no table {table} in {path}")
+        for reg, val in re.findall(
+                r"UFS_QCOM_PHY_CAL_ENTRY\((\w+), (\w+)\)", m.group(1)):
+            state[macros[reg]] = int(val, 0)
+    return state
+
+
 def load_state(spec):
     how, _, rest = spec.partition(":")
+    if how == "vendor":
+        path, _, names = rest.rpartition(":")
+        return vendor_tables(path, names), False
     if how == "dts":
         path, _, node = rest.rpartition(":")
         text = open(path).read()
@@ -134,13 +177,15 @@ def load_state(spec):
         b = int(base, 0) if base else min(state)
         # Table values are bytes in 32-bit registers.
         return {a - b: v & 0xff for a, v in state.items() if a >= b}, True
-    sys.exit(f"qmp-score: state must be dts:FILE:NODE or dump:FILE[:BASE]")
+    sys.exit("qmp-score: state must be dts:FILE:NODE, dump:FILE[:BASE]"
+             " or vendor:FILE:TABLE[+TABLE...]")
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("driver", help="preprocessed driver, a .i file")
-    ap.add_argument("state", help="dts:FILE:NODE or dump:FILE[:BASE]")
+    ap.add_argument("state", help="dts:FILE:NODE, dump:FILE[:BASE] or"
+                    " vendor:FILE:TABLE[+TABLE...]")
     ap.add_argument("--top", type=int, default=8)
     ap.add_argument("--show", help="configuration to list differences for"
                     " (default: the best)")

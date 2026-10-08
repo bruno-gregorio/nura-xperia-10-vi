@@ -2144,8 +2144,40 @@ as what it would have fixed.
   `scripts/tsh.py` takes `@push LOCAL REMOTE` in a command file and carries
   a binary into the shell in base64 lines. `out/try-kernel/cmds-r27.sh`
   reads the UFS PHY as the bootloader left it, if its clocks and GDSC are
-  on, for `qmp-score.py` to identify its table. It waits for a kernel with
-  `CONFIG_DEVMEM`, which pkgrel 10 does not have.
+  on, for `qmp-score.py` to identify its table. Pkgrel 11 builds in
+  `CONFIG_DEVMEM` for it, and plan k runs it as round 27, after the UFS
+  rounds below, as a check rather than the only source.
+- **The UFS PHY driver was in the tarball all along** — Verified against
+  sources 2026-10-08, and a correction: "Known gaps" and 06-mainline.md said
+  Qualcomm had not released this chip's UFS PHY driver. Sony's kernel
+  tarball has it, `drivers/phy/qualcomm/phy-qcom-ufs-qmp-v4-parrot.{c,h}`,
+  in the downstream `ufs_qcom_phy_calibration` form rather than as QMP
+  tables, and its header is SM8450's. Scored by `qmp-score.py`, which now
+  reads such a header, it is upstream's SM8350/SM8450 table with two tx
+  values changed on both lanes. "The UFS PHY" in
+  [06-mainline.md](06-mainline.md) has the numbers.
+- **UFS on the mainline kernel** — Done 2026-10-08, not yet run on the
+  device. Branch `sm6450-ufs` in `out/linux`: binding lines for the PHY, the
+  controller and the ICE, `qcom,sm6450-qmp-ufs-phy` in the QMP UFS driver
+  (agreeing with the vendor table on all 125 registers it writes), and the
+  host, PHY and ICE nodes with the stock tree's clocks, reset, SMMU stream,
+  interrupt and supplies. `CHECK_DTBS=y`, the three binding checks and
+  `check-dt.py` are clean; the driver compiles. Plan k runs it before round
+  27, on pkgrel 11 with SM8450's PHY configuration
+  (`out/milestone/ufs8450.dtb`), as round 28, and again without the ICE as
+  round 29 if round 28 reaches the shell and finds no disk.
+- **Letting mainline see UFS writes nothing to it** — Reasoned. Nothing in
+  the initramfs or `cmds-r28.sh` opens a UFS partition; the pmOS initramfs
+  looks for its partitions by label, and UFS has none of them. The log hook
+  writes to UFS only when the card is missing, and then only to rddata
+  after matching its exact start and size. ufshcd writes the device's
+  `bRefClkFreq`, a setting the device keeps and the bootloader relies on,
+  only when it differs from the rate of the host's `ref_clk`. That clock is
+  CXO, whose rate on our kernel is measured, not assumed: `bi_tcxo` reads
+  19200000 in the clk_summary of rounds 22 and 23. The stock tree's
+  `dev-ref-clk-freq` is 0, which is 19.2 MHz, so a mainline boot has nothing
+  there to rewrite that a stock boot would not. What it may set is
+  WriteBooster, which stock Android turns on too.
 
 ## The boot images
 
@@ -2833,7 +2865,8 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   built for this device, let alone booted. What is missing is narrower than it
   was: UFS and USB3, both blocked on the same thing - upstream wants a
   per-SoC PHY register table and Qualcomm did not release the PHY driver for
-  this chip. Neither blocks a shell, because the rootfs is on the SD card and
+  this chip. (Wrong for UFS, as it turned out on 2026-10-08: see "The UFS PHY
+  driver was in the tarball all along".) Neither blocks a shell, because the rootfs is on the SD card and
   a USB network gadget only needs high speed.
   [06-mainline.md](06-mainline.md) has the method and the proofs.
 - **The live device tree is a per-board ground truth, and it is already in

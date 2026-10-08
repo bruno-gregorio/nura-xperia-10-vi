@@ -26,9 +26,8 @@
 # partition on UFS, which only the downstream one can. That makes a dead boot
 # readable instead of merely counted.
 #
-# The card is what makes that work under mainline, which has no UFS driver -
-# the PHY register tables are the one thing on this device not derivable from
-# any source we hold, see docs/06-mainline.md. It is still an instrument that
+# The card is what makes that work under mainline, which does not drive UFS
+# yet (docs/06-mainline.md, "The UFS PHY"). It is still an instrument that
 # runs in the initramfs, so a mainline kernel that dies before /init leaves
 # nothing on it. What is left then is the USB gadget if it comes up, and
 # otherwise the retry counter as a one-bit channel: PROBE=1 reboots on purpose

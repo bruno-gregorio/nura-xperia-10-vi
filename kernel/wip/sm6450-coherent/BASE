@@ -1,0 +1,6 @@
+branch: sm6450-coherent
+series: sm6450
+tip:    aeff0b53f0a2009de014135730fd1f00fea8d25c
+base:   a3876429880fb5e9ee70ebac05f55c7c8deedbf6 arm64: dts: qcom: Add Sony Xperia 10 VI
+        (git describe: v6.18.55-46-ga38764298)
+patches: 1

@@ -9,10 +9,28 @@ Content-Transfer-Encoding: 8bit
 Add the Sony Xperia 10 VI (pdx246, codenamed columbia), the one device
 shipping SM6450. Described so far: the debug UART, the PMIC complement
 (PM6450, PM6150L and PMK8350), the 38 RPMh-managed regulators, the power
-and volume keys, the SD card slot with its card detect, USB as a
+and volume keys, the SD card slot with its card detect, UFS, USB as a
 peripheral with the high-speed PHY tuned the way the board's own
-firmware tunes it, and the four remote processors, with their firmware
-under qcom/sm6450/Sony/columbia/ as on the other Sony boards.
+firmware tunes it, the touchscreen, Bluetooth, the display, and the four
+remote processors, with their firmware under qcom/sm6450/Sony/columbia/
+as on the other Sony boards.
+
+The touchscreen is a FocalTech FT3519T at 0x38 on I2C9. Its analog
+supply is switched by GPIO 103; the stock driver only ever drives that
+line and never enables the LDO its device tree also names, so the LDO
+is left out.
+
+The Bluetooth radio is a WCN3991 on UART11. The stock tree calls it
+qcom,wcn3990, the compatible Qualcomm's btpower gives every WCN39xx;
+the version the controller reports, SoC 0x40014320 and ROM 0x0302, is a
+WCN3991's.
+
+The panel is a Samsung SOFEF01-M driving an AMS605DK01 on DSI0. Its
+1.8 V I/O rail is switched by PM6150L GPIO 9 and is on with the line
+low: the stock tree flags the line active-low, and its regulator driver,
+unlike regulator-fixed, does not let enable-active-high override the
+flag. Driven high, the rail is off, and the panel takes writes but
+answers no read and sends no TE.
 
 The regulator windows are the ones the board's own firmware uses, except
 for the floors. Few mainline consumers set a voltage: not ufshcd, not the
@@ -21,7 +39,10 @@ back, the regulator core applies the bottom of the window, so a rail
 whose stock floor is below the voltage the vendor driver starts it at,
 its qcom,init-voltage, would come up under it; UFS's VCCQ would sit at
 1.08 V and VCCQ2 at 1.62 V, both below the UFS minimum. Those fourteen
-floors are raised to that voltage.
+floors are raised to that voltage. Three more are raised to what the
+stock drivers ask for, on rails that feed one consumer each and whose
+consumer sets no voltage: Bluetooth's vddrf to 1.304 V and vddxo to
+1.8 V, and the panel's vci to 3.0 V.
 
 The PMR735A that SM6450 designs can carry is not fitted on this board:
 nothing answers at its SID, and command DB has none of its regulators.
@@ -32,8 +53,8 @@ to probe as a whole.
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  arch/arm64/boot/dts/qcom/Makefile             |   1 +
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 384 ++++++++++++++++++
- 2 files changed, 385 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 564 ++++++++++++++++++
+ 2 files changed, 565 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 
 diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
@@ -50,10 +71,10 @@ index dffdb219f..8b5b821a9 100644
  dtb-$(CONFIG_ARCH_QCOM)	+= sm7225-fairphone-fp4.dtb
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 new file mode 100644
-index 000000000..3d761b4c3
+index 000000000..ed5dee79f
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,564 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -63,6 +84,7 @@ index 000000000..3d761b4c3
 +
 +#include <dt-bindings/gpio/gpio.h>
 +#include <dt-bindings/input/input.h>
++#include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 +#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 +
 +#define PMK8350_SID 0
@@ -79,6 +101,7 @@ index 000000000..3d761b4c3
 +
 +	aliases {
 +		serial0 = &uart3;
++		serial1 = &uart11;
 +	};
 +
 +	chosen {
@@ -98,6 +121,33 @@ index 000000000..3d761b4c3
 +			debounce-interval = <15>;
 +			wakeup-source;
 +		};
++	};
++
++	/*
++	 * The panel's 1.8V logic supply is switched on by driving PM6150L
++	 * GPIO 9 low. With it the other way round the panel still takes
++	 * writes, but sends neither TE nor a read reply.
++	 */
++	panel_vddio_1p8: regulator-panel-vddio {
++		compatible = "regulator-fixed";
++		regulator-name = "panel_vddio_1p8";
++		regulator-min-microvolt = <1800000>;
++		regulator-max-microvolt = <1800000>;
++
++		gpio = <&pm6150l_gpios 9 GPIO_ACTIVE_LOW>;
++		startup-delay-us = <233>;
++
++		pinctrl-0 = <&panel_vddio_en>;
++		pinctrl-names = "default";
++
++		regulator-boot-on;
++	};
++
++	ts_avdd: regulator-ts-avdd {
++		compatible = "regulator-fixed";
++		regulator-name = "ts_avdd";
++		gpio = <&tlmm 103 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
 +	};
 +};
 +
@@ -186,7 +236,7 @@ index 000000000..3d761b4c3
 +		};
 +
 +		pm6450_l14: ldo14 {
-+			regulator-min-microvolt = <1150000>;
++			regulator-min-microvolt = <1304000>;
 +			regulator-max-microvolt = <1304000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -272,12 +322,12 @@ index 000000000..3d761b4c3
 +		};
 +
 +		pm6150l_l1: ldo1 {
-+			regulator-min-microvolt = <1620000>;
++			regulator-min-microvolt = <1800000>;
 +			regulator-max-microvolt = <1980000>;
 +		};
 +
 +		pm6150l_l4: ldo4 {
-+			regulator-min-microvolt = <2700000>;
++			regulator-min-microvolt = <3000000>;
 +			regulator-max-microvolt = <3300000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
@@ -329,6 +379,79 @@ index 000000000..3d761b4c3
 +	};
 +};
 +
++&i2c9 {
++	status = "okay";
++
++	touchscreen@38 {
++		compatible = "focaltech,ft3519", "focaltech,ft3518";
++		reg = <0x38>;
++
++		interrupts-extended = <&tlmm 13 IRQ_TYPE_EDGE_FALLING>;
++		reset-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>;
++
++		vcc-supply = <&ts_avdd>;
++
++		pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
++		pinctrl-names = "default";
++
++		touchscreen-size-x = <1080>;
++		touchscreen-size-y = <2520>;
++	};
++};
++
++&mdss {
++	status = "okay";
++};
++
++&mdss_dsi0 {
++	vdda-supply = <&pm6450_l16>;
++
++	status = "okay";
++
++	panel@0 {
++		compatible = "samsung,sofef01-m-ams605dk01";
++		reg = <0>;
++
++		reset-gpios = <&tlmm 127 GPIO_ACTIVE_LOW>;
++
++		vci-supply = <&pm6150l_l4>;
++		vddio-supply = <&panel_vddio_1p8>;
++
++		pinctrl-0 = <&panel_reset_active>, <&panel_te>;
++		pinctrl-1 = <&panel_reset_suspend>, <&panel_te>;
++		pinctrl-names = "default", "sleep";
++
++		port {
++			panel_in: endpoint {
++				remote-endpoint = <&mdss_dsi0_out>;
++			};
++		};
++	};
++};
++
++&mdss_dsi0_out {
++	data-lanes = <0 1 2 3>;
++	remote-endpoint = <&panel_in>;
++};
++
++&mdss_dsi0_phy {
++	vdds-supply = <&pm6450_l5>;
++
++	status = "okay";
++};
++
++&pm6150l_gpios {
++	panel_vddio_en: panel-vddio-en-state {
++		pins = "gpio9";
++		function = "normal";
++		power-source = <0>;
++		qcom,drive-strength = <PMIC_GPIO_STRENGTH_MED>;
++		bias-disable;
++		input-disable;
++		output-enable;
++	};
++};
++
 +&pm6450_gpios {
 +	vol_down_n: vol-down-n-state {
 +		pins = "gpio1";
@@ -350,6 +473,10 @@ index 000000000..3d761b4c3
 +};
 +
 +&qupv3_id_0 {
++	status = "okay";
++};
++
++&qupv3_id_1 {
 +	status = "okay";
 +};
 +
@@ -407,7 +534,81 @@ index 000000000..3d761b4c3
 +	status = "okay";
 +};
 +
++&tlmm {
++	panel_reset_active: panel-reset-active-state {
++		pins = "gpio127";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-disable;
++	};
++
++	panel_reset_suspend: panel-reset-suspend-state {
++		pins = "gpio127";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-pull-down;
++	};
++
++	panel_te: panel-te-state {
++		pins = "gpio99";
++		function = "mdp_vsync";
++		drive-strength = <2>;
++		bias-pull-down;
++	};
++
++	ts_int_default: ts-int-default-state {
++		pins = "gpio13";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-up;
++	};
++
++	ts_reset_default: ts-reset-default-state {
++		pins = "gpio12";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-up;
++	};
++};
++
++&uart11 {
++	status = "okay";
++
++	bluetooth {
++		compatible = "qcom,wcn3991-bt";
++
++		vddio-supply = <&pm6450_l22>;
++		vddxo-supply = <&pm6150l_l1>;
++		vddrf-supply = <&pm6450_l14>;
++		vddch0-supply = <&pm6150l_l10>;
++
++		swctrl-gpios = <&tlmm 61 GPIO_ACTIVE_HIGH>;
++
++		max-speed = <3200000>;
++	};
++};
++
 +&uart3 {
++	status = "okay";
++};
++
++&ufs_mem_hc {
++	reset-gpios = <&tlmm 141 GPIO_ACTIVE_LOW>;
++
++	vcc-supply = <&pm6450_l24>;
++	vcc-max-microamp = <1200000>;
++	vccq-supply = <&pm6450_l13>;
++	vccq-max-microamp = <1200000>;
++	vccq2-supply = <&pm6450_l19>;
++	vccq2-max-microamp = <750000>;
++
++	status = "okay";
++};
++
++&ufs_mem_phy {
++	vdda-phy-supply = <&pm6450_l5>;
++	vdda-pll-supply = <&pm6450_l16>;
++
 +	status = "okay";
 +};
 +

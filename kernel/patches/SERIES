@@ -38,9 +38,6 @@ dt-bindings: remoteproc: qcom,sc7180-pas: Add SM6450 WPSS
 soc: qcom: pd-mapper: Add SM6450 support
 dt-bindings: clock: qcom: Add SM6450 graphics clock controller
 clk: qcom: Add Graphics Clock Controller driver for SM6450
-arm64: dts: qcom: Add SM6450 SoC device tree
-arm64: dts: qcom: Add PM6450 PMIC device tree
-arm64: dts: qcom: Add Sony Xperia 10 VI
 dt-bindings: display/msm: dsi-phy-7nm: Add SM6450
 dt-bindings: display/msm: dsi-controller-main: Add SM6450
 dt-bindings: display/msm: qcm2290-dpu: Add SM6450
@@ -49,3 +46,6 @@ soc: qcom: ubwc: Add SM6450 config
 drm/msm/dsi: Add support for the SM6450 DSI PHY
 drm/msm: mdss: Add SM6450 support
 drm/msm/dpu: Add SM6450 support
+arm64: dts: qcom: Add SM6450 SoC device tree
+arm64: dts: qcom: Add PM6450 PMIC device tree
+arm64: dts: qcom: Add Sony Xperia 10 VI

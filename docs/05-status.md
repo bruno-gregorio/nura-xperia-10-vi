@@ -3147,6 +3147,23 @@ as what it would have fixed.
     when it does. So a re-init on the transition into device, with no
     delay, would likely be enough. One round is a thin margin for that,
     40 ms, so pkgrel 17 keeps the 1.5 s.
+- **Round 63: the fold's own tree** — Running, from 18:50. Branch
+  `sm6450-fold` in `out/linux` is the series with what rounds 58 to 62
+  passed folded in:
+  - the USB GDSC's retention is in the GCC driver commit;
+  - the `pmic-glink` binding follows the pd-mapper commit;
+  - the role switch, the PHY reference gate and DMA coherence are in the
+    SoC tree commit;
+  - the board's `pmic-glink` node is in the board commit.
+
+  Its tree, `out/milestone/fold18.dtb`, decompiles to round 62's tree
+  plus round 58's coherence. Those two have not booted together, so plan
+  za boots it on pkgrel 17 before it becomes pkgrel 18's series. Three
+  checks run:
+  - round 58's checks: the display, UFS, the touchscreen, Bluetooth, and
+    a 4 MiB file across the gadget in both directions;
+  - round 62's watcher;
+  - the file both ways again, once the link is back after the ADSP.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

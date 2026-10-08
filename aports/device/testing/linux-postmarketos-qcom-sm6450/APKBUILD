@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=12
+pkgrel=13
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -43,8 +43,8 @@ _config="config-$_flavor.$arch"
 #
 # sm6450-mainline.patch is the whole series squashed, written by
 # scripts/sync-kernel-patches.sh out of the sm6450 branch in out/linux.
-# kernel/patches/ in this repository has the same change as 23 reviewable
-# commits; that is the copy to read, and the one that goes to the lists.
+# kernel/patches/ in this repository has the same change one commit per
+# patch; that is the copy to read, and the one that goes to the lists.
 #
 # bringup-milestones.patch is not part of that series and never will be. It
 # is a debugging instrument for a board with no console: inert unless
@@ -58,6 +58,16 @@ _config="config-$_flavor.$arch"
 # ca316e145c35, both in mainline since 2026). The OS runs as a Gunyah VM on
 # this SoC and may not touch the MMIO watchdog, so this is the only watchdog
 # it has. They are not ours and do not go into kernel/patches/.
+#
+# backport-0003 and backport-0004 are the panel, a Samsung SOFEF01-M driving
+# an AMS605DK01: Marijn Suijten's binding, in mainline as 722f0707782b, and
+# his driver as posted (v2, reviewed, not merged when this was written).
+# sofef01-ams605dk01-vci-supply.patch is ours on top of that binding: it lets
+# the AMS605DK01 have the vci supply the Xperia 10 VI's panel has. It belongs
+# with his series, not ours, so it goes to him rather than to the lists on
+# its own. bringup-sofef01-pdx246-flm.patch sends this phone's own FLM
+# setting, 8f 27 27 where the driver has the Xperia 10 V's 8f 27 25, keyed on
+# the machine compatible until it is known whether the difference matters.
 #
 # bringup-gunyah-wdt-start-at-boot.patch is ours, sits on top of them, and is
 # another instrument that never goes upstream: with
@@ -81,6 +91,10 @@ source="
 	bringup-milestones.patch
 	bringup-gunyah-wdt-start-at-boot.patch
 	bringup-gunyah-wdt-smccc-1-0.patch
+	backport-0003-dt-bindings-display-panel-Describe-Samsung-SOFEF01-M-DDIC.patch
+	backport-0004-drm-panel-Add-panel-driver-for-Samsung-SOFEF01-DDIC.patch
+	sofef01-ams605dk01-vci-supply.patch
+	bringup-sofef01-pdx246-flm.patch
 "
 builddir="$srcdir/linux-$pkgver"
 
@@ -132,11 +146,15 @@ package() {
 
 sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
-c2d365a52792119e38fa68873438cb5df6ee0398546f6dd6b9a9c0e9782fc65576965bf959f178af52b274363a5d0de1ad7e0819375db60d4ba255299d68dac4  config-postmarketos-qcom-sm6450.aarch64
-731d3af6f7f2931b647922a90e2e5c3004e42c8c20bf1a28b6cda1bacf8072262aa010b1d595fbe91e367e01afcfeb70f43e93bb584adc55191858b8adad58d2  sm6450-mainline.patch
+c6cb6164480da1daa15d2533ff302beb74d0c714bb982b02dd7ff9e857455abdd8b70db3c4803835271d811373afc53b5cbdf7425e02e1bf6ae6ce0b50561ea4  config-postmarketos-qcom-sm6450.aarch64
+3499ac6cfd9b29ed524b49ef320d5092679e7a699a76c2d9b327b6c11867e5c0dcdde73ed9a2008a3caca6998a3a2e16743589d7d3c638f5db762abfcd1bfa4a  sm6450-mainline.patch
 8a668e14d1a656a8843aabc427fa930b8976f120fcdabb4042c17a4c4aeee7518dcc2403b6f8090a633ff741b0766ece418d47ce603401f73407df2d94d19b26  backport-0001-firmware-qcom-scm-Register-gunyah-watchdog-device.patch
 c008b7cf41b8820bf26deb4fef5b8e68d093e88106eeda58b4828f4f7ac031a6374e0815f1d4a72e01ea03cf42070285455d7720ff382c08d88d4163d25bff77  backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
 693ed8dff51fabd84fcabe6b579383bfcdc817687122f9bb43d9257d6e27ccc83979acdd4754718336d8fe1e3bf2375a41007f56ccdb7fbcd1549e19eeb2f760  bringup-milestones.patch
 14abdadc4cc557639c31735477fbffed1be4d4844ed273d8737fc5daf6227d846d8916b6debca6520d8add3bff4e2f8d7738fcc8755d9d49d8ad4f85486045ab  bringup-gunyah-wdt-start-at-boot.patch
 e8470a76d0bc049cb8aceb3194bd7e3be0f39b32cdf8c5499ce011bf09f9d638e9fb3ddf3433981e1b742804ec717e50dc99c4a2dbd0ac6a9adb77ee7d4f9586  bringup-gunyah-wdt-smccc-1-0.patch
+6314419b81b87040451b1c4a05def03ab0738d2abf37dba8db00a1c9d1a6d8b4a144572816d62dbb23c8b7ac5b0f52af3b5356060af7dad276c99daaa0bc2360  backport-0003-dt-bindings-display-panel-Describe-Samsung-SOFEF01-M-DDIC.patch
+7554cfbf19626ba607ad9f02156310fdc24881fd6f68a06e60eb7f851757000d4f5eb7a92a50ab503523c8044a01d6beefc291a6c90a494480ccfdf806912cc6  backport-0004-drm-panel-Add-panel-driver-for-Samsung-SOFEF01-DDIC.patch
+3102412ba15f4ab99f22e39471ed6ab34d9901ae127978006e1151d3ce78dc8071a53bfe303853e7c5b5f017812cd996087250abaa1c8ef5f46d3a4066f9154e  sofef01-ams605dk01-vci-supply.patch
+19f31d4db1f736496984a20657c9d6a7936b7e2d5fabf420068b3ace027c29a2795a153f78c7b2cbec75877949aa6e1edb6310c0875aa51832a3a5b192daa421  bringup-sofef01-pdx246-flm.patch
 "

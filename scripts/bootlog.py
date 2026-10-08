@@ -35,6 +35,8 @@ catches a later hang rather than only a panic.
 
   bootlog.py install <vendor_boot-in> <vendor_boot-out>
   bootlog.py probe   <vendor_boot-in> <vendor_boot-out>
+  bootlog.py wdtprobe <vendor_boot-in> <vendor_boot-out>
+  bootlog.py wdtdecode <round-total-seconds>
   bootlog.py stage   <vendor_boot-in> <vendor_boot-out> [skip-these-modules]
   bootlog.py marks   <vendor_boot-in> <vendor_boot-out> <table-out> <base> <scale> [panic-scale]
   bootlog.py markdecode <round-total-seconds> <base> <scale> [table]
@@ -472,8 +474,43 @@ PROBE_INIT = """#!/bin/busybox ash
 """ % PROBE_SLEEP
 
 
-def probe(src, dst):
-    """Rebuild a vendor_boot whose /init only reboots."""
+# Tests the Gunyah watchdog, which with gunyah_wdt.start_at_boot=1 is what
+# resets a kernel that hangs, and without which every hang has cost a person
+# holding the buttons. It can only be trusted with that once a round has seen
+# it fed and seen it bite, so this /init does both and nothing else, and lets
+# the length of each attempt say what happened. Every outcome but one ends in
+# a reset, so the round falls back to stock on its own; the exception is a
+# bite that does not reset the board, and that is the thing being asked.
+#
+# Per attempt, after the ~13 s the bootloader and kernel take to reach /init:
+#   5 s     no /dev/watchdog0: the driver never registered
+#   ~31 s   bitten during the 50 s wait: the kernel does not feed it
+#   82 s    fed for 50 s, then starved, then bitten 32 s later: it works
+#   150 s   starved and never bitten, so reboot(2) did it: it does not reset
+# bootlog.py wdtdecode turns a round total back into one of these.
+WDTPROBE_WAIT = 50
+WDTPROBE_STARVE = 100
+WDTPROBE_INIT = """#!/bin/busybox ash
+# Gunyah watchdog probe, written by scripts/bootlog.py. Not a real init.
+/bin/busybox mkdir -p /dev
+/bin/busybox mount -t devtmpfs devtmpfs /dev
+if [ ! -e /dev/watchdog0 ]; then
+	/bin/busybox sleep 5
+	/bin/busybox reboot -f
+fi
+# The kernel feeds it until someone opens it. Outlive its 32 s timeout.
+/bin/busybox sleep %d
+# Then take it over and never write to it.
+exec 3> /dev/watchdog0
+/bin/busybox sleep %d
+# Still here, so the bite did not reset the board.
+/bin/busybox reboot -f
+/bin/busybox sleep 120
+/bin/busybox reboot -f
+""" % (WDTPROBE_WAIT, WDTPROBE_STARVE)
+
+
+def _replace_init(src, dst, text, what):
     d = open(src, "rb").read()
     s = sections(d)
     o_rd, vr = s["ramdisk"]
@@ -482,7 +519,7 @@ def probe(src, dst):
     init = next((e for e in entries if e[1] == "init"), None)
     if init is None:
         sys.exit("error: no /init in the vendor ramdisk - wrong image?")
-    init[2] = PROBE_INIT.encode()
+    init[2] = text.encode()
     entries = [e for e in entries if e[1] != "bootlog.sh"]
 
     newrd = gzip.compress(cpio_build(entries), 6)
@@ -490,9 +527,45 @@ def probe(src, dst):
     open(dst, "wb").write(out)
     print(f"  in   {src}")
     print(f"  out  {dst}")
-    print(f"  /init replaced with the reboot probe ({len(PROBE_INIT)} bytes)")
+    print(f"  /init replaced with the {what} ({len(text)} bytes)")
     print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
     print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
+
+
+def probe(src, dst):
+    """Rebuild a vendor_boot whose /init only reboots."""
+    _replace_init(src, dst, PROBE_INIT, "reboot probe")
+
+
+def wdtprobe(src, dst):
+    """Rebuild a vendor_boot whose /init tests the Gunyah watchdog."""
+    _replace_init(src, dst, WDTPROBE_INIT, "Gunyah watchdog probe")
+
+
+def wdtdecode(total):
+    """Name the wdtprobe outcome a round's total in seconds fits best."""
+    # The same model as markdecode: seven attempts, then 30 s for the
+    # fallback boot to answer.
+    pre = 13.34
+    cases = [
+        (5, "no /dev/watchdog0: the driver never registered"),
+        (WDTPROBE_WAIT - 19, "bitten while the kernel should have been"
+         " feeding it: start_at_boot is not safe to use"),
+        (WDTPROBE_WAIT + 32, "fed, then starved and bitten: the watchdog"
+         " works, and a hung kernel will now reset"),
+        (WDTPROBE_WAIT + WDTPROBE_STARVE, "starved and never bitten:"
+         " it does not reset this board"),
+    ]
+    per = (total - 30) / 7
+    print(f"  {total:.0f} s total, {per:.1f} s an attempt,"
+          f" {per - pre:.1f} s of it after /init")
+    best = min(cases, key=lambda c: abs(per - pre - c[0]))
+    for after, what in cases:
+        mark = "->" if (after, what) == best else "  "
+        print(f"  {mark} {after:4d} s  {what}")
+    if abs(per - pre - best[0]) > 15:
+        print("  no case fits within 15 s an attempt: something else"
+              " happened, such as a panic before /init (panic=60)")
 
 
 
@@ -1482,6 +1555,10 @@ if __name__ == "__main__":
         install(a[1], a[2])
     elif len(a) == 3 and a[0] == "probe":
         probe(a[1], a[2])
+    elif len(a) == 3 and a[0] == "wdtprobe":
+        wdtprobe(a[1], a[2])
+    elif len(a) == 2 and a[0] == "wdtdecode":
+        wdtdecode(float(a[1]))
     elif len(a) == 3 and a[0] == "usbquirk":
         usbquirk(a[1], a[2])
     elif a[:1] == ["marks"] and len(a) in (6, 7):

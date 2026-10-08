@@ -208,6 +208,17 @@ build_vendor_boot() {
 		say "STAGE=1: replacing /init with the staged module probe"
 		"$ROOT/scripts/bootlog.py" stage "$WORK/vendor_boot.img" "$WORK/vendor_boot-stage.img"
 		mv "$WORK/vendor_boot-stage.img" "$WORK/vendor_boot.img"
+	elif [ "${WDTPROBE:-0}" = "1" ]; then
+		# Answers "does the Gunyah watchdog reset a hung kernel?", which
+		# has to be yes before a round can be left to run unattended:
+		# without it every hang waits for someone to hold the buttons.
+		# The /init lets the kernel feed it, then starves it, and each
+		# attempt's length says what happened:
+		#   bootlog.py wdtdecode <total>
+		say "WDTPROBE=1: replacing /init with the Gunyah watchdog probe"
+		"$ROOT/scripts/bootlog.py" wdtprobe "$WORK/vendor_boot.img" "$WORK/vendor_boot-w.img"
+		mv "$WORK/vendor_boot-w.img" "$WORK/vendor_boot.img"
+		CMDLINE_ADD="gunyah_wdt.start_at_boot=1 ${CMDLINE_ADD:-}"
 	elif [ "${PROBE:-0}" = "1" ]; then
 		# Answers "does the initramfs run at all?" using the retry
 		# counter as the only output channel: an init that reboots on
@@ -251,10 +262,11 @@ build_vendor_boot() {
 		else
 			"$ROOT/scripts/bootlog.py" install "$WORK/vendor_boot.img" "$WORK/vendor_boot-log.img"
 			mv "$WORK/vendor_boot-log.img" "$WORK/vendor_boot.img"
-			# Up to pkgrel 4 the ring buffer is 128 KiB, which a boot
-			# that logs every probe outgrows before the hook first
-			# reads it, and it is the oldest lines that go. pkgrel 5
-			# builds in 4 MiB, and this costs nothing there. Each record
+			# The built-in ring buffer is 128 KiB, which a boot that
+			# logs every probe outgrows before the hook first reads
+			# it, and it is the oldest lines that go. This gets 4 MiB
+			# at boot instead. Building that size in costs 14 MB of
+			# kernel image, see docs/05-status.md. Each record
 			# carries the command line, so a round id on it tells this
 			# round's records from an older round's left on the card.
 			CMDLINE_ADD="log_buf_len=4M pmbl.round=$(date +%Y%m%d-%H%M%S) ${CMDLINE_ADD:-}"
@@ -445,7 +457,9 @@ cmd_log() {
 				fi
 			done
 		fi
-		fastboot reboot recovery || die "could not reboot to recovery"
+		# The same false failure settle_slot puts up with.
+		fastboot reboot recovery \
+			|| say "fastboot reboot reported an error; waiting for recovery anyway"
 		sleep 5
 		wait_for_adb 120 >/dev/null || die "recovery never came up"
 	else

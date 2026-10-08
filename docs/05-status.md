@@ -673,6 +673,12 @@ Everything here is about `linux-postmarketos-qcom-sm6450`, our own 6.18 kernel.
   upstream. Whether a bite resets this board in a way the bootloader counts
   as an attempt is what the `WDTPROBE` round tests; see "The real init on
   mainline".
+- **pkgrel 8 gives the SoC tree its SCM node** — Done 2026-10-07, built and
+  never installed. See "The real init on mainline" for why it matters.
+- **pkgrel 9 lets `qcom_scm` find Gunyah on SMCCC v1.0 firmware** — Done
+  2026-10-07, built; the overnight queue installs it. One more bring-up
+  patch, `bringup-gunyah-wdt-smccc-1-0.patch`, with the reasoning in "The
+  real init on mainline".
 
 ## The first mainline flash
 
@@ -1793,14 +1799,77 @@ as what it would have fixed.
   is rung 2 on the ladder, and it fits round 18's phone never pulling D+
   up. The card never appears, so the hook has nowhere to write. That fits
   round 20's blank card, whether or not `/init` ran.
-- **pkgrel 8 adds the node** — Done 2026-10-07, committed and not yet built.
+- **pkgrel 8 adds the node** — Done 2026-10-07. Built at 22:57 and never
+  installed, because pkgrel 9 overtook it.
   It is the plain node upstream uses on this generation, compatible and
   `#reset-cells`, behind a binding commit that documents
   `qcom,scm-sm6450`. The binding allows no interrupt for it, and there is
   no TCSR syscon node yet for `qcom,dload-mode`. The board DTB passes
   `CHECK_DTBS=y` and differs from pkgrel 7's by that node alone; it is
-  `out/milestone/scm.dtb`, which rounds use through `DTB=` until the
-  package is built.
+  `out/milestone/scm.dtb`, which rounds use through `DTB=`. pkgrel 8's own
+  DTB is byte-identical to it.
+- **Round 21: silent for 45 minutes, and the card blank** — Verified
+  2026-10-07. The real init on the package tree, without SCM. Nothing
+  answered, and the owner put the phone into fastboot by hand at 2742
+  seconds. The queue recorded that as a bootloader giving up, and its
+  `markdecode` lines are noise: they assume seven attempts. The card and
+  `rddata` both came back empty. That is what the missing SCM node
+  predicts: no SD controller, so the hook had nowhere to write.
+- **The watchdog probe with the SCM node: still no `/dev/watchdog0`** —
+  Verified 2026-10-07, 23:39. pkgrel 7 with `DTB=out/milestone/scm.dtb`.
+  The round fell back in 158 seconds, 4.9 of each attempt after `/init`,
+  the same as without the node. So the node was not the only thing
+  missing.
+- **The other missing piece: this firmware speaks SMCCC v1.0** — Verified
+  in the 6.18 sources and in stock's own boot log, which says
+  `psci: SMC Calling Convention v1.0`. `qcom_scm` registers `gunyah-wdt`
+  only after `arm_smccc_hypervisor_has_uuid()` sees Gunyah's UUID. That
+  function asks through `arm_smccc_1_1_invoke()`. Below SMCCC v1.1,
+  `arm_smccc_1_1_get_conduit()` returns no conduit, and the invoke fails
+  without making any call. So on this board the check is false whether or
+  not Gunyah is there, with or without an SCM node. Nothing else in the
+  registration path can stop it: the only other bail-out is an available
+  `qcom,kpss-wdt` or `arm,sbsa-gwdt` node, and our tree has neither.
+- **Stock drives the same watchdog with the same four calls** — Verified by
+  disassembling `gh_virt_wdt.ko` out of stock's vendor ramdisk. Stock binds
+  it from a DT node, `qcom,gh-watchdog` under `hypervisor`, and asks
+  nothing first. It makes the CONTROL, STATUS, PING and SET_TIME calls,
+  `0x86000005` to `0x86000008`, the same IDs upstream's `gunyah_wdt` uses,
+  each with an inline `smc #0`. Upstream's driver makes them with
+  `arm_smccc_1_1_smc()`, which assumes the callee preserves x4 to x17, a
+  v1.1 guarantee. Stock relies on the same thing on this same firmware, so
+  that is not a new risk.
+- **pkgrel 9 asks in a way v1.0 can answer** — Done 2026-10-07, built at
+  23:53, and installed by the queue between rounds (see below). The bring-up
+  patch `bringup-gunyah-wdt-smccc-1-0.patch` repeats the UID query below
+  v1.1 with `arm_smccc_smc()`, an SMCCC v1.0 call, over SMC, which every
+  call `qcom_scm` makes already uses. The Call UID query is one of the
+  original SMCCC's general service queries, so a v1.0 hypervisor may well
+  answer it. Whether this one does is a guess. In case it does not,
+  `qcom_scm.force_gunyah_wdt=1` registers the device without asking.
+  `gunyah_wdt` still makes a STATUS call before it probes, and gives up with
+  `-ENODEV` if nothing answers. Neither change is upstream material as it
+  stands. The real fix belongs in `drivers/firmware/smccc`, which would
+  need to record the PSCI conduit even below v1.1.
+- **A probe that says how far SCM, the SMMU, USB and SD got** — Done
+  2026-10-07. Tested under busybox against fake sysfs trees for every
+  state. `DEVPROBE=1` on `try-kernel.sh` replaces `/init` with one that
+  mounts sysfs, proc and debugfs, waits 25 seconds for probing to settle,
+  then sleeps 4 seconds for every unit of 8 times the SCM state plus the
+  bound devices, and reboots. `bootlog.py devdecode <total>` reads a round
+  total back. The SCM states:
+  - 0, no `firmware:scm` device at all;
+  - 1, the device is waiting in `devices_deferred`;
+  - 2, the device exists and is not deferred, but did not bind, so its
+    probe failed;
+  - 3, `qcom_scm` bound but registered no `gunyah-wdt`, so the UUID check
+    failed;
+  - 4, a `gunyah-wdt` device exists, but no `/dev/watchdog0`, so its probe
+    failed;
+  - 5, `/dev/watchdog0` exists.
+
+  The bound devices add 1 for the apps SMMU (`15000000.iommu`), 2 for the
+  dwc3 core (`a600000.usb`) and 4 for the SD controller (`8804000.mmc`).
 - **The night of 2026-10-07** — Running. The first queue started round 21
   at 22:47, the real init on the package tree without the watchdog, since
   the probe had found none:
@@ -1820,7 +1889,25 @@ as what it would have fixed.
     works.
 
   The clkref tree is off the night's list. It only makes sense to test
-  once the dwc3 core can probe at all. The results go here.
+  once the dwc3 core can probe at all.
+
+  The second watchdog probe ran and found nothing, and round 22 started at
+  23:39. The SMCCC finding came during round 22. A third plan was written,
+  then replaced by a fourth before it ran anything. The fourth,
+  `out/try-kernel/plan-20261007d.sh`, waits for the second queue to finish
+  round 22, then:
+  - installs pkgrel 9 into the rootfs between rounds, and stops if it
+    cannot confirm `-r9` and fresh boot images;
+  - `DEVPROBE=1 DTB=out/milestone/scm.dtb`, the device probe on pkgrel 9;
+  - `WDTPROBE=1` on the same tree, the watchdog through the v1.0 UUID
+    query;
+  - if that finds no working watchdog, `WDTPROBE=1` again with
+    `qcom_scm.force_gunyah_wdt=1`;
+  - if either works, round 23, the real init on `scm.dtb` with
+    `gunyah_wdt.start_at_boot=1`, the force option if it was needed, and
+    the round 21 options.
+
+  The results go here.
 
 ## The boot images
 
@@ -2562,8 +2649,9 @@ port boots" above. What is left starts from there.
    Gunyah watchdog probe showed our tree has no SCM node, which on its own
    keeps the SMMU, and so the dwc3 core and the SD card, from ever probing.
    The night of 2026-10-07 runs, unattended under `scripts/queue.sh`, the
-   real init on the package tree, then the watchdog probe and the real init
-   on the tree with SCM; "The real init on mainline" has the commands. What
+   real init on the tree with SCM, then the device probe, which says
+   whether SCM let the SMMU, USB and the card bind at last. "The real init
+   on mainline" has the commands. What
    follows is the history of getting this far.
 
    The boot itself was the open question for a while: it has happened twice. The first flash on 2026-10-06 was
@@ -2607,11 +2695,13 @@ port boots" above. What is left starts from there.
 2. **Let a hard hang reset itself.** Rounds 19 and 20 needed hands on the
    phone, because nothing resets a kernel that has stopped. pkgrel 7 builds
    the Gunyah watchdog in and can start it at probe, and the kernel feeds it
-   for as long as it schedules; see "The real init on mainline". The first
-   `WDTPROBE` round found no watchdog, because nothing registers it without
-   the SCM node that pkgrel 8 adds. What is still open is whether a bite
-   resets this board in a way the bootloader counts, which the second
-   `WDTPROBE` round answers. If it does, every real-init
+   for as long as it schedules; see "The real init on mainline". Two
+   `WDTPROBE` rounds found no watchdog. The first lacked the SCM node that
+   registers it. The second had the node, but `qcom_scm`'s hypervisor check
+   cannot pass on SMCCC v1.0 firmware, which this is. pkgrel 9 asks with a
+   v1.0 call, and can skip the question. What is still open is whether a
+   bite resets this board in a way the bootloader counts, which the next
+   `WDTPROBE` rounds answer. If it does, every real-init
    round from then on carries `gunyah_wdt.start_at_boot=1`. If it does not,
    the hang has to be found from the boots that do reset, and the clkref
    round goes last in every queue.

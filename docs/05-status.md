@@ -2882,8 +2882,9 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   from the bootloader; or decompile it out of a firmware download. The first is
   a toggle and a re-run of `scripts/device-collect.sh`.
 - **Mainline now has an SoC tree, three PMICs and a board, and they build.**
-  Twenty-three patches against v6.18.55 in
-  [../kernel/patches/](../kernel/patches/): `gcc-sm6450.c` and
+  Twenty-three patches against v6.18.55 when this was written - twenty-seven
+  as of pkgrel 12, which adds the display clock controller and the
+  interconnect - in [../kernel/patches/](../kernel/patches/): `gcc-sm6450.c` and
   `pinctrl-sm6450.c`, the RPMh clock and power-domain tables, the PM6450
   regulator data, `sm6450.dtsi` at 1320 lines, `pm6450.dtsi`, and
   `sm6450-sony-xperia-columbia-pdx246.dts` with its 38 regulators, the keys,
@@ -2917,20 +2918,23 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   depending on the UFS mode, and the stock console is
   `console=ttyMSM0,115200n8` with `stdout-path` on
   `/soc/qcom,qup_uart@98c000`. Verified, read directly off the device.
-- **No interconnect provider for SM6450.** `CONFIG_INTERCONNECT_QCOM=y` is
-  set but there is no `sm6450` driver and `sm6450.dtsi` names no
-  `interconnects`, so nothing votes bandwidth for any master. Stock's dwc3
-  votes three paths (`usb-ddr`, `usb-ipa`, `ddr-usb`). Whatever ABL left in
-  RPMh is all a mainline DMA master gets, which is enough until it is not;
-  USB enumeration is the first thing that will lean on it. Downstream's
-  `drivers/interconnect/qcom/parrot.c` (2502 lines) is the source, and the
-  generator that produced the clock and pinctrl drivers is the way in.
+- **The interconnect has not run.** Pkgrel 12 builds the SM6450 NoC driver,
+  generated from downstream's `parrot.c` by `scripts/icc-to-mainline.py`
+  (see "The interconnect" above), but the series' `sm6450.dtsi` names no
+  NoC yet: the nodes and the QUP, SD and USB paths are on branch
+  `sm6450-icc` until rounds 30 and 31 have run them. Until then nothing
+  votes bandwidth for any master, and whatever ABL left in RPMh is all a
+  mainline DMA master gets - which has been enough for the SD card and a
+  high-speed gadget.
 - **No reboot-mode, so a mainline shell cannot ask for fastboot.** There is
   no PON node with `mode-bootloader` in `pm6450.dtsi` or the SoC tree, so
   even a working boot can only `reboot -f` into the same slot, which walks
-  the retry counter down one attempt at a time. Worth adding as soon as the
-  gadget works, because it is what makes a live mainline boot as cheap to
-  leave as the downstream one.
+  the retry counter down one attempt at a time. Adding one would have our
+  kernel write the SDAM restart reason, which is the PMIC write that is not
+  authorised (see "Getting back to fastboot without touching the phone"), so
+  it stays out. The loop leaves a mainline boot the sanctioned way:
+  `scripts/queue.sh` resets it over the gadget until the counter runs out
+  and stock answers adb.
 - **The dwc3 node uses the deprecated split binding.** `usb@a6f8800` with a
   `snps,dwc3` child is `qcom,dwc3`, which 6.18 handles in
   `dwc3-qcom-legacy.c`; new SoCs upstream are expected to use the flattened

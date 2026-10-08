@@ -305,7 +305,12 @@ PY
 # sys.boot_completed rather than at it.
 settle_slot() {
 	say "booting slot $1 once so it marks itself successful again"
-	fastboot reboot >/dev/null 2>&1 || die "could not reboot into slot $1"
+	# Not || die: the phone can drop off the bus before fastboot hears its
+	# OKAY, and fastboot then reports a failure for a reboot that happened.
+	# Round 20 died on exactly that on 2026-10-07, with stock already
+	# booting. Whether it really rebooted is wait_for_adb's question.
+	fastboot reboot >/dev/null 2>&1 \
+		|| say "fastboot reboot reported an error; waiting for the phone anyway"
 	wait_for_adb 300 >/dev/null || die "slot $1 did not come up - it is not a fallback"
 	i=0
 	while [ "$i" -lt 150 ]; do

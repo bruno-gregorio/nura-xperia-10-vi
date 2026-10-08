@@ -49,3 +49,4 @@ drm/msm/dpu: Add SM6450 support
 arm64: dts: qcom: Add SM6450 SoC device tree
 arm64: dts: qcom: Add PM6450 PMIC device tree
 arm64: dts: qcom: Add Sony Xperia 10 VI
+clk: qcom: gcc-sm6450: Use retention for USB power domain

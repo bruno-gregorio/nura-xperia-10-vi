@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=16
+pkgrel=17
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -104,6 +104,7 @@ source="
 	backport-0005-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3518.patch
 	backport-0006-Input-edt-ft5x06-add-support-for-FocalTech-FT3518.patch
 	backport-0007-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3519.patch
+	bringup-dwc3-qcom-phy-reinit.patch
 "
 builddir="$srcdir/linux-$pkgver"
 
@@ -156,7 +157,7 @@ package() {
 sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
 5b70653098e355c6c50114eb14d758f74bd7e59f07b07c9642d7ca1b630030e379f85b360bc9c45504c8a22953745c398994bc0950fe235773848ca17da4c9ec  config-postmarketos-qcom-sm6450.aarch64
-9d34e7f6ec090385d1b2ddb0e577383d9c1d63c3a41e7c1733fefc505500ab244b756f81b458f81f1e9b86fc783aeee4f93227b47a8f68b427c7ad159a3f2d14  sm6450-mainline.patch
+3fc16cf548789b483e7fb5133fa7e8ffba295b5e2f15541c8435ff002d14ade1e7677a9169be9362e81bd5a43b983a13d2256ce5ac0c5da294f49efd2069b5e9  sm6450-mainline.patch
 8a668e14d1a656a8843aabc427fa930b8976f120fcdabb4042c17a4c4aeee7518dcc2403b6f8090a633ff741b0766ece418d47ce603401f73407df2d94d19b26  backport-0001-firmware-qcom-scm-Register-gunyah-watchdog-device.patch
 c008b7cf41b8820bf26deb4fef5b8e68d093e88106eeda58b4828f4f7ac031a6374e0815f1d4a72e01ea03cf42070285455d7720ff382c08d88d4163d25bff77  backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
 693ed8dff51fabd84fcabe6b579383bfcdc817687122f9bb43d9257d6e27ccc83979acdd4754718336d8fe1e3bf2375a41007f56ccdb7fbcd1549e19eeb2f760  bringup-milestones.patch
@@ -169,4 +170,5 @@ e8470a76d0bc049cb8aceb3194bd7e3be0f39b32cdf8c5499ce011bf09f9d638e9fb3ddf3433981e
 b7d0924b38f1601d5cb0640b6ab53dbbcc87ed420bbf179df8fd413bbca635e52df87b34c11d6ea08e08f4bfbaa46aed6b345d8e08335693be47d7a69e074e15  backport-0005-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3518.patch
 a4307c5157f745f2824069b0d32515866cdb631803d0aa4e3bbb4e4d1d21ffcb952d19ff0424fb322bb56f2f2c1369c237750f97f0e8647fcf2728a2ee428d4d  backport-0006-Input-edt-ft5x06-add-support-for-FocalTech-FT3518.patch
 9a43fa3048b8589d3738a45acc53c981e27fad585157a43c01594d69c4f6872459e3bf54cac08670f25c06f65167ca5474766562bd3a4104696c30e362514ebd  backport-0007-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3519.patch
+0ee1b6035876d58d497f1a8ac8489263049e301b1bbd683ec4aff26677b31c523888813cb983f00dd82113be9981651b5a0287d833fd31b99099b82232923751  bringup-dwc3-qcom-phy-reinit.patch
 "

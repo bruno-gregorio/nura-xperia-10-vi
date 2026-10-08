@@ -30,3 +30,11 @@ dt-bindings: firmware: qcom,scm: Document SM6450 SCM
 arm64: dts: qcom: Add SM6450 SoC device tree
 arm64: dts: qcom: Add PM6450 PMIC device tree
 arm64: dts: qcom: Add Sony Xperia 10 VI
+dt-bindings: display/msm: dsi-phy-7nm: Add SM6450
+dt-bindings: display/msm: dsi-controller-main: Add SM6450
+dt-bindings: display/msm: qcm2290-dpu: Add SM6450
+dt-bindings: display/msm: Add SM6450 MDSS
+soc: qcom: ubwc: Add SM6450 config
+drm/msm/dsi: Add support for the SM6450 DSI PHY
+drm/msm: mdss: Add SM6450 support
+drm/msm/dpu: Add SM6450 support

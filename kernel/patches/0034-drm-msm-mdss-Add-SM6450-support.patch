@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 11:23:52 -0300
+Subject: [PATCH] drm/msm: mdss: Add SM6450 support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add the MDSS on SM6450. The downstream display driver votes 74000 kBps
+on the register bus, as SM8450's does.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/gpu/drm/msm/msm_mdss.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/gpu/drm/msm/msm_mdss.c b/drivers/gpu/drm/msm/msm_mdss.c
+index 4dbb1b1d8..dde51b1a1 100644
+--- a/drivers/gpu/drm/msm/msm_mdss.c
++++ b/drivers/gpu/drm/msm/msm_mdss.c
+@@ -568,6 +568,7 @@ static const struct of_device_id mdss_dt_match[] = {
+ 	{ .compatible = "qcom,sm6150-mdss", .data = &data_76k8 },
+ 	{ .compatible = "qcom,sm6350-mdss", .data = &data_76k8 },
+ 	{ .compatible = "qcom,sm6375-mdss", .data = &data_76k8 },
++	{ .compatible = "qcom,sm6450-mdss", .data = &data_74k },
+ 	{ .compatible = "qcom,sm7150-mdss", .data = &data_76k8 },
+ 	{ .compatible = "qcom,sm8150-mdss", .data = &data_76k8 },
+ 	{ .compatible = "qcom,sm8250-mdss", .data = &data_76k8 },

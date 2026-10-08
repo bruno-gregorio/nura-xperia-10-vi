@@ -521,7 +521,8 @@ SM4450 pair covers it too - `dispcc-ravelin.c` downstream, `dispcc-sm4450.c`
 upstream - so the converter grew a `--block disp_cc` mode and a second
 self-test pair rather than a hand transcription. Branch `sm6450-dispcc` in
 `out/linux` has the binding, `qcom,sm6450-dispcc.h`, `dispcc-sm6450.c` and a
-WIP node for `sm6450.dtsi`. It is not in the kernel package and has not run.
+WIP node for `sm6450.dtsi`. The driver has been in the kernel package since
+pkgrel 12; the node has not run.
 
 - **Parrot's controller is ravelin's plus DisplayPort.** Of the vendor's 74
   clocks, 30 are ravelin's under the same names and the other 44 are four DP
@@ -624,6 +625,81 @@ and 0 in `sm8450.h` is `SM8450_MASTER_GPU_TCU`, so both slaves link to
 `alm_gpu_tcu` instead of the CDSP and LPASS configuration masters. Mainline's conversion to pointers fixed it after 6.18; the 6.18
 stable line still has it. A one-line fix for stable is an option, not yet
 sent.
+
+### The display: a cut-down SM8450 and a panel that already has a driver
+
+Past the clock controller, the display needs the MDSS wrapper, the DPU, the
+DSI controller with its PHY, and a panel driver. The first three are
+SM8450's with a smaller catalog, and the fourth was already written upstream
+for the Xperia 10 V. The driver half is in the series as of pkgrel 13
+(patches 0028 to 0035) and binds to nothing without a node. The nodes are
+WIP commits on branch `sm6450-display` in `out/linux`, built into
+`out/milestone/display.dtb`. None of it has run.
+
+- **The DPU is 8.3, of the SM8450 family.** The vendor's `sde_hw_catalog.h`
+  defines `SDE_HW_VER_830` as parrot, between waipio (8.1, SM8450) and
+  ravelin (8.6). Upstream has no 8.3 catalog, so `scripts/sde-to-dpu.py`
+  derives one. It reads the downstream SDE node, which lists every block by
+  address, keeps SM8450's entries for the blocks parrot has, and rewrites
+  the fields the tree decides. What is left is one VIG and two DMA pipes,
+  four CTLs, three mixers (only LM_0 with a DSPP; LM_2 and LM_3 pair through
+  MERGE_3D_1), one DSC encoder, writeback 2 and three interfaces.
+- **Its rules are proved on siblings first.** `sde-to-dpu.py prove` maps a
+  SoC's downstream tree onto that SoC's existing upstream catalog, field by
+  field. Waipio against `dpu_8_1_sm8450.h` agrees on 129 of 129 fields,
+  bengal against `dpu_6_3_sm6115.h` on 32 of 32, and scuba against
+  `dpu_6_5_qcm2290.h` on 31 of 32. Scuba's one miss is a line width of 2160
+  that its tree does not state at all.
+- **The third interface is DP's second MST stream.** The tree's interface
+  at `0x37000` is INTF_3 by its address but the third entry in its list.
+  The script matches blocks by address only, so it is INTF_3. 6.18's SM8450
+  catalog gives INTF_3 to a second DP controller; upstream has since
+  rewritten such entries as controller 0's MST pair, and SM6450, with one DP
+  controller, follows that.
+- **UBWC is what downstream programs into `UBWC_STATIC`**: version 4.0,
+  level 2 and 3 swizzle, bank spreading and macrotile. The highest bank bit
+  depends on the memory fitted. The live tree's `qcom,ddr-type` is 7, which
+  the vendor source names `DDR_TYPE_LPDDR4X`, so it is 14. One review says
+  this phone has LPDDR5, which would make it 15. The decoder version is
+  assumed equal to the encoder's.
+- **MDSS, DSI and the PHY need no new code.** The DSI controller is 2.6.0,
+  which drm/msm already matches by its version register. The PHY is
+  SM8450's 5nm v4.3, at the same offset and with the same supply load, so
+  SM6450 uses `dsi_phy_5nm_8450_cfgs`. MDSS uses the existing `data_74k`.
+  SM6450 has no MMCX and no `GCC_DISP_SF_AXI_CLK`, so its MDSS has a single
+  AXI path and one clock fewer than SM8450's, and the DPU and DSI vote on CX.
+  That difference is why it has a binding of its own rather than an entry
+  in SM8450's.
+- **The OPP tables come from the vendor's clock driver.** The MDP clock runs
+  at 200, 325, 380, 506 and 608 MHz, from low SVS up to turbo, and the DSI
+  byte clock at 187.5, 300 and 358 MHz. Both come from the `rate_max` tables
+  in `dispcc-parrot.c` and the vendor's `vdd-level.h`.
+- **The panel is a Samsung SOFEF01-M driving an AMS605DK01**, the same panel
+  as the Xperia 10 V's. Marijn Suijten's series for 14 Sony phones has a
+  driver for it: posted in December 2025, reviewed, not merged. Its binding
+  is in mainline as `722f0707782b`. The kernel aport carries both as
+  backports.
+- **The 10 VI's downstream panel node differs from that driver in three
+  places.**
+  - It has a `vci` supply, which the binding forbids on this panel.
+    `sofef01-ams605dk01-vci-supply.patch` allows it.
+  - It programs FLM with `8f 27 27`, where the driver sends the 10 V's
+    `8f 27 25`. `bringup-sofef01-pdx246-flm.patch` sends the 10 VI's value
+    when the machine compatible is `sony,pdx246`.
+  - Its brightness is 12-bit, up to `0xfff`, where the driver stops at 1023.
+    This one is left alone, because a dim screen is harmless and nothing but
+    the high-brightness commands says the range is wider.
+
+  All three go back to Marijn once the panel has lit.
+- **The board half is from the live tree.** Reset is TLMM 127, active low.
+  TE is GPIO 99 (`mdp_vsync`). The 1.8 V I/O rail is a fixed regulator
+  switched by PM6150L GPIO 9. `vci` is PM6150L L4, DSI's `vdda` PM6450 L16
+  and the PHY's `vdds` PM6450 L5. The OLED's own rails on PM6150L stay as
+  the bootloader configured them.
+
+`CHECK_DTBS=y` and every touched binding are clean, the drivers compile
+with W=1, checkpatch `--strict` warns only about MAINTAINERS for new files,
+and `check-dt.py` accounts for all 80 addresses in the display tree.
 
 ### What is deliberately not written yet
 

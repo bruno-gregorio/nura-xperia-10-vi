@@ -30,10 +30,10 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  2 files changed, 82 insertions(+), 12 deletions(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 3d761b4c3..21b1fa1ea 100644
+index ed5dee79f..a8f5b3316 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -355,8 +355,18 @@ &uart3 {
+@@ -535,8 +535,18 @@ &ufs_mem_phy {
  	status = "okay";
  };
  
@@ -53,10 +53,10 @@ index 3d761b4c3..21b1fa1ea 100644
  	status = "okay";
  };
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-index 395b503cc..64b9fd398 100644
+index dfb5d5241..2d469c2c7 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -9,6 +9,7 @@
+@@ -10,6 +10,7 @@
  #include <dt-bindings/interconnect/qcom,sm6450-rpmh.h>
  #include <dt-bindings/interrupt-controller/arm-gic.h>
  #include <dt-bindings/mailbox/qcom-ipcc.h>
@@ -64,16 +64,16 @@ index 395b503cc..64b9fd398 100644
  #include <dt-bindings/power/qcom-rpmpd.h>
  #include <dt-bindings/soc/qcom,rpmh-rsc.h>
  #include <dt-bindings/thermal/thermal.h>
-@@ -728,7 +729,7 @@ gcc: clock-controller@100000 {
- 				 <0>,
- 				 <0>,
- 				 <0>,
+@@ -729,7 +730,7 @@ gcc: clock-controller@100000 {
+ 				 <&ufs_mem_phy 0>,
+ 				 <&ufs_mem_phy 1>,
+ 				 <&ufs_mem_phy 2>,
 -				 <0>;
 +				 <&usb_1_qmpphy QMP_USB43DP_USB3_PIPE_CLK>;
  		};
  
  		qupv3_id_0: geniqup@9c0000 {
-@@ -986,6 +987,52 @@ usb_1_hsphy: phy@88e3000 {
+@@ -1129,6 +1130,52 @@ usb_1_hsphy: phy@88e3000 {
  			status = "disabled";
  		};
  
@@ -126,7 +126,7 @@ index 395b503cc..64b9fd398 100644
  		remoteproc_wpss: remoteproc@8a00000 {
  			compatible = "qcom,sm6450-wpss-pas", "qcom,sc7280-wpss-pas";
  			reg = <0x0 0x08a00000 0x0 0x10000>;
-@@ -1079,17 +1126,10 @@ &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+@@ -1222,17 +1269,10 @@ &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
  
  			iommus = <&apps_smmu 0x80 0x0>;
  
@@ -148,7 +148,7 @@ index 395b503cc..64b9fd398 100644
  
  			snps,dis-u1-entry-quirk;
  			snps,dis-u2-entry-quirk;
-@@ -1103,6 +1143,26 @@ &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+@@ -1246,6 +1286,26 @@ &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
  			tx-fifo-resize;
  
  			status = "disabled";
@@ -174,4 +174,4 @@ index 395b503cc..64b9fd398 100644
 +			};
  		};
  
- 		pdc: interrupt-controller@b220000 {
+ 		mdss: display-subsystem@ae00000 {

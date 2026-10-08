@@ -1,6 +1,6 @@
 branch: sm6450-gpucc
 series: sm6450
-tip:    5f57422ba3e6b36a21e2d6e588ea375b0f7237e6
-base:   d8d698757e2d9de6a44ad50151b3dfd638bd9aea drm/msm/dpu: Add SM6450 support
-        (git describe: v6.18.55-46-gd8d698757)
+tip:    e73ae773302c34e8922b93ec72223d27999df77c
+base:   a3876429880fb5e9ee70ebac05f55c7c8deedbf6 arm64: dts: qcom: Add Sony Xperia 10 VI
+        (git describe: v6.18.55-46-ga38764298)
 patches: 1

@@ -16,10 +16,10 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 11 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-index 395b503cc..5989b264d 100644
+index dfb5d5241..27c13f114 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -869,6 +869,17 @@ lpass_ag_noc: interconnect@3c40000 {
+@@ -1012,6 +1012,17 @@ lpass_ag_noc: interconnect@3c40000 {
  			qcom,bcm-voters = <&apps_bcm_voter>;
  		};
  

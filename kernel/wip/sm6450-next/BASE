@@ -1,6 +1,0 @@
-branch: sm6450-next
-series: sm6450
-tip:    09a8c4bd30461a7bd322ec55044fb0c9e3126778
-base:   d8d698757e2d9de6a44ad50151b3dfd638bd9aea drm/msm/dpu: Add SM6450 support
-        (git describe: v6.18.55-46-gd8d698757)
-patches: 3

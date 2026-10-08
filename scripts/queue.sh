@@ -71,13 +71,29 @@ kick_gadget() {
 			>/dev/null 2>&1 || true
 }
 
+# The bootloader's counters, read while the phone is in fastboot. A round
+# that someone ended by hand, or that the bootloader gave up on, is only
+# decodable if we know how many attempts it began: set-active resets
+# slot-retry-count, and each attempt takes one off.
+note_counters() {
+	for s in a b; do
+		note "slot $s: retry-count $(fastboot getvar "slot-retry-count:$s" 2>&1 \
+			| sed -n "s/^slot-retry-count:$s: *//p" | head -1)," \
+			"unbootable $(fastboot getvar "slot-unbootable:$s" 2>&1 \
+			| sed -n "s/^slot-unbootable:$s: *//p" | head -1)," \
+			"successful $(fastboot getvar "slot-successful:$s" 2>&1 \
+			| sed -n "s/^slot-successful:$s: *//p" | head -1)"
+	done
+}
+
 # Wait for the phone to be somewhere try-kernel can start from.
 bring_back() {
 	limit=${BACK_WAIT:-10800}
 	i=0
 	while [ "$i" -lt "$limit" ]; do
 		case "$(phone_state)" in
-		fastboot|adb) return 0 ;;
+		fastboot) note_counters; return 0 ;;
+		adb) return 0 ;;
 		gadget) kick_gadget ;;
 		esac
 		command sleep 15

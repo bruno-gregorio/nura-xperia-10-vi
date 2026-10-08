@@ -417,6 +417,7 @@ cmd_try() {
 
 	say "making slot $spare active (this resets its retry counter)"
 	fastboot --set-active="$spare"
+	echo "   slot-retry-count:$spare is now $(getvar "slot-retry-count:$spare")"
 	fastboot reboot
 
 	say "waiting. our kernel answering on slot _$spare is a win;"
@@ -439,8 +440,13 @@ cmd_try() {
 		echo "    scripts/try-kernel.sh --log"
 	elif [ "$got" = "fastboot" ]; then
 		echo "RESULT: the bootloader gave up and dropped to fastboot."
-		echo "  It did not boot the fallback slot, so read the counter:"
-		echo "    fastboot getvar slot-retry-count:$spare"
+		echo "  It did not boot the fallback slot, or someone held the"
+		echo "  buttons. The counter says how many attempts it began, which"
+		echo "  is what turns the elapsed time into a length per attempt:"
+		for v in "slot-retry-count:$spare" "slot-unbootable:$spare" \
+			"slot-successful:$spare" current-slot; do
+			echo "    $v: $(getvar "$v")"
+		done
 	elif [ "$got" = "gadget" ]; then
 		echo "RESULT: the initramfs got USB up. That is a live link into a"
 		echo "  boot that would otherwise only be visible as elapsed time."

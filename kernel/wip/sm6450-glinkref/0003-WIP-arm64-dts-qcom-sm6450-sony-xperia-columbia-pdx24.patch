@@ -1,0 +1,81 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 16:47:13 -0300
+Subject: [PATCH] WIP: arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246:
+ Add pmic-glink
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The PM7250B that charges the battery and runs the Type-C port sits on
+an SPMI bus the ADSP owns, so on this phone both are reached through
+pmic-glink. Describe its one connector, USB 2.0 only, and let it set the
+controller's role instead of fixing it to peripheral.
+
+To be folded into the board commit once it has run.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+(cherry picked from commit 695c17fcc33c0d12ee608b7bb4c0524bb60c9976)
+---
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 38 ++++++++++++++++++-
+ 1 file changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index ed5dee79f..42293d5de 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -46,6 +46,38 @@ key-volume-down {
+ 		};
+ 	};
+ 
++	/*
++	 * The charger and the Type-C port controller, a PM7250B, sit on an
++	 * SPMI bus the ADSP owns, so the port is reached through it. The
++	 * port is wired for USB 2.0 only.
++	 */
++	pmic-glink {
++		compatible = "qcom,sm6450-pmic-glink", "qcom,pmic-glink";
++
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		connector@0 {
++			compatible = "usb-c-connector";
++			reg = <0>;
++			power-role = "dual";
++			data-role = "dual";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@0 {
++					reg = <0>;
++
++					pmic_glink_hs_in: endpoint {
++						remote-endpoint = <&usb_1_dwc3_hs>;
++					};
++				};
++			};
++		};
++	};
++
+ 	/*
+ 	 * The panel's 1.8V logic supply is switched on by driving PM6150L
+ 	 * GPIO 9 low. With it the other way round the panel still takes
+@@ -536,11 +568,13 @@ &ufs_mem_phy {
+ };
+ 
+ &usb_1 {
+-	dr_mode = "peripheral";
+-
+ 	status = "okay";
+ };
+ 
++&usb_1_dwc3_hs {
++	remote-endpoint = <&pmic_glink_hs_in>;
++};
++
+ /*
+  * The stock tree tunes this PHY with a raw register write,
+  * qcom,param-override-seq, into HS_PHY_OVERRIDE_X0 through X3. Every field

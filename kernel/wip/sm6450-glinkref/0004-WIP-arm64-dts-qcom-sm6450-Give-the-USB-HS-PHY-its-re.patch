@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 17:39:21 -0300
+Subject: [PATCH] WIP: arm64: dts: qcom: sm6450: Give the USB HS PHY its
+ reference clock gate
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The HS PHY's reference clock reaches it through GCC_EUSB3_0_CLKREF_EN,
+which the stock tree hands this PHY as its ref_clk, and the EUD as its
+clkref. The PHY only took CXO, so nothing in Linux held that gate: it
+stayed on because the bootloader left it on.
+
+The card logs of rounds 37, 52 and 57, the three rounds that booted the
+ADSP, all end with the gate off in hardware, and the USB link went with
+it each time. Every round without the ADSP, up to 1138 s of uptime, has
+it on. Something outside Linux clears it as the ADSP comes up.
+
+Holding it from the PHY at least means a PHY init turns it back on.
+Whether holding it also keeps it on is what round 60 asks.
+
+To be folded into "arm64: dts: qcom: Add SM6450 SoC device tree" once
+round 60 shows what the gate does.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+(cherry picked from commit 11413e0eac5afce36854cd58389dfbffea495903)
+---
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+index 029a11748..c721d064c 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+@@ -1120,7 +1120,7 @@ usb_1_hsphy: phy@88e3000 {
+ 				     "qcom,usb-snps-hs-7nm-phy";
+ 			reg = <0x0 0x088e3000 0x0 0x400>;
+ 
+-			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clocks = <&gcc GCC_EUSB3_0_CLKREF_EN>;
+ 			clock-names = "ref";
+ 			resets = <&gcc GCC_QUSB2PHY_PRIM_BCR>;
+ 

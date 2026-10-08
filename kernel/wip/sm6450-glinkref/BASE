@@ -1,0 +1,7 @@
+branch: sm6450-glinkref
+series: sm6450
+tip:    5ef30d8e09c8ace9854de445f0d6fb8a3f7d57b5
+base:   a3876429880fb5e9ee70ebac05f55c7c8deedbf6 arm64: dts: qcom: Add Sony Xperia 10 VI
+        (git describe: v6.18.55-46-ga38764298)
+patches: 4
+under:  1 commits between base and these, on sm6450 under other SHAs

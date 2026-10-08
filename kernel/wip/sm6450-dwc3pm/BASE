@@ -1,0 +1,6 @@
+branch: sm6450-dwc3pm
+series: sm6450
+tip:    0027acdd8a41deea6d2a28d568096ab838fe4a02
+base:   91292cc136e364a3f97a97f6b4b53f18d7c298d3 clk: qcom: gcc-sm6450: Use retention for USB power domain
+        (git describe: v6.18.55-47-g91292cc13)
+patches: 1

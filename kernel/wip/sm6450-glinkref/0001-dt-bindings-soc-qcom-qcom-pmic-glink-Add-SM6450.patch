@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 16:41:13 -0300
+Subject: [PATCH] dt-bindings: soc: qcom: qcom,pmic-glink: Add SM6450
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Document the PMIC GLINK interface on SM6450. Its ADSP firmware offers
+the battery manager, UCSI and alt mode services over the PMIC_RTR_ADSP_APPS
+channel, as on the SoCs already listed with the generic fallback.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+(cherry picked from commit 23c4cde4195c103375d64acb6a338899684eec21)
+---
+ Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml b/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
+index 7085bf88a..8ed9cb3c1 100644
+--- a/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
++++ b/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
+@@ -26,6 +26,7 @@ properties:
+               - qcom,qcm6490-pmic-glink
+               - qcom,sc8180x-pmic-glink
+               - qcom,sc8280xp-pmic-glink
++              - qcom,sm6450-pmic-glink
+               - qcom,sm8350-pmic-glink
+               - qcom,sm8450-pmic-glink
+               - qcom,sm8550-pmic-glink

@@ -2062,6 +2062,16 @@ as what it would have fixed.
   the first attempt. Every attempt left its records on the card. The USB
   watchdog's log says "armed", and its `sleep 150` is in the process
   list, so it now outlives its own start.
+- **Round 24 carries its own experiment** — Done 2026-10-08, 09:16.
+  `try-kernel.sh` now takes `LIVE=file`. As soon as the harvest has the
+  shell, `scripts/tsh.py` runs that file's commands there, one at a time.
+  `out/try-kernel/plan-20261008i.sh` starts by itself after wdtprobe5. It
+  repeats round 23's boot with `cmds-r24.sh`, which first reads the clock,
+  regulator, power-domain, interrupt and GPIO state. It then measures the
+  Gunyah watchdog from the inside. It holds `/dev/watchdog0` open without
+  writing and samples `timeleft`, which is the hypervisor's count since the
+  last ping. It does that first with cpuidle as configured, then with every
+  idle state but WFI disabled.
 
 ## The boot images
 

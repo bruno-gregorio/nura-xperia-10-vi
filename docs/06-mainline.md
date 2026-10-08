@@ -759,6 +759,30 @@ It waits for the firmware's QMI service, which only a running WPSS
 provides, so the node is not worth a round before the firmware is
 collected.
 
+### Bluetooth: one more QUP wrapper and a UART
+
+Bluetooth does not wait for any of that. The WCN39xx radio is its own chip
+on a UART, and `hci_qca` loads its firmware over that UART, so the work is
+a serial port and a child node. The UART is QUP wrapper 1's fifth serial
+engine, at `0xa94000`, which stock calls "se11". The pinctrl driver
+already has its function, `qup1_se5`, on GPIOs 14 to 17. The wrapper had
+no node yet. It takes the same two AHB clocks as wrapper 0 and SMMU stream
+`0x403`. The UART takes `GCC_QUPV3_WRAP1_S5_CLK` and SPI 358, and its four
+pin states carry stock's active-state biases. The board aliases it as
+`serial1` and gives it a `qcom,wcn3990-bt` child. That child has stock's
+four rails, `pm6450_l22`, `pm6150l_l1`, `pm6450_l14` and `pm6150l_l10`,
+and the switch-control line on GPIO 61.
+
+The compatible is the open question. Stock says `qcom,wcn3990`, which
+Qualcomm's `btpower` uses for the whole family before asking the chip.
+Mainline's `hci_qca` takes the chip type from the compatible, and the
+firmware names and the shape of the version reply follow from it. Round 35
+reads the chip's own version lines to settle it. It pushes linux-firmware's
+rampatch and NVM files for every WCN39xx, so setup can also run to the end.
+The two WIP commits are on branch `sm6450-bt`, from `sm6450`.
+`CHECK_DTBS=y` is clean, and `check-dt.py` finds the UART's interrupt equal
+to stock's.
+
 ### What is deliberately not written yet
 
 **The UFS PHY, which was on disk after all.** This paragraph used to say the

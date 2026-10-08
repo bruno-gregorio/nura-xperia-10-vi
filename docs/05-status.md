@@ -2290,6 +2290,46 @@ as what it would have fixed.
   compatible rules out. The WIP node is on branch `sm6450-wifi` in
   `out/linux`; `CHECK_DTBS=y` is clean and its interrupts equal stock's.
   It needs the WPSS running its firmware first.
+- **Bluetooth** — Written 2026-10-08, not yet run; queued as round 35 in
+  plan n. Bluetooth needs no remote processor. The controller is the
+  WCN39xx radio on a UART, and `hci_qca` loads its firmware over that
+  UART. So branch `sm6450-bt` in `out/linux` starts from `sm6450`, not
+  from the remoteprocs. Its two WIP commits add QUP wrapper 1 with its
+  UART at `a94000` and the board's `qcom,wcn3990-bt` child. That UART is
+  stock's "se11", on pins 14 to 17, with the mainline function `qup1_se5`.
+  `CHECK_DTBS=y` is clean, and `check-dt.py` finds the UART's interrupt
+  equal to stock's.
+  - **Reasoned:** the rails. Stock's `bt_wcn3990` names io, xtal, core
+    and pa supplies, at 1.8, 1.8, 1.304 and 3.0 to 3.312 V. Those are
+    WCN3990's vddio, vddxo, vddrf and vddch0, in that order. The switch
+    control line is GPIO 61, as on stock. The pins' biases are stock's
+    active state.
+  - **A guess:** the chip. Stock's `qcom,wcn3990` is the compatible
+    Qualcomm's `btpower` gives every WCN39xx, and the vendor stack reads
+    the chip at runtime. Mainline takes the chip type from the compatible
+    instead, and from it the firmware names and even the layout of the
+    version reply. A WCN3991 under the 3990 compatible has its reply
+    parsed one byte off. Round 35 prints the chip's Product ID, SOC Version
+    and ROM Version; if they say otherwise, the compatible changes.
+  - **The firmware is linux-firmware's, not the phone's.** `cmds-r35.sh`
+    pushes every WCN39xx rampatch and NVM file in Alpine's
+    `linux-firmware-qca` 20260810, 680 KB:
+    - `crbtfw`/`crnv` 21 and 32, with `crnv32u`, for WCN3990, 3991 and
+      3998;
+    - `apbtfw`/`apnv` 10 and 11, for WCN3988;
+    - `cmbtfw`/`cmnv` 12 and 13, for WCN3950.
+
+    Setup can finish if the guess is right, and a failed request names the
+    file it wanted if not. Upstream would ship these same files. Stock's
+    own Bluetooth firmware has not been looked for.
+
+  The round pushes the files, then r13's `rfkill`, `ecc`, `ecdh_generic`,
+  `bluetooth`, `pwrseq-core`, `btqca` and `hci_uart`, and loads them in
+  that order. Registering the controller powers it on with no userspace,
+  which runs setup. The core powers it off two seconds later, because no
+  management socket is open. The readings are dmesg, the serdev binding,
+  the debugfs version files and the regulator summary. They leave out the
+  address files: `identity`, `random_address` and `static_address`.
 
 ## The boot images
 
@@ -2951,11 +2991,13 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   On the mainline kernel it is drm/msm's GPU side, which already knows a7xx
   parts, plus the GMU and zap-shader firmware; that is the path that leads
   anywhere.
-- **Modem, Wi-Fi, Bluetooth, audio, camera.** On mainline, the four remote
+- **Modem, Wi-Fi, audio, camera.** On mainline, the four remote
   processors they run on are described but have not run (see "The remote
-  processors" above); nothing above them is written. All of them need
-  firmware from the stock partitions, which is not redistributable, is not
-  packaged here, and has not been collected.
+  processors" above). Of what sits above them, only the WLAN node is
+  written. All of them need firmware from the stock partitions, which is
+  not redistributable, is not packaged here, and has not been collected.
+  Bluetooth is the exception: it is described, it needs only
+  linux-firmware's files, and round 35 tries it (see "Bluetooth" above).
 - **No `soc-qcom-sm6450` package.** pmOS has no SoC package for this chip; the
   device package carries everything.
 - **`pmb install` cannot finish inside a rootless container**, because

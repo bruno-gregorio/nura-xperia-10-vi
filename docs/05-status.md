@@ -2072,6 +2072,18 @@ as what it would have fixed.
   writing and samples `timeleft`, which is the hypervisor's count since the
   last ping. It does that first with cpuidle as configured, then with every
   idle state but WFI disabled.
+- **USB on the flattened dwc3 binding** — Done 2026-10-08, not yet run on
+  the device. New SoCs upstream are expected to use the single-node
+  `qcom,snps-dwc3` binding. Ours used the legacy one, with the glue at
+  `0xa6f8800` and the core as a child. `out/milestone/usbflat.dtb` has one
+  node at `0xa600000` that covers both. Its core interrupt is named
+  `dwc_usb3`, and the board sets `dr_mode = "peripheral"`, as pdx225 does,
+  in place of `otg` with a role switch that nothing would ever drive. The
+  flattened glue driver turns the VBUS override on at probe in peripheral
+  mode. The DTB passes `CHECK_DTBS=y`, the binding passes
+  `dt_binding_check`, and decompiled it differs from `regs.dtb` in the USB
+  node alone. Round 25, the second round of plan i, boots it. The change
+  waits on branch `sm6450-usbflat` in `out/linux` until that round passes.
 
 ## The boot images
 

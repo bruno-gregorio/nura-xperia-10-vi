@@ -2502,6 +2502,41 @@ as what it would have fixed.
   `CHECK_DTBS=y` is clean on each, apart from two warnings, for the
   FT3519 and the SOFEF01-M panel. Both bindings are backports that the
   aport applies, and `out/kbuild` builds the series without them.
+- **Pkgrel 18 folds what rounds 58 to 63 ran** — Done 2026-10-08, built
+  at 19:05, not yet in the rootfs. Round 63 passed, so `sm6450` is now
+  the fold. The series now also carries:
+  - the USB GDSC in retention, in the GCC driver;
+  - the SM6450 `pmic-glink` compatible, in its binding;
+  - in the SoC tree, the controller as a role switch with its high-speed
+    port, the PHY's reference gate, and DMA coherence for the QUP
+    wrappers and USB;
+  - the board's `pmic-glink` node with its Type-C connector, in place of
+    `dr_mode = "peripheral"`.
+
+  There are still 47 patches, because the GDSC change is folded and the
+  binding is new. The package's own tree is byte-identical to
+  `fold18.dtb`, which round 63 booted. The PHY re-init stays a bring-up
+  patch, and `bringup-dwc3-qcom-phy-reinit.patch` comes out the same on
+  the new series. Branch `sm6450-r17` keeps the series as pkgrel 17
+  built it.
+- **The topic branches are rebuilt on pkgrel 18's series** — Done
+  2026-10-08. `sm6450-glink`, `-hsref`, `-coherent` and `-glinkref` are
+  folded. They are kept as `sm6450-pre-r18-*`, with the old `-usb3`,
+  `-wifi`, `-gpucc` and `-dwc3pm`. What remains WIP:
+  - `sm6450-usb3`: the combo PHY's binding, its driver entry and a
+    disabled node. The board commit that enabled the PHY is dropped,
+    because the port is USB 2.0 (see "The USB3 PHY is SM8350's"). The
+    board keeps the controller at high speed itself.
+  - `sm6450-wifi`: the WLAN node, unchanged;
+  - `sm6450-gpucc`: the graphics clock controller's node, unchanged;
+  - `sm6450-dwc3pm`: the PHY re-init that the bring-up patch is made
+    from.
+
+  `CHECK_DTBS=y` is clean on each, apart from the two known warnings,
+  and `dwc3-qcom.o` builds with W=1. On `sm6450-usb3` the controller's
+  SuperSpeed endpoint points at the disabled PHY. fw_devlink makes no
+  link to an unavailable supplier (`of_link_to_phandle`), so that cannot
+  hold the controller back.
 - **Round 24: the first round with commands of its own** — Verified
   2026-10-08, 14:06. pkgrel 10 on `regs.dtb`. The gadget appeared 16
   seconds after the reboot, and `tsh.py` ran all of `cmds-r24.sh` in the
@@ -3147,9 +3182,9 @@ as what it would have fixed.
     when it does. So a re-init on the transition into device, with no
     delay, would likely be enough. One round is a thin margin for that,
     40 ms, so pkgrel 17 keeps the 1.5 s.
-- **Round 63: the fold's own tree** — Running, from 18:50. Branch
-  `sm6450-fold` in `out/linux` is the series with what rounds 58 to 62
-  passed folded in:
+- **Round 63: the fold's own tree** — Verified 2026-10-08, 18:50 to
+  19:00. Branch `sm6450-fold` in `out/linux` was the series with what
+  rounds 58 to 62 passed folded in:
   - the USB GDSC's retention is in the GCC driver commit;
   - the `pmic-glink` binding follows the pd-mapper commit;
   - the role switch, the PHY reference gate and DMA coherence are in the
@@ -3157,13 +3192,36 @@ as what it would have fixed.
   - the board's `pmic-glink` node is in the board commit.
 
   Its tree, `out/milestone/fold18.dtb`, decompiles to round 62's tree
-  plus round 58's coherence. Those two have not booted together, so plan
-  za boots it on pkgrel 17 before it becomes pkgrel 18's series. Three
-  checks run:
-  - round 58's checks: the display, UFS, the touchscreen, Bluetooth, and
-    a 4 MiB file across the gadget in both directions;
-  - round 62's watcher;
-  - the file both ways again, once the link is back after the ADSP.
+  plus round 58's coherence. Those two had not booted together, so plan
+  za booted it on pkgrel 17 before it became pkgrel 18's series. It ran
+  round 58's checks, then round 62's watcher, then the file across the
+  gadget again. The transcript is `out/try-kernel/live-r63.txt`, and
+  `out/try-kernel/bootlog-card-20261008-190010.txt` is the card dump.
+  - **Verified:** round 58's checks pass on it. The panel's connector
+    was connected, vblanks came 16.77 ms apart, and the backlight read
+    400. UFS showed its three LUNs, `sda` with 97 partitions.
+    `edt-ft5x06` bound the touchscreen, and Bluetooth's QCA setup
+    completed. The 4 MiB file reached the phone intact, and the first
+    256 KiB read back over the shell matched.
+  - **Verified:** round 62's watcher gave round 62's results. The ADSP
+    was up at 192.82 s. UCSI reported device to none, none to none and
+    none to device at 193.50, 193.53 and 193.61 s. The re-init ran at
+    195.13 s, 1.52 s after the device report, and the link came back.
+    A runtime suspend and resume kept it, with GENERAL_CFG at 0x0d
+    afterwards.
+  - **Verified:** the file again, after the ADSP, the re-init and the
+    runtime suspend. Its hash on the phone and the read-back both
+    matched.
+  - **Verified:** the battery manager read the USB input online at
+    5.11 V and 175 mA, as SDP. Port 0 was a device and a sink.
+    `devices_deferred` was empty at the start and at the end. The CDSP
+    started by itself and asked for `cdsp.mbn`. No round pushes that
+    file, so the request failed with -2 and the CDSP stayed offline.
+  - **Verified on the host:** a disconnect at 18:54:24 and the next
+    enumeration at 18:54:27, which was the ADSP and the re-init. Then a
+    disconnect at 18:54:41 and the next enumeration at 18:54:49, which
+    was the runtime suspend. After the round, the boots that cycled
+    until the bootloader fell back are the same as round 62's.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -3932,8 +3990,8 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   pkgrel 15's series carries it.
 - **USB does not survive the ADSP.** `pmic_glink`, UCSI and the
   battery manager work: round 57 read the battery and the charger and saw
-  the Type-C port (see "Round 57"). The board's `pmic-glink` node is still
-  WIP on branch `sm6450-glink`. But in rounds 37, 52 and 57, booting the
+  the Type-C port (see "Round 57"). The board's `pmic-glink` node is in
+  pkgrel 18's series. But in rounds 37, 52 and 57, booting the
   ADSP took the USB link within 0.2 s, and nothing on our side has brought
   the host back. Until that changes, every round that boots the ADSP ends
   with the lease, unless something resets the PHY. Round 59 found that
@@ -3946,7 +4004,8 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   because it initialises the PHY each time it starts the peripheral.
   Round 61 also found that a runtime suspend collapses the USB GDSC and
   loses QSCRATCH. pkgrel 17 has a bring-up fix for the first and an
-  upstream one for the second, and round 62 showed both working: the
+  upstream one for the second, and so does pkgrel 18. Round 62 showed
+  both working, and round 63 again on the folded tree: the
   host has the gadget back 3.4 s after the ADSP comes up. What is still
   open is the upstream form of the first. Mainline dwc3 maps a `none`
   report to its default role, so none to device is not a mode change and
@@ -4063,7 +4122,9 @@ port boots" above. What is left starts from there.
    the controller and its PHY after the ADSP is up brings the host back,
    so a round can now boot the ADSP and keep its shell. Round 61 found
    the cause, the charger firmware leaving the PHY non-driving, and in
-   round 62 pkgrel 17's bring-up fix brought the host back by itself. Charging, audio, the modem and Wi-Fi all start here.
+   round 62 pkgrel 17's bring-up fix brought the host back by itself.
+   Round 63 ran it on the folded tree, which is pkgrel 18's own.
+   Charging, audio, the modem and Wi-Fi all start here.
 7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and

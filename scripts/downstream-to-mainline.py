@@ -9,13 +9,14 @@ careful transcription, which is exactly the kind of work that silently loses a
 register offset.
 
 So the conversion is a program, and the program has a proof. Qualcomm released
-`gcc-ravelin.c` and `dispcc-ravelin.c` downstream and both were upstreamed, as
-`gcc-sm4450.c` and `dispcc-sm4450.c`; all four files are on disk, so
-`--selftest` runs this transformer on each downstream half and diffs the
-result, and the dt-bindings header generated from it, against the upstream
-half. Every rule below was derived from those pairs or from the upstream code
-that makes a vendor field meaningless, rather than guessed, and the self-test
-is what keeps it honest when a rule is added.
+`gcc-ravelin.c`, `dispcc-ravelin.c` and `gpucc-ravelin.c` downstream and all
+three were upstreamed, as `gcc-sm4450.c`, `dispcc-sm4450.c` and
+`gpucc-sm4450.c`; all six files are on disk, so `--selftest` runs this
+transformer on each downstream half and diffs the result, and the dt-bindings
+header generated from it, against the upstream half. Every rule below was
+derived from those pairs or from the upstream code that makes a vendor field
+meaningless, rather than guessed, and the self-test is what keeps it honest
+when a rule is added.
 
     scripts/downstream-to-mainline.py --selftest
     scripts/downstream-to-mainline.py --soc parrot --target sm6450 \
@@ -27,18 +28,22 @@ is what keeps it honest when a rule is added.
         in/dispcc-parrot.c > out/dispcc-sm6450.c
     scripts/downstream-to-mainline.py --block disp_cc --target sm6450 \
         --header out/dispcc-sm6450.c > out/qcom,sm6450-dispcc.h
+    scripts/downstream-to-mainline.py --block gpu_cc --soc parrot \
+        --target sm6450 --gdsc-file gpucc-gdscs.json \
+        --always-on gpu_cc_cxo_aon_clk --always-on gpu_cc_demet_clk \
+        --driver-data in/gpucc-parrot.c > out/gpucc-sm6450.c
 
 --driver-data writes the probe the way controllers added since 6.17 are
 written (PLLs, always-on branches and register setup in qcom_cc_driver_data,
 the probe a single qcom_cc_probe()); the self-test pairs predate it, so it is
 a rearrangement applied last and checked by compiling.
 
-It deliberately does not invent anything. The self-test converges at about
-98% of upstream's gcc lines and 96% of its dispcc lines, and will not reach
-100%, because what is left is not rules - it is places where the person who
-upstreamed ravelin knew something the vendor driver does not say. They are
-worth listing, because the same questions come up for every SoC and each one
-needs an answer from the hardware rather than from this script:
+It deliberately does not invent anything. The self-test converges at about 98%
+of upstream's gcc lines, 96% of its dispcc lines and 94% of its gpucc lines,
+and will not reach 100%, because what is left is not rules - it is places where
+the person who upstreamed ravelin knew something the vendor driver does not
+say. They are worth listing, because the same questions come up for every SoC
+and each one needs an answer from the hardware rather than from this script:
 
 - `gcc_gpll10` is declared between gpll1 and gpll4 downstream and after gpll9
   upstream. Cosmetic, and moving a declaration automatically risks a
@@ -64,6 +69,23 @@ needs an answer from the hardware rather than from this script:
 - dispcc-sm4450 parents disp_cc_xo_clk_src on the active-only XO and halts
   disp_cc_mdss_mdp_lut1_clk without voting; ravelin does neither, but
   parrot's vendor driver already does both, so for SM6450 they carry over.
+- gpucc-sm4450 checks the halt bit of gpu_cc_cx_gfx3d_clk and
+  gpu_cc_cx_gfx3d_slv_clk where ravelin only waits (BRANCH_HALT_DELAY), and
+  gives gpu_cc_gx_cxo_clk ordinary branch ops where ravelin has the aon ones.
+  Parrot has none of the three clocks.
+- gpucc-sm4450 adds gpu_cc_gx_vsense_clk (0x90b0) and GPU_CC_CB_BCR (0x93a0),
+  neither of which ravelin has, and keeps GPU_CC_CB_CLK (0x93a4) on - that
+  one is passed in, with --always-on-reg, so the header numbering can be
+  checked past it.
+- gpucc-sm4450 drops gpu_cc_hlos1_vote_gpu_smmu_clk. The generator keeps it:
+  sm8450, sm8550 and sm8650 register it, their adreno_smmu nodes consume it,
+  and parrot's vendor SMMU, GMU and GPU nodes all do.
+- gpucc-sm4450 drops the vendor probe's `regmap_write(regmap, 0x9534, 0x0)`.
+  Nothing in the vendor tree says what 0x9534 is, and no upstream graphics
+  controller writes it; it is kept, for the reason given above.
+- The graphics reset map and its header numbering are in no order a rule
+  could produce (CB, CX, GX, FAST_HUB, ACD, ... in the array; ACD, CB, CX,
+  ..., XO, GX_ACD_IROOT, RBCPR in the header). The generator sorts both.
 
 The questions that used to be on this list and are now rules: the Lucid EVO
 `.cal_l` and `.user_ctl_val` (pll_configs), and the always-on pokes' order.
@@ -122,6 +144,10 @@ DISPCC_INCLUDES = """#include <linux/clk-provider.h>
 #include "reset.h"
 """
 
+# The graphics clock controller's is the display one's with the other header:
+# gpucc-sm4450.c includes exactly the same files in the same order.
+GPUCC_INCLUDES = DISPCC_INCLUDES.replace("-dispcc.h>", "-gpucc.h>")
+
 # Downstream names its board-file parents by string; upstream indexes them into
 # the clocks= property, so each distinct .fw_name becomes one DT_* enum member.
 # The order is upstream's: the two board clocks first, then the phy clocks in
@@ -140,6 +166,9 @@ DT_ORDER = [
 # group separated by a blank line as upstream writes it; a name in `dt_always`
 # is emitted even if no parent uses it, because the binding lists it - the
 # display controller's AHB clock is an input the driver never parents on.
+# Outside gcc, `dt` is the binding's whole clocks list, so a vendor parent
+# that is not in it cannot be expressed (drop_foreign_parents). `fold_case`
+# picks natkey's lower-case ordering for the header and clks[].
 BLOCKS = {
     "gcc": {
         "includes": UPSTREAM_INCLUDES,
@@ -160,6 +189,16 @@ BLOCKS = {
         "dt_always": ("bi_tcxo", "bi_tcxo_ao", "ahb_clk", "sleep_clk"),
         "always_on_comment": "Keep some clocks always enabled",
         "module_driver": True,
+    },
+    # The binding (qcom,sm8450-gpucc.yaml, shared by sm4450 and its
+    # siblings) takes exactly these three inputs, in this order.
+    "gpu_cc": {
+        "includes": GPUCC_INCLUDES,
+        "dt": [["bi_tcxo", "gpll0_out_main", "gpll0_out_main_div"]],
+        "dt_always": ("bi_tcxo", "gpll0_out_main", "gpll0_out_main_div"),
+        "always_on_comment": "Keep some clocks always enabled",
+        "module_driver": True,
+        "fold_case": True,
     },
 }
 
@@ -201,7 +240,7 @@ OPS_MAP = {
 }
 
 
-def natkey(name):
+def natkey(name, fold=False):
     """Upstream's ordering for a gcc dt-bindings header.
 
     It is a plain ASCII sort, with one exception. ASCII gets the awkward cases
@@ -212,12 +251,21 @@ def natkey(name):
     Nothing else needs the exception: sm8650, sm8550 and x1e80100 are plain
     ASCII throughout, and they have no GPLL10 to disagree about.
 
+    `fold` sorts the lower-case spelling instead - the clock's C name - which
+    puts '_' above the digits but below every letter. The graphics headers are
+    sorted that way: sm4450's has GPU_CC_CX_SNOC_DVM_CLK before
+    GPU_CC_CXO_AON_CLK, which upper-case ASCII would swap, and every upstream
+    gpucc header whose order tells the two apart (sdm845, sm8150, sm8350,
+    sm8450, sm8550, sm8650, sar2130p, sm4450) agrees, as do the vendor's.
+
     This is not only style. The numbering is positional: the driver's clks[]
     array is indexed by these values, so one name out of place shifts every
     clock after it, and the header and the array have to be sorted by the same
     key or a device tree consumer gets the wrong clock with no error anywhere.
     """
-    m = re.match(r"^((?:GCC_G|DISP_CC_)PLL)(\d+)(.*)$", name)
+    if fold:
+        name = name.lower()
+    m = re.match(r"^((?:GCC_G|DISP_CC_|GPU_CC_)PLL)(\d+)(.*)$", name, re.I)
     if m:
         return (m.group(1), int(m.group(2)), m.group(3))
     return (name, -1, "")
@@ -309,6 +357,30 @@ def rewrite_parents(text):
                   lambda m: "%s.index = DT_%s," % (m.group(1), m.group(2).upper()),
                   text)
     return text
+
+
+def drop_foreign_parents(text, pfx, block):
+    """Unparent a branch whose only parent is not one of the binding's inputs.
+
+    gpu_cc_cx_snoc_dvm_clk names gcc_gpu_snoc_dvm_gfx_clk as its parent by
+    string. The graphics binding takes three clocks and that is not one of
+    them, so there is no index to give it; gpucc-sm4450 (and sm8450, sm8550)
+    register the branch with no parent at all, and so does this. gcc is
+    exempt: its DT_ORDER is a known order, not the whole of any binding.
+    """
+    if pfx == "gcc":
+        return text
+    known = {n for g in block["dt"] for n in g}
+
+    def fix(m):
+        if m.group(2) in known:
+            return m.group(0)
+        print("note: dropped parent %s, which is not an input of the "
+              "binding" % m.group(2), file=sys.stderr)
+        return ""
+    return re.sub(r'(\n[ \t]*\.parent_data = &\((?:const )?struct '
+                  r'clk_parent_data\) ?\{\n[ \t]*\.fw_name = "(\w+)",\n'
+                  r'[ \t]*\},\n[ \t]*\.num_parents = 1,)(?=\n)', fix, text)
 
 
 def dt_enum(text, block):
@@ -596,6 +668,32 @@ def move_always_on(text, soc, pfx, names):
     return text, moved
 
 
+def branch_field(text, stmt):
+    """`regmap_update_bits(regmap, X.clkr.enable_reg, 0xf0, 0xf0)` -> upstream's.
+
+    The vendor sets a branch's sleep or wakeup delay by masking its CBCR by
+    hand; upstream has qcom_branch_set_sleep() and qcom_branch_set_wakeup()
+    for exactly those fields (CBCR_SLEEP is bits 7:4, CBCR_WAKEUP 11:8), and
+    gpucc-sm6115 and -sm6125 use them for the same GMU clock. The helpers
+    write the branch's halt_reg, so the rewrite is only made when that is the
+    register the vendor wrote.
+    """
+    m = re.search(r"regmap_update_bits\(regmap, (\w+)\.clkr\.enable_reg, "
+                  r"(0x[0-9a-fA-F]+), (0x[0-9a-fA-F]+)\);", stmt)
+    if not m:
+        return stmt
+    mask, val = int(m.group(2), 16), int(m.group(3), 16)
+    helper = {0xf0: ("sleep", 4), 0xf00: ("wakeup", 8)}.get(mask)
+    b = re.search(r"^static struct clk_branch %s = \{\n\t\.halt_reg = "
+                  r"(0x[0-9a-fA-F]+),\n.*?\t\t\.enable_reg = (0x[0-9a-fA-F]+),"
+                  % re.escape(m.group(1)), text, re.M | re.S)
+    if (not helper or val & ~mask or not b
+            or int(b.group(1), 16) != int(b.group(2), 16)):
+        return stmt
+    return stmt.replace(m.group(0), "qcom_branch_set_%s(regmap, %s, 0x%x);"
+                        % (helper[0], m.group(1), val >> helper[1]))
+
+
 def rewrite_probe(text, soc, target, keep_calls, pfx, block, moved=()):
     """Replace the vendor probe with upstream's, preserving the always-on pokes.
 
@@ -620,18 +718,23 @@ def rewrite_probe(text, soc, target, keep_calls, pfx, block, moved=()):
     lines += ["\tqcom_branch_set_clk_en(regmap, %s);" % r
               for r in pokes if r not in names]
 
-    # Any other regmap_update_bits is SoC-specific and kept verbatim, because
-    # we do not know what it does well enough to drop it - and whatever comment
-    # the vendor put above it comes along, since that comment is often the only
-    # record of what the bit means.
+    # Any other regmap_update_bits or regmap_write is SoC-specific and kept
+    # verbatim, because we do not know what it does well enough to drop it -
+    # and whatever comment the vendor put above it comes along, since that
+    # comment is often the only record of what the bit means. One that sits
+    # after the vendor's really_probe moves before upstream's, which is the
+    # last statement; registering clocks does not touch these registers.
     others = []
     for o in re.finditer(r"(?:[ \t]*/\*(?:[^*]|\*(?!/))*\*/\n)?"
-                         r"[ \t]*regmap_update_bits\(regmap, [^\n]*\);", body):
-        stmt = o.group(0)
+                         r"[ \t]*regmap_(?:update_bits|write)\(regmap, "
+                         r"[^\n]*\);", body):
+        stmt = branch_field(text, o.group(0))
         if "BIT(0), BIT(0)" in stmt:
             continue
-        others.append("\n".join(l.strip() and "\t" + l.strip() or l
-                                for l in stmt.split("\n")).lstrip("\t"))
+        # A block comment's continuation lines keep their one-space indent.
+        stmt = "\n".join(l.strip() and "\t" + " " * l.strip().startswith("*")
+                         + l.strip() or l for l in stmt.split("\n"))
+        others.append(stmt.lstrip("\t"))
     pll = re.findall(r"clk_lucid_evo_pll_configure\([^\n]*\);", body)
     dfs = "qcom_cc_register_rcg_dfs" in body
 
@@ -655,7 +758,10 @@ def rewrite_probe(text, soc, target, keep_calls, pfx, block, moved=()):
         new.append("")
     if lines:
         new += ["\t/* %s */" % block["always_on_comment"]] + lines + [""]
-    for o in others:
+    for i, o in enumerate(others):
+        # As anywhere in the kernel, a blank line goes before a block comment.
+        if i and o.count("\n") > 1:
+            new.append("")
         new.append("\t" + o)
     if others:
         new.append("")
@@ -671,6 +777,67 @@ def drop_sync_state(text, soc, pfx):
                   "\n", text)
 
 
+def fix_resets(text, pfx):
+    """Bring the reset map to upstream's names, and drop what is not a reset.
+
+    The vendor graphics header doubles the prefix on its resets
+    (GPUCC_GPU_CC_CX_BCR); upstream spells them GPU_CC_CX_BCR, like the
+    clocks. And GPUCC_GPU_CC_FREQUENCY_LIMITER_IRQ_CLEAR is not a block reset:
+    it is bit 0 of the GPU frequency limiter's interrupt-clear register,
+    handed to kgsl through the reset API (parrot-gpu.dtsi has reset-names =
+    "freq_limiter_irq_clear" next to a freq_limiter_irq interrupt). drm/msm
+    has no frequency limiter support and gpucc-sm4450 does not carry it, so
+    an *_IRQ_CLEAR entry goes.
+    """
+    tag = pfx.upper()
+    text = re.sub(r"\b%s_%s_" % (tag.replace("_", ""), tag), tag + "_", text)
+    return re.sub(r"\n\t\[\w+_IRQ_CLEAR\] = \{[^}\n]*\},", "", text)
+
+
+def gdsc_resets(text, soc, pfx, gdscs):
+    """Make sure every reset a GDSC pulses is in the reset map too.
+
+    A GDSC with SW_RESET asserts its .resets around power-on, by index into
+    the controller's reset map. Downstream lists them in the DT (`sw-reset`
+    phandles to syscon nodes), and the vendor driver's reset map need not
+    have them: ravelin's has neither GPU_CC_ACD_BCR nor
+    GPU_CC_GX_ACD_IROOT_BCR, which gpucc-sm4450 adds. A missing one is
+    inserted at its sorted place; one already there must agree on the offset.
+    """
+    m = re.search(r"(static const struct qcom_reset_map %s_%s_resets\[\] = "
+                  r"\{\n)(.*?)(\n\};)" % (pfx, soc), text, re.S)
+    want = [r for g in gdscs or () for r in g.get("resets", ())]
+    if not want:
+        return text
+    if not m:
+        sys.exit("a GDSC has resets but the driver has no reset map")
+    fold = BLOCKS[pfx].get("fold_case", False)
+    entries = m.group(2).split("\n")
+    have = {}
+    for e in entries:
+        r = re.match(r"\t\[(\w+)\] = \{ (0x[0-9a-fA-F]+)", e)
+        if r:
+            have[r.group(1)] = int(r.group(2), 16)
+    for r in want:
+        if r["name"] in have:
+            if have[r["name"]] != r["offset"]:
+                sys.exit("GDSC reset %s: 0x%x in the GDSC list, 0x%x in the "
+                         "reset map" % (r["name"], r["offset"], have[r["name"]]))
+            continue
+        line = "\t[%s] = { 0x%x }," % (r["name"], r["offset"])
+        at = len(entries)
+        for i, e in enumerate(entries):
+            d = re.match(r"\t\[(\w+)\]", e)
+            if d and natkey(d.group(1), fold) > natkey(r["name"], fold):
+                at = i
+                break
+        entries.insert(at, line)
+        have[r["name"]] = r["offset"]
+        print("note: added GDSC reset %s at 0x%x to the reset map"
+              % (r["name"], r["offset"]), file=sys.stderr)
+    return text[:m.start(2)] + "\n".join(entries) + text[m.end(2):]
+
+
 def add_gdscs(text, soc, target, gdscs, pfx):
     """Insert GDSC definitions and the desc entries that register them.
 
@@ -678,26 +845,53 @@ def add_gdscs(text, soc, target, gdscs, pfx):
     device tree as `qcom,gdsc` nodes with an absolute register address, and a
     separate regulator driver binds them. Upstream puts them in the clock
     driver, so the addresses come from the DT and are passed in here.
+
+    The fields a GDSC may need beyond its register are passed the same way,
+    and each maps from one property of the vendor node (the vendor's
+    gdsc-regulator.txt binding against upstream's gdsc.c):
+
+    - `gds_hw_ctrl`: `hw-ctrl-addr`, a separate status register;
+    - `clamp_io_ctrl`: `domain-addr`, with the CLAMP_IO flag;
+    - `resets`: `sw-reset`, with SW_RESET (and AON_RESET for
+      `qcom,reset-aon-logic`);
+    - `wait`: `qcom,clk-dis-wait-val` and friends, as (field, value) pairs.
+      Without it the gcc defaults below are written, which is what every
+      gcc and dispcc GDSC in the self-test pairs has;
+    - `pd_name` and `power_on`: upstream's choices, not the vendor's - the
+      GX GDSC of a GMU-based GPU is switched by the GMU, so the CPU side
+      only pretends (gdsc_gx_do_nothing_enable).
     """
     if not gdscs:
         return text
+    text = gdsc_resets(text, soc, pfx, gdscs)
     blocks = []
     for g in gdscs:
-        flags = " | ".join(g["flags"])
-        blocks.append(
-            "static struct gdsc %s = {\n"
-            "\t.gdscr = 0x%x,\n"
-            "\t.en_rest_wait_val = 0x2,\n"
-            "\t.en_few_wait_val = 0x2,\n"
-            "\t.clk_dis_wait_val = 0xf,\n"
-            "\t.pd = {\n"
-            '\t\t.name = "%s",\n'
-            "\t},\n"
-            "\t.pwrsts = PWRSTS_OFF_ON,\n"
-            "\t.flags = %s,\n"
-            "};\n" % (g["name"], g["offset"], g["name"], flags))
+        f = ["\t.gdscr = 0x%x," % g["offset"]]
+        for key in ("gds_hw_ctrl", "clamp_io_ctrl"):
+            if key in g:
+                f.append("\t.%s = 0x%x," % (key, g[key]))
+        wait = g.get("wait", [["en_rest_wait_val", "0x2"],
+                              ["en_few_wait_val", "0x2"],
+                              ["clk_dis_wait_val", "0xf"]])
+        f += ["\t.%s = %s," % (k, v) for k, v in wait]
+        if g.get("resets"):
+            lead = "\t.resets = (unsigned int []){ "
+            col = 8 + len(lead) - 1
+            pad = "\t" * (col // 8) + " " * (col % 8)
+            names = [r["name"] for r in g["resets"]]
+            f.append(lead + (",\n" + pad).join(names) + " },")
+            f.append("\t.reset_count = %d," % len(names))
+        f += ["\t.pd = {", '\t\t.name = "%s",' % g.get("pd_name", g["name"])]
+        if g.get("power_on"):
+            f.append("\t\t.power_on = %s," % g["power_on"])
+        f += ["\t},", "\t.pwrsts = %s," % g.get("pwrsts", "PWRSTS_OFF_ON"),
+              "\t.flags = %s," % " | ".join(g["flags"])]
+        blocks.append("static struct gdsc %s = {\n%s\n};\n"
+                      % (g["name"], "\n".join(f)))
     arr = ("static struct gdsc *%s_%s_gdscs[] = {\n%s\n};\n"
-           % (pfx, target, "\n".join("\t[%s] = &%s," % (g["index"], g["name"])
+           % (pfx, target, "\n".join("\t[%s] = &%s," % (g.get("index",
+                                                            g["name"].upper()),
+                                                     g["name"])
                                 for g in gdscs)))
     anchor = "static struct clk_regmap *%s_%s_clocks[] = {" % (pfx, soc)
     text = text.replace(anchor, "\n".join(blocks) + "\n" + anchor, 1)
@@ -736,7 +930,8 @@ def gen_header(driver_text, target, year, pfx="gcc"):
     gdscs = designators("*%s_%s_gdscs" % (pfx, target))
     always = re.findall(r"(?:qcom_branch_set_clk_en\(regmap, |\t)0x[0-9a-f]+"
                         r"\)?[;,] /\* (\w+) \*/", driver_text)
-    clocks = sorted(set(clks) | set(always), key=natkey)
+    fold = BLOCKS[pfx].get("fold_case", False)
+    clocks = sorted(set(clks) | set(always), key=lambda n: natkey(n, fold))
 
     tag = pfx.upper()
     guard = "_DT_BINDINGS_CLK_QCOM_%s_%s_H" % (tag, target.upper())
@@ -786,9 +981,10 @@ def sort_clocks_array(text, soc, pfx):
         elif l.strip():
             entries.append(l)
     keyed = []
+    fold = BLOCKS[pfx].get("fold_case", False)
     for l in entries:
         d = re.search(r"\[(\w+)\]", l)
-        keyed.append((natkey(d.group(1)) if d else (l, -1, ""), l))
+        keyed.append((natkey(d.group(1), fold) if d else (l, -1, ""), l))
     body = "\n".join(l for _, l in sorted(keyed, key=lambda kv: kv[0]))
     return text[:m.start()] + m.group(1) + body + m.group(3) + text[m.end():]
 
@@ -885,7 +1081,7 @@ def to_driver_data(text, pfx, target, use_rpm):
 
 def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
             copyright_year=None, block="gcc", always_on=(), driver_data=False,
-            use_rpm=False):
+            use_rpm=False, always_on_regs=()):
     pfx, prof = block, BLOCKS[block]
     text = src
 
@@ -900,10 +1096,12 @@ def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
     #    .flags line with a flag upstream keeps.
     text = "\n".join(l for l in text.split("\n")
                      if not any(d in l for d in DROP_LINES))
-    text = re.sub(r"CLK_DONT_HOLD_STATE \| |\| CLK_DONT_HOLD_STATE\b", "", text)
+    text = re.sub(r"CLK_DONT_HOLD_STATE \| | ?\| CLK_DONT_HOLD_STATE\b", "",
+                  text)
 
     # 3. Parent naming, ops, PLL configurations and the pipe mux - in that
     #    order, because the mux rewrite wants the DT_* names to already exist.
+    text = drop_foreign_parents(text, pfx, prof)
     text = rewrite_parents(text)
     text = dp_link(text)
     text = rewrite_ops(text)
@@ -917,8 +1115,13 @@ def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
 
     # 4. The driver's own boilerplate.
     text, moved = move_always_on(text, soc, pfx, always_on)
+    # A register the vendor never names at all - gpucc-sm4450 keeps its
+    # GPU_CC_CB_CLK on, which ravelin neither registers nor pokes - is the
+    # same reviewer's call, given by address and name (--always-on-reg).
+    moved += [("0x%x" % r, n) for r, n in always_on_regs]
     text, _ = rewrite_probe(text, soc, target, keep_calls, pfx, prof, moved)
     text = drop_sync_state(text, soc, pfx)
+    text = fix_resets(text, pfx)
     text = add_gdscs(text, soc, target, gdscs, pfx)
     text = sort_clocks_array(text, soc, pfx)
     if prof["module_driver"]:
@@ -936,14 +1139,16 @@ def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
 
     # 5. Names. `qcom,gcc-parrot.h` is handled by the include rewrite below, so
     #    only the identifiers and the compatible are renamed here. The display
-    #    controller's driver name and description are spelled `dispcc` upstream
-    #    where the vendor writes `disp_cc`.
+    #    and graphics controllers' driver names and descriptions are spelled
+    #    `dispcc` and `gpucc` upstream where the vendor writes `disp_cc` and
+    #    `gpu_cc`.
     text = text.replace(soc, target).replace(soc.upper(), target.upper())
-    if pfx == "disp_cc":
-        text = text.replace('.name = "disp_cc-%s"' % target,
-                            '.name = "dispcc-%s"' % target)
-        text = text.replace('MODULE_DESCRIPTION("QTI DISP_CC ',
-                            'MODULE_DESCRIPTION("QTI DISPCC ')
+    if pfx != "gcc":
+        short = pfx.replace("_", "")
+        text = text.replace('.name = "%s-%s"' % (pfx, target),
+                            '.name = "%s-%s"' % (short, target))
+        text = text.replace('MODULE_DESCRIPTION("QTI %s ' % pfx.upper(),
+                            'MODULE_DESCRIPTION("QTI %s ' % short.upper())
 
     # 6. The include block, and the DT_* enum that replaces the fw_names. A
     #    register #define the vendor put above the parent enum (DISP_CC_MISC_CMD)
@@ -964,8 +1169,8 @@ def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
     # 7. Spelling.
     text = spaced_casts(text)
     text = lower_hex(text)
-    text = re.sub(r"/\* (\d+)MHz Configuration \*/", r"/* \1.0 MHz Configuration */",
-                  text)
+    text = re.sub(r"/\* (\d+)MHz [Cc]onfiguration \*/",
+                  r"/* \1.0 MHz Configuration */", text)
     if copyright_year:
         text = re.sub(r"Copyright \(c\) [\d\-, ]+, Qualcomm",
                       "Copyright (c) %s, Qualcomm" % copyright_year, text, count=1)
@@ -973,9 +1178,10 @@ def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
     return text
 
 
-def gdsc(name, offset, flags, index=None):
-    return {"name": name, "offset": offset, "flags": flags,
-            "index": index or name.upper()}
+def gdsc(name, offset, flags, index=None, **extra):
+    """One GDSC; `extra` takes add_gdscs' optional fields."""
+    return dict({"name": name, "offset": offset, "flags": flags,
+                 "index": index or name.upper()}, **extra)
 
 
 # The pairs on disk: a vendor driver, its upstream counterpart, and what the
@@ -1010,6 +1216,25 @@ PAIRS = [
                  ["HW_CTRL", "POLL_CFG_GDSCR", "RETAIN_FF_ENABLE"]),
         ],
         "always_on": ["disp_cc_sleep_clk"],
+        "copyright_year": "2024",
+    }),
+    ("gpucc-ravelin.c", "gpucc-sm4450.c", "qcom,sm4450-gpucc.h", {
+        "block": "gpu_cc",
+        "gdscs": [
+            gdsc("gpu_cc_cx_gdsc", 0x9108, ["VOTABLE", "RETAIN_FF_ENABLE"],
+                 gds_hw_ctrl=0x953c, wait=[["clk_dis_wait_val", "8"]],
+                 pd_name="gpu_cx_gdsc"),
+            gdsc("gpu_cc_gx_gdsc", 0x905c,
+                 ["CLAMP_IO", "AON_RESET", "SW_RESET", "POLL_CFG_GDSCR"],
+                 clamp_io_ctrl=0x9504, wait=[],
+                 resets=[{"name": "GPU_CC_GX_BCR", "offset": 0x9058},
+                         {"name": "GPU_CC_ACD_BCR", "offset": 0x9358},
+                         {"name": "GPU_CC_GX_ACD_IROOT_BCR", "offset": 0x958c}],
+                 pd_name="gpu_gx_gdsc",
+                 power_on="gdsc_gx_do_nothing_enable"),
+        ],
+        "always_on": ["gpu_cc_cxo_aon_clk", "gpu_cc_demet_clk"],
+        "always_on_regs": [(0x93a4, "GPU_CC_CB_CLK")],
         "copyright_year": "2024",
     }),
 ]
@@ -1081,6 +1306,10 @@ def main():
     ap.add_argument("--always-on", action="append", default=[],
                     help="a branch to poke always-on in probe instead of "
                          "registering it")
+    ap.add_argument("--always-on-reg", action="append", default=[],
+                    metavar="OFFSET=NAME",
+                    help="a branch the vendor driver does not have, to poke "
+                         "always-on in probe, e.g. 0x93a4=GPU_CC_CB_CLK")
     ap.add_argument("--driver-data", action="store_true",
                     help="emit the qcom_cc_driver_data probe of newer drivers")
     ap.add_argument("--use-rpm", action="store_true",
@@ -1112,6 +1341,9 @@ def main():
                              gdscs=gdscs, keep_calls=args.keep_call,
                              copyright_year=args.year, block=args.block,
                              always_on=args.always_on,
+                             always_on_regs=[
+                                 (int(r.split("=")[0], 16), r.split("=")[1])
+                                 for r in args.always_on_reg],
                              driver_data=args.driver_data,
                              use_rpm=args.use_rpm))
     return 0

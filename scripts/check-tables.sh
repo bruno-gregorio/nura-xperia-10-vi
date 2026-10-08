@@ -22,6 +22,10 @@
 # Exits nonzero if any shared symbol disagrees on its offset.
 set -eu
 
+# join and comm need their input sorted in the order they compare in, and
+# sort, join and comm only agree on that order when the locale is pinned.
+export LC_ALL=C
+
 MODE=${1:-}
 REF=${2:-}
 CAND=${3:-}

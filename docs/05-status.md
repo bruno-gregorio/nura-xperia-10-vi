@@ -1970,17 +1970,28 @@ as what it would have fixed.
   phandle numbers, and nothing else. It is `out/milestone/regs.dtb`. The
   commit that made the PMR735A's SID overridable existed only for this
   board, so it leaves the series.
-- **The USB watchdog did not reset round 22, and nothing says why** —
-  Verified that it did not. The cause is unknown. It should have reset at
-  about 360 seconds: 13 to `/init`, 150 asleep, 196 for the mark at
+- **The USB watchdog did not reset round 22** — Verified. It should have
+  reset at about 360 seconds: 13 to `/init`, 150 asleep, 196 for the mark at
   `debug_shell`, and 1 for the rung. Its first act on the way out is sysrq
   `w`, which logs "sysrq: Show Blocked State", and record 600 has no such
-  line; its dmesg ends at 31.9 seconds. The watchdog in round 22's image,
-  rebuilt the same way into the scratchpad, is intact and is the code that
-  was tested. Nothing in pmOS's init or `debug_shell` signals it, as far as
-  reading them goes. The record could not say more: it listed only tasks in
-  `D` state, and the watchdog, if it was alive at all, would have been in
-  `S`.
+  line; its dmesg ends at 31.9 seconds.
+- **It died at birth, on every boot since 22859f2** — Verified 2026-10-08,
+  under pmport's busybox in a mount namespace with an empty `/dev`. A
+  non-interactive ash points a background job's stdin at `/dev/null` as it
+  forks it, and when that open fails the child dies with "can't open
+  '/dev/null'" before running a line of its body. 22859f2, on 2026-10-05,
+  moved the watchdog to the top of `/init`, where nothing has mounted
+  `/dev` yet and the only node there is the kernel's `/dev/console`. So
+  from then on the watchdog never ran, rounds 19 to 22 included, and the
+  error went only to the serial console. The log hook forks after
+  `mount_proc_sys_dev`, which is why it lived. The same test without
+  `/dev/null` kills the job; with it, the job runs.
+- **The watchdog makes its own `/dev/null`** — Done 2026-10-08, in
+  `scripts/bootlog.py`. One `mknod` before the fork, if the node is
+  missing. devtmpfs hides it when `mount_proc_sys_dev` mounts over `/dev`,
+  and the descriptor the job already holds keeps working. Checked in a
+  rebuilt image, and in the namespace with `touch` standing in for
+  `mknod`, which a user namespace does not allow. Not yet run on the device.
 - **The log hook now backs the watchdog up, and both say what they did** —
   Done 2026-10-08, in `scripts/bootlog.py`. Tested under pmport's busybox
   1.37 against a fake card and sysfs. Not yet run on the device.
@@ -2008,7 +2019,11 @@ as what it would have fixed.
   which it adopts. It then runs round 23: the real init on `regs.dtb`,
   `MARKS="4 8"`, with `nokaslr hardlockup_panic=1 softlockup_panic=1`.
   The device probe was dropped, because round 22's card record already
-  answers what it asked.
+  answers what it asked. Round 23 is the first round since 2026-10-05 with
+  a USB watchdog that runs, and the hook's backup behind it.
+- **pkgrel 10 is installed** — Verified 2026-10-08, 08:51: `apk list -I`
+  says `-r10`, and the DTB in the fresh `vendor_boot.img` is byte-identical
+  to `regs.dtb`.
 
 ## The boot images
 

@@ -1117,6 +1117,17 @@ USB_WATCHDOG = """
 # are mainline's; on the downstream kernel the first rungs never match and
 # the ladder starts at the UDC. bootlog.py markdecode reads both numbers back
 # out of a round's total.
+#
+# Before any of that, /dev/null. A non-interactive ash points a background
+# job's stdin at /dev/null as it forks it, and when that open fails the child
+# dies with "can't open '/dev/null'" before running a line of its body. At
+# this point nothing has mounted /dev: the only node there is the kernel's
+# own /dev/console. So from 22859f2 on, which moved this block up here, the
+# watchdog died at birth on every boot, rounds 19 to 22 included, and said so
+# only on the serial console, which nobody reads. The node made here is
+# hidden, not removed, when mount_proc_sys_dev mounts devtmpfs over /dev, and
+# the descriptor the job already holds keeps working.
+[ -e /dev/null ] || /bin/busybox mknod -m 666 /dev/null c 1 3
 (
 	# Everything it does from here on goes into /pmwd.log as well, which
 	# the log hook copies into every record. Round 22 is why: this never

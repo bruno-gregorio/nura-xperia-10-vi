@@ -417,7 +417,19 @@ cmd_try() {
 	say "making slot $spare active (this resets its retry counter)"
 	fastboot --set-active="$spare"
 	echo "   slot-retry-count:$spare is now $(getvar "slot-retry-count:$spare")"
-	fastboot reboot
+	# Not a bare reboot under set -e: the phone can drop off the bus before
+	# fastboot hears its OKAY, and fastboot then reports a failure for a
+	# reboot that happened. settle_slot has had the same guard since round
+	# 20. Round 56 stopped here on it on 2026-10-08, with our kernel
+	# already booting and nothing watching it. A phone still in fastboot a
+	# few seconds later did not reboot, so it is asked once more.
+	if ! fastboot reboot; then
+		say "fastboot reboot reported an error; checking the phone"
+		sleep 5
+		if fastboot devices | grep -q .; then
+			fastboot reboot || die "fastboot reboot failed twice"
+		fi
+	fi
 
 	say "waiting. our kernel answering on slot _$spare is a win;"
 	echo "   slot _$cur answering means it crashed and fell back."

@@ -2470,6 +2470,38 @@ as what it would have fixed.
 
   `CHECK_DTBS=y` is clean on each, apart from the warning for the
   backported FT3519 binding. `kernel/wip/` has each branch's export.
+- **Pkgrel 16 folds the rest of what has run** — Done 2026-10-08, built
+  at 16:48 and in the rootfs since plan t put it there at 16:52. The
+  series now also carries:
+  - UFS with its PHY and crypto engine, from round 49;
+  - QUP wrapper 1 with I2C9 and the touchscreen, from round 49;
+  - UART11 and the WCN3991, from round 53;
+  - the display clock controller's node, the display subsystem and the
+    panel with its active-low vddio switch, from round 51.
+
+  Round 54 ran all of them together on pkgrel 15 first. The package's own
+  tree decompiles to exactly what round 54 booted. The display bindings
+  and drivers now come before the device tree commits, like the rest.
+  The package also builds `pmic_glink`, its altmode client, `typec_ucsi`,
+  `ucsi_glink` and `qcom_battmgr` as modules, for round 56. There are
+  still 46 patches. Branch `sm6450-r15` keeps the series as pkgrel 15
+  built it.
+- **The topic branches are rebuilt on pkgrel 16's series** — Done
+  2026-10-08. `sm6450-next`, `-bt` and `-display` are folded, and are
+  kept as `sm6450-pre-r16-*`, with `sm6450-x`, the branch that stacked
+  them for round 54. `sm6450-fold` is gone, because it is `sm6450` now.
+  What remains WIP:
+  - `sm6450-glink`, new: the SM6450 `pmic-glink` compatible, the
+    controller as a role switch with its high-speed port, and the
+    board's `pmic-glink` node with its one Type-C connector, in place
+    of `dr_mode = "peripheral"`;
+  - `sm6450-usb3`: the combo PHY's binding, driver entry and nodes;
+  - `sm6450-wifi`: the WLAN node;
+  - `sm6450-gpucc`: the graphics clock controller's node.
+
+  `CHECK_DTBS=y` is clean on each, apart from two warnings, for the
+  FT3519 and the SOFEF01-M panel. Both bindings are backports that the
+  aport applies, and `out/kbuild` builds the series without them.
 - **Round 24: the first round with commands of its own** — Verified
   2026-10-08, 14:06. pkgrel 10 on `regs.dtb`. The gadget appeared 16
   seconds after the reboot, and `tsh.py` ran all of `cmds-r24.sh` in the
@@ -2806,17 +2838,100 @@ as what it would have fixed.
   the vblanks came 16.7 ms apart, the DCS read returned 400, nothing
   logged an error and `devices_deferred` was empty. So the display WIP is
   ready to fold. The transcript is `out/try-kernel/live-r51.txt`.
-- **Plan r's other two rounds** — Queued 2026-10-08, after round 51.
-  - Round 53 boots `bt-r15.dtb`, from branch `sm6450-bt` rebuilt on
-    pkgrel 15's series, with UART11's interconnect paths. `cmds-r53.sh`
-    is `cmds-r44.sh` with pkgrel 15's modules.
-  - Round 52, last because it may cost the link, boots the ADSP on the
-    package's own tree. `out/tools/adsp-watch.sh`, started detached, loads
-    the pd-mapper before the ADSP and writes to the kernel log, for the
-    card to carry: the UDC's state, dwc3's run/stop and link-state
-    registers, and its own two attempts to bring the host back, a
-    pull-up toggle at 30 s and a gadget rebind at 60 s. It reads the
-    registers only while the controller is runtime-active.
+- **Round 53: Bluetooth holds on pkgrel 15** — Verified 2026-10-08,
+  16:24. pkgrel 15 on `bt-r15.dtb`, from branch `sm6450-bt` rebuilt on
+  pkgrel 15's series, with UART11's interconnect paths. The version
+  reply was a WCN3991's again, `crbtfw32.tlv` and `crnv32u.bin`
+  downloaded, and the setup completed. The transcript is
+  `out/try-kernel/live-r53.txt`.
+- **Round 52: the ADSP again, and the gadget goes the same way** —
+  Verified 2026-10-08, 16:34. pkgrel 15 on its own tree, with
+  `out/tools/adsp-watch.sh` loading the remoteproc modules, the
+  pd-mapper first, and logging to the kernel log. The card's first
+  attempt carries it all; `out/try-kernel/bootlog-card-20261008-164104.txt`
+  is the dump.
+  - **Verified:** "remote processor adsp is now up" at 125.08 s. Within
+    90 ms dwc3's link state went from On to Early Suspend (5), then
+    Suspend (3), with run/stop still set. The UDC fell to `default` at
+    125.86 s. It opened six glink channels: `IPCRTR`,
+    `PMIC_LOGS_ADSP_APPS`, `PMIC_RTR_ADSP_APPS`, `adsp_apps`,
+    `fastrpcglink-apps-dsp` and `rpmsg_ctrl`.
+  - **Verified:** neither attempt to bring the host back did anything.
+    A pull-up toggle through `soft_connect` at 158 s and a gadget rebind
+    at 190 s both returned 0, and the link stayed in Suspend.
+  - **Verified:** the hold lapsed by itself. "hold lapsed at 241: gadget
+    last configured at 151, /pmhold touched 117 s ago". The phone reset,
+    fell back to Android, and the queue read the card with no one at
+    the phone. This is the first time the lease has run on the device.
+  - **Reasoned:** the SOF number in DSTS bits 17:3 kept advancing for
+    0.7 s after the link state left On, by about 1040 microframes per
+    130 ms poll. It froze when the UDC fell to `default`. So frames kept
+    arriving for that 0.7 s, and then the host was gone. Round 37's gap
+    was also 0.7 s.
+  - **Guess:** the charger firmware runs BC1.2 detection on D+ and D-
+    as it starts, and takes the lines from the PHY to do it. Or it
+    changes the CC terminations, and the host drops VBUS. Either way it
+    does not hand the port back without a peer.
+  - **Not shown:** whether the pd-mapper matters. Round 52 loaded it,
+    but not `qrtr-smd`, QRTR's transport over the `IPCRTR` channel, so
+    nothing from the ADSP could reach it.
+
+  Plan r's summary line says "no ADSP". That line is wrong: the plan
+  read only `log-r52.txt`, which holds the card's last attempt, and the
+  ADSP came up in the first. Plan t's summary for round 56 makes the
+  same mistake, so its card dump has to be read directly.
+- **Round 54: the fold runs as a whole on pkgrel 15** — Verified
+  2026-10-08, 16:44. pkgrel 15 on `fold16.dtb`, branch `sm6450-x`, which
+  stacked the WIP of rounds 49, 51 and 53 the way pkgrel 16 folds it.
+  Everything passed together:
+  - the vblanks came 16.78 ms apart;
+  - the backlight took 400 and read it back;
+  - UFS linked at HS-G3 on two lanes, with `sda`, `sdb` and `sdc`;
+  - the touchscreen bound to `edt_ft5x06`;
+  - the Bluetooth setup completed.
+
+  The transcript is `out/try-kernel/live-r54.txt`.
+- **Round 55: pkgrel 16 on its own tree** — Verified 2026-10-08, 16:54,
+  with round 54's checks. Everything passed again:
+  - the vblanks came 16.72 ms apart;
+  - the backlight read back 400;
+  - `sda`, `sdb` and `sdc` were there;
+  - the touchscreen bound;
+  - the Bluetooth setup completed;
+  - `devices_deferred` was empty, and no driver logged an error.
+
+  The UFS gear read HS-G1 this time, on an idle link. The transcript is
+  `out/try-kernel/live-r55.txt`.
+- **The panel lights** — Owner-reported 2026-10-08, about 17:00. The
+  owner saw a terminal and an on-screen keyboard on the phone: the pmOS
+  debug shell's, drawn through drm/msm and the SOFEF01-M driver. It was
+  pkgrel 16, during round 55 or the boots after it, which all carry the
+  same display nodes. This is the first time anyone has seen the screen
+  on the mainline kernel.
+- **Round 56: `pmic_glink` with the ADSP** — Did not run, 2026-10-08,
+  16:59. It was plan t's last round, gated on round 55 reaching the
+  shell, which it did. The flash went through. Then `fastboot reboot`
+  reported "Status read failed (No such device)" for a reboot that had
+  happened, and `try-kernel.sh`, under `set -e`, stopped there. So its
+  kernel booted with nothing running its commands. The queue's
+  `bring_back` resets such a phone over the gadget until stock answers,
+  with no one at the phone. `try-kernel.sh` now checks whether the phone
+  is still in fastboot after that error, as `settle_slot` has done since
+  round 20. Plan u runs the same round as round 57, with `cmds-r56.sh`,
+  once plan t's queue exits. The round boots `glink-r16.dtb`: the
+  package's tree with branch `sm6450-glink`'s three commits. `out/tools/glink-watch.sh` is round 52's
+  watcher with four changes:
+  - it loads `qrtr-smd`;
+  - it loads `pmic_glink`, its altmode client, `ucsi_glink` and
+    `qcom_battmgr` before the ADSP, with dynamic debug on for the three
+    that talk to it;
+  - it adds the role switch's role, the Type-C port's roles and partner,
+    and the power supplies' state to what it logs;
+  - it has one more recovery step: at 45 s it sets the role back to
+    `device`, if UCSI has set anything else.
+
+  It reads named power supply attributes only. It never reads the
+  battery's `serial_number`, nor any `uevent`, which carries it.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -3203,7 +3318,10 @@ as what it would have fixed.
   `/dev/fb0` cannot appear. `deviceinfo_no_framebuffer="true"` sets
   `nosplash=y` inside the initramfs, which turns both `setup_framebuffer`'s
   ten-second poll and the splash into no-ops. The console here is a serial
-  port, so a framebuffer splash had nowhere to go in any case.
+  port, so a framebuffer splash had nowhere to go in any case. That
+  holds for the downstream kernel only: since pkgrel 16 the mainline
+  kernel drives the panel, and the debug shell draws on it (see "The
+  panel lights").
 - **The watchdog was armed too late to catch this** — Verified by reading the
   patched image, and corrected. It went in after `mount_proc_sys_dev`, which
   is itself somewhere stage 1 can die: that function modprobes `libcomposite`
@@ -3472,10 +3590,11 @@ for it. This is now a two-minute step instead of an eleven-minute one.
 
 - **Display.** On the mainline kernel it is in-tree drivers only: drm/msm's
   MDSS, DPU, DSI and DSI PHY, and the upstream Samsung SOFEF01-M panel
-  driver. The drivers are in the package; the device tree nodes are WIP
-  on branch `sm6450-display`. Round 32 bound all of it, and since round 48
-  the panel sends TE and answers a read, on pkgrel 15's tree too in round
-  51. Nobody has seen it light. The panel driver is a backport of a
+  driver. Drivers and nodes are all in pkgrel 16's series. Round 32
+  bound all of it, and since round 48 the panel sends TE and answers a
+  read, on pkgrel 16's own tree too in round 55. It lights: the owner
+  saw the debug shell's terminal and keyboard on it (see "The panel
+  lights"). The panel driver is a backport of a
   posting that is not merged yet. The downstream kernel's panel driver is in the
   out-of-tree `sm6450-modules` repository, which this port does not build
   and the mainline kernel will never use - not depending on Android vendor
@@ -3495,14 +3614,14 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   anywhere.
 - **Modem, Wi-Fi, audio, camera.** On mainline, the four remote
   processors they run on are in pkgrel 15's series. Round 34 probed
-  them, and round 37 booted the ADSP, which took the USB link with it
-  (see "Round 37"). Of what sits above them, only the WLAN node is
+  them, and rounds 37 and 52 booted the ADSP, which took the USB link
+  with it both times (see "Round 52"). Of what sits above them, only the WLAN node is
   written. All of them need firmware from the stock partitions, which is
   not redistributable and is not packaged here. Plan n read it from
   `modem_b` into `out/firmware/`, which git ignores, and rounds push it
   into the shell. Bluetooth is the exception: it needs only
-  linux-firmware's files, and round 44 completed its setup (see "Round
-  44").
+  linux-firmware's files, round 44 completed its setup (see "Round
+  44"), and its nodes are in pkgrel 16's series.
 - **No `soc-qcom-sm6450` package.** pmOS has no SoC package for this chip; the
   device package carries everything.
 - **`pmb install` cannot finish inside a rootless container**, because
@@ -3579,11 +3698,12 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   which 6.18 handles in `dwc3-qcom-legacy.c`; new SoCs upstream use the
   flattened `qcom,snps-dwc3` form. Round 25 ran the flattened node, and
   pkgrel 15's series carries it.
-- **No `pmic_glink`.** The ADSP's charger and Type-C firmware has no peer
-  on our side: pkgrel 15 builds neither `QCOM_PMIC_GLINK` nor
-  `TYPEC_UCSI`, and the board has no `pmic-glink` node. Without one there
-  is no battery reading, no charger control and no orientation, and round
-  37 suggests no USB once the ADSP runs.
+- **No `pmic_glink` that has run.** The ADSP's charger and Type-C
+  firmware has no peer on our side yet. Pkgrel 16 builds `pmic_glink`,
+  `ucsi_glink` and `qcom_battmgr`, and the board's `pmic-glink` node is
+  WIP on branch `sm6450-glink`. Round 56 runs both. Without them there is
+  no battery reading, no charger control and no orientation. Rounds 37
+  and 52 suggest there is no USB either, once the ADSP runs.
 
 ## Next steps, in order
 
@@ -3675,9 +3795,10 @@ port boots" above. What is left starts from there.
    panel answering nothing. Round 48 found why: the panel's 1.8 V logic
    supply was switched with its GPIO the wrong way round. Fixed, the
    panel sends TE and answers a read, and round 51 has the same on
-   pkgrel 15's tree (see "Round 48"). What is left: someone looking at
-   the phone during a display round, to see it light; the WIP nodes
-   folded into the series in pkgrel 16; the panel differences taken to
+   pkgrel 15's tree (see "Round 48"). The nodes are in pkgrel 16's
+   series, and round 55 has the same on its own tree. The panel lights:
+   the owner saw the debug shell on it. What is left: touch tested on
+   the screen; the panel differences taken to
    Marijn Suijten; and `deviceinfo_no_framebuffer` retired. Building Sony's out-of-tree `sm6450-modules`
    was the plan when the downstream kernel was the destination; it is not the
    plan now, because the mainline kernel exists to stop depending on Android
@@ -3685,12 +3806,13 @@ port boots" above. What is left starts from there.
    kernel, and only if that ever needs a screen.
 6. **The remote processors, then their firmware.** Round 34 probed all
    four without firmware, plan n collected the firmware partition, and
-   round 37 booted the ADSP, which took the USB link 0.7 s later (see
-   "Round 37"). Round 52 boots it again with the pd-mapper and a watcher
-   that logs through the card. The guess is that the ADSP needs its peer
-   on our side: `pmic_glink` with UCSI and a role switch to dwc3, as on
-   upstream's SM8550 boards, which pkgrel 16 is to build. Charging, audio,
-   the modem and Wi-Fi all start there.
+   rounds 37 and 52 booted the ADSP. Both times it took the USB link
+   0.7 s later (see "Round 52"). Round 52 also showed that the lease ends
+   such a round without anyone at the phone. The guess is that the ADSP
+   needs its peer on our side: `pmic_glink` with UCSI and a role switch
+   to dwc3, as on upstream's SM8550 boards, with `qrtr-smd` under it.
+   Pkgrel 16 builds them, and round 56 runs them. Charging, audio, the
+   modem and Wi-Fi all start there.
 7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and

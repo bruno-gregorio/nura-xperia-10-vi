@@ -2991,23 +2991,64 @@ as what it would have fixed.
   backlight read back 400, `sda` to `sdc` were there, the touchscreen
   bound and the Bluetooth setup completed. No context fault was logged.
   The transcript is `out/try-kernel/live-r58.txt`.
-- **Round 59: the ADSP with the gadget unbound** — Planned. Plan w runs
-  it on pkgrel 16's own tree, with no `pmic_glink` and no role switch, so
-  that only the ADSP changes. `out/tools/order-watch.sh` runs detached
-  and logs to the kernel log. It stops at the first phase in which a
-  host configures the gadget again:
-  0. a gadget unbind and rebind with no ADSP, as a control. Nothing has
-     tested that yet, and if the host does not come back from it, the
-     failed recoveries of rounds 52 and 57 say nothing about the ADSP;
-  1. the ADSP booted with the gadget unbound, so nothing holds D+ up,
-     and the gadget bound again 20 s after the ADSP is up;
+- **Round 59: a re-probe of the controller brings the host back** —
+  Verified 2026-10-08, 17:35 to 17:39. pkgrel 16's own tree, with no
+  `pmic_glink` and no role switch. `out/tools/order-watch.sh` ran
+  detached and logged to the kernel log, and it stopped at the first
+  phase in which a host configured the gadget again:
+  0. a gadget unbind and rebind with no ADSP, as a control. Nothing had
+     tested that before, and without it the failed recoveries of rounds 52
+     and 57 said nothing about the ADSP;
+  1. the ADSP booted with the gadget unbound, so nothing held D+ up, and
+     the gadget bound again 20 s after the ADSP was up;
   2. the controller's driver unbound and bound, which takes the PHY
      through its reset and init again;
   3. the ADSP stopped, and the gadget bound once more.
 
-  It also logs the PHY's three supplies, and the glue's `HS_PHY_CTRL`
-  with the controller's registers, which it reads only while the driver
-  is bound and the controller is runtime active.
+  The card's first attempt carries it;
+  `out/try-kernel/bootlog-card-20261008-174416.txt` is the dump.
+  - **Verified:** the control works. The host configured the gadget 1 s
+    after the rebind, at 131.9 s.
+  - **Verified:** the order is not it. The ADSP came up at 134.39 s with
+    the gadget unbound. Bound again at 155.36 s, the gadget got no host:
+    the UDC stayed at `default` and the link in Suspend, as in round 57.
+  - **Verified:** the re-probe works. The driver unbound at 186.2 s and
+    bound at 188.2 s. The gadget, bound at 191.3 s, was configured at
+    192.4 s with the ADSP still running. The link stayed On, the live
+    shell came back on the same connection, and the rest of the commands
+    ran. The host's log has the same story: an enumeration at 17:35:38
+    for phase 0, nothing for phase 1, one at 17:36:38 for phase 2, and a
+    disconnect at 17:39:30 when the watchdog reset the phone. Phase 3 did
+    not run.
+  - **Verified:** the PHY's three supplies read the same before and after
+    the ADSP: L5 at 880 mV, L23 at 1.8 V and L25 at 3.072 V, all enabled.
+  - **Verified:** `GCC_EUSB3_0_CLKREF_EN` was off at 361 s, while the link
+    had been up since 192 s. The card logs of rounds 37, 52 and 57, the
+    three earlier rounds that booted the ADSP, also end with it off.
+    Every round without the ADSP has it on, up to 1138 s of uptime.
+    Something outside Linux clears it as the ADSP comes up, since nothing
+    in Linux holds it and `clk_ignore_unused` is set. The stock tree hands
+    that gate to this PHY as its `ref_clk`. Yet the PHY worked with it off
+    once its init had run again.
+  - **Reasoned:** whatever the ADSP does at start-up leaves the PHY in a
+    state that a pull-up toggle and a gadget rebind cannot clear, and that
+    the PHY's reset and init do clear. Its supplies are untouched, and the
+    reference gate is not needed after a re-init.
+  - **Guess:** the charger firmware runs its BC1.2 detection through the
+    PHY's own registers, as downstream's PHY driver lets a charger take
+    D+ and D- over, and leaves overrides set.
+
+  The transcript is `out/try-kernel/live-r59.txt`.
+- **Round 60: the PHY holds its reference gate** — Planned. Plan x boots
+  `out/milestone/hsref-r16.dtb`: the package's tree with branch
+  `sm6450-hsref`'s one commit, which gives the PHY
+  `GCC_EUSB3_0_CLKREF_EN` as its `ref` clock instead of CXO, as stock
+  does. `out/tools/hsref-watch.sh` boots the ADSP with the link up and
+  logs the gate's bit with every poll. It dumps the PHY's first 0xb0
+  bytes before the ADSP, after it, and after a re-probe of the
+  controller, if the link goes and the re-probe is needed. A difference
+  between the second and third dumps would name what the ADSP leaves
+  behind.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -3780,8 +3821,11 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   WIP on branch `sm6450-glink`. But in rounds 37, 52 and 57, booting the
   ADSP took the USB link within 0.2 s, and nothing on our side has brought
   the host back. Until that changes, every round that boots the ADSP ends
-  with the lease. Round 59 looks for the order or the reset that keeps
-  the link.
+  with the lease, unless something resets the PHY. Round 59 found that
+  something: unbinding and binding the controller's driver, which takes
+  the PHY through its reset and init again, brought the host back with
+  the ADSP running. That is a recovery, not a fix. Round 60 looks for
+  what the ADSP leaves behind in the PHY.
 
 ## Next steps, in order
 
@@ -3889,9 +3933,10 @@ port boots" above. What is left starts from there.
    (see "Round 57"). Round 57 had `pmic_glink`, UCSI and the battery
    manager with `qrtr-smd` under them, and they all worked: the battery,
    the charger and the Type-C port read correctly. So the peer was not
-   what the link was missing. Round 59 tries the ADSP with the gadget
-   unbound, then a re-probe of the controller and its PHY. Charging,
-   audio, the modem and Wi-Fi all start here.
+   what the link was missing. Round 59 found a recovery: a re-probe of
+   the controller and its PHY after the ADSP is up brings the host back,
+   so a round can now boot the ADSP and keep its shell. Round 60 looks for
+   the fix. Charging, audio, the modem and Wi-Fi all start here.
 7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and

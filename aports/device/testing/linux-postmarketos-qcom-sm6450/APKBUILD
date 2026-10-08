@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=13
+pkgrel=14
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -82,6 +82,12 @@ _config="config-$_flavor.$arch"
 # v1.0, so the watchdog was never registered. The patch asks again with a
 # v1.0 call, and qcom_scm.force_gunyah_wdt=1 skips the question for the case
 # where the hypervisor does not answer it either.
+#
+# backport-0005 to backport-0007 are the touchscreen, a FocalTech FT3519T:
+# Yedaya Katsman's FT3518 binding and driver entry (9b352327add1 and
+# 5383e76483dc) and Bhushan Shah's FT3519 binding, which falls back to the
+# FT3518 (731c634ea95e). All three are in mainline since 2026, and edt-ft5x06
+# needs nothing else for this chip.
 source="
 	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
 	$_config
@@ -95,6 +101,9 @@ source="
 	backport-0004-drm-panel-Add-panel-driver-for-Samsung-SOFEF01-DDIC.patch
 	sofef01-ams605dk01-vci-supply.patch
 	bringup-sofef01-pdx246-flm.patch
+	backport-0005-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3518.patch
+	backport-0006-Input-edt-ft5x06-add-support-for-FocalTech-FT3518.patch
+	backport-0007-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3519.patch
 "
 builddir="$srcdir/linux-$pkgver"
 
@@ -146,7 +155,7 @@ package() {
 
 sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
-c6cb6164480da1daa15d2533ff302beb74d0c714bb982b02dd7ff9e857455abdd8b70db3c4803835271d811373afc53b5cbdf7425e02e1bf6ae6ce0b50561ea4  config-postmarketos-qcom-sm6450.aarch64
+b3ace3a63bd21cde7757157f1d0bf96de010222c5f928fcc289917d1c5eff49a1803657d59800b7aa367e79acd230140930ba450689d7fdc374c1ee70036bbc2  config-postmarketos-qcom-sm6450.aarch64
 3499ac6cfd9b29ed524b49ef320d5092679e7a699a76c2d9b327b6c11867e5c0dcdde73ed9a2008a3caca6998a3a2e16743589d7d3c638f5db762abfcd1bfa4a  sm6450-mainline.patch
 8a668e14d1a656a8843aabc427fa930b8976f120fcdabb4042c17a4c4aeee7518dcc2403b6f8090a633ff741b0766ece418d47ce603401f73407df2d94d19b26  backport-0001-firmware-qcom-scm-Register-gunyah-watchdog-device.patch
 c008b7cf41b8820bf26deb4fef5b8e68d093e88106eeda58b4828f4f7ac031a6374e0815f1d4a72e01ea03cf42070285455d7720ff382c08d88d4163d25bff77  backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
@@ -157,4 +166,7 @@ e8470a76d0bc049cb8aceb3194bd7e3be0f39b32cdf8c5499ce011bf09f9d638e9fb3ddf3433981e
 7554cfbf19626ba607ad9f02156310fdc24881fd6f68a06e60eb7f851757000d4f5eb7a92a50ab503523c8044a01d6beefc291a6c90a494480ccfdf806912cc6  backport-0004-drm-panel-Add-panel-driver-for-Samsung-SOFEF01-DDIC.patch
 3102412ba15f4ab99f22e39471ed6ab34d9901ae127978006e1151d3ce78dc8071a53bfe303853e7c5b5f017812cd996087250abaa1c8ef5f46d3a4066f9154e  sofef01-ams605dk01-vci-supply.patch
 19f31d4db1f736496984a20657c9d6a7936b7e2d5fabf420068b3ace027c29a2795a153f78c7b2cbec75877949aa6e1edb6310c0875aa51832a3a5b192daa421  bringup-sofef01-pdx246-flm.patch
+b7d0924b38f1601d5cb0640b6ab53dbbcc87ed420bbf179df8fd413bbca635e52df87b34c11d6ea08e08f4bfbaa46aed6b345d8e08335693be47d7a69e074e15  backport-0005-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3518.patch
+a4307c5157f745f2824069b0d32515866cdb631803d0aa4e3bbb4e4d1d21ffcb952d19ff0424fb322bb56f2f2c1369c237750f97f0e8647fcf2728a2ee428d4d  backport-0006-Input-edt-ft5x06-add-support-for-FocalTech-FT3518.patch
+9a43fa3048b8589d3738a45acc53c981e27fad585157a43c01594d69c4f6872459e3bf54cac08670f25c06f65167ca5474766562bd3a4104696c30e362514ebd  backport-0007-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3519.patch
 "

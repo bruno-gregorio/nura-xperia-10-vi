@@ -783,6 +783,30 @@ The two WIP commits are on branch `sm6450-bt`, from `sm6450`.
 `CHECK_DTBS=y` is clean, and `check-dt.py` finds the UART's interrupt equal
 to stock's.
 
+### The touchscreen: a FocalTech FT3519T on I2C9
+
+The touchscreen is the same wrapper's serial engine 3, at `0xa8c000`, run
+as I2C, with SDA and SCL on GPIOs 10 and 11 and function `qup1_se3`. The
+chip on it is a FocalTech FT3519T at `0x38`. Sony's driver says so twice:
+it builds only the FT3519T's flash upgrade code, and its config sets the
+chip type to `_FT3519T`. Mainline's `edt-ft5x06` gained the FT3518 in
+2026, from Yedaya Katsman for the Xiaomi Mi A3. Bhushan Shah then added
+the FT3519 as a binding that falls back to it. The driver needs nothing
+more; its generic FocalTech path reads the firmware version and vendor ID
+from registers `0xA6` and `0xA8`. So the node is
+`"focaltech,ft3519", "focaltech,ft3518"`. Its interrupt is GPIO 13 on the
+falling edge and its reset is GPIO 12, active low, both from the stock
+tree.
+
+The power is the one judgement call. Stock's node names `pm6450_l28` as
+`vdd-supply` and also an `avdd-en` GPIO, 103. Sony's driver never enables
+the LDO, because that line is commented out, and drives the GPIO in its
+place. The board therefore has a `regulator-fixed`, `ts_avdd`, switched by
+GPIO 103, as the touchscreen's `vcc-supply`, and no L28. The 6.18 base
+predates the three upstream commits, so the aport carries them as
+backports. The two WIP DT commits are on branch `sm6450-touch`, above
+`sm6450-bt`.
+
 ### What is deliberately not written yet
 
 **The UFS PHY, which was on disk after all.** This paragraph used to say the

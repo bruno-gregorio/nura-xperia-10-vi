@@ -2330,6 +2330,43 @@ as what it would have fixed.
   management socket is open. The readings are dmesg, the serdev binding,
   the debugfs version files and the regulator summary. They leave out the
   address files: `identity`, `random_address` and `static_address`.
+- **The touchscreen** — Written 2026-10-08, not yet run; queued as round 36
+  in plan n. The controller is a FocalTech FT3519T: Sony's driver builds
+  only `focaltech_upgrade_ft3519t.c` and sets `FTS_CHIP_TYPE` to
+  `_FT3519T`. Mainline drives it with `edt-ft5x06`. The FT3518 entry and
+  the FT3519 binding, which falls back to the FT3518, are upstream since
+  2026 and postdate 6.18. Pkgrel 14 carries the three commits as
+  `backport-0005` to `backport-0007` and builds the driver as a module;
+  nothing else changes. Branch `sm6450-touch` in `out/linux`, above
+  `sm6450-bt`, adds I2C9 and the board's node. I2C9 is QUP wrapper 1's
+  serial engine 3 at `a8c000`, stock's "se9", on GPIOs 10 and 11.
+  `CHECK_DTBS=y` is clean, and `check-dt.py` finds its interrupt equal to
+  stock's.
+  - **Verified against the stock tree:** address `0x38`, the interrupt on
+    GPIO 13, falling edge, the reset on GPIO 12, active low, and the pin
+    biases. The panel is 1080 by 2520, and stock's `display-coords` agree.
+  - **Reasoned:** the analog supply. Stock's node names `vdd-supply` as
+    `pm6450_l28`, 2.7 to 3.544 V, and a separate `focaltech,avdd-en-gpio`
+    on GPIO 103. Sony's driver has its `regulator_enable(vdd)` commented
+    out and drives GPIO 103 in its place. So mainline gets a fixed
+    regulator switched by GPIO 103 as `vcc-supply`, and L28 is left out.
+  - **A guess:** that GPIO 103 is all the chip needs. If the round's
+    probe fails with an I2C error, L28 as the switch's input is the next
+    thing to try.
+
+  `cmds-r36.sh` pushes pkgrel 14's `edt-ft5x06.ko` into pkgrel 13's shell
+  and loads it. It then reads the client's `model` and `fw_version`, the
+  input device and the interrupt count. Nobody touches the screen during
+  the round.
+- **Pkgrel 14 is pkgrel 13 plus `edt-ft5x06`** — Verified 2026-10-08.
+  It built in six minutes with the warm ccache, with no compiler warnings.
+  All 427 of pkgrel 13's modules are byte-identical in pkgrel 14 once
+  their signatures are stripped, and `edt-ft5x06.ko` is the only new one.
+  That is what lets the module load into pkgrel 13's shell. The kernel is
+  built with clang's kCFI and shadow call stack, so a module from any
+  other compiler, or from `out/kbuild`'s defconfig build, would fail its
+  first indirect call. Each build signs with its own key. Signatures are
+  not enforced and lockdown is off, so the module loads with a taint.
 
 ## The boot images
 
@@ -3180,4 +3217,6 @@ port boots" above. What is left starts from there.
    image needs a sane fallback time. `nftables.service` and
    `systemd-firstboot.service` both fail benignly and should either be fixed
    or explained. The touchscreen polls but wants `focaltech_ts_fw_.bin` and a
-   `drm_panel`, so it cannot work before display does.
+   `drm_panel`, so it cannot work before display does. That is the vendor
+   driver on the downstream kernel. Mainline's `edt-ft5x06` needs neither
+   and is queued as round 36 (see "The touchscreen").

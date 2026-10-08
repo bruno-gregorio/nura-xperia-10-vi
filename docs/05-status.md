@@ -2189,6 +2189,30 @@ as what it would have fixed.
   left running; what it does to the splash screen then is unknown.
   "The display clock controller" in [06-mainline.md](06-mainline.md) has the
   rules it applies.
+- **The interconnect** — Done 2026-10-08, not yet run on the device.
+  `scripts/icc-to-mainline.py` turns the vendor's `parrot.c` into an
+  upstream driver in Milos's style, with its binding header and YAML: 136
+  nodes, 17 BCMs and 33 QoS boxes over twelve NoCs, after dropping the
+  display voter's seven nodes and six BCMs. Its writer reproduces upstream's
+  `milos.c` to two lines, and its reader finds the vendor's and upstream's
+  SM8450 graphs identical node for node. The driver is W=1 and checkpatch
+  clean and the binding check passes. Branch `sm6450-icc` in `out/linux`
+  adds the NoC nodes and the QUP, UART, SD and USB paths, with SM6350's SD
+  bandwidth; `CHECK_DTBS=y` and `check-dt.py` are clean. What it could
+  break is what it touches: if a vote or a QoS write is wrong, the UART, the
+  SD card or USB - the console, the log and the shell - are the first to
+  stop. "The interconnect" in [06-mainline.md](06-mainline.md) has the rules
+  and the proof.
+- **Pkgrel 12 carries three drivers that do nothing yet** — Built
+  2026-10-08, 10:56, not yet run. It adds the GCC fixups from
+  `sm6450-gccfix`, the display clock controller driver and the interconnect
+  driver to the series. None of them binds without a DT node, and
+  `regs.dtb` has none, so on it pkgrel 12 should boot exactly as pkgrel 11.
+  Plan l installs it after plan k and runs round 30 on
+  `out/milestone/icc-noqos.dtb` (votes but no QoS writes) and, only if that
+  reaches the shell, round 31 on `icc.dtb` (QoS writes too). Both read
+  `cmds-r30.sh`: the interconnect summary, deferred devices, and whether the
+  SD card and the USB gadget survived.
 
 ## The boot images
 

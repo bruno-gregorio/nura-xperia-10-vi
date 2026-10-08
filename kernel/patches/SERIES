@@ -5,12 +5,16 @@
 #
 dt-bindings: clock: Add Qualcomm SM6450 GCC clock bindings
 clk: qcom: Add Global Clock Controller driver for SM6450
+dt-bindings: clock: qcom: Add SM6450 display clock controller
+clk: qcom: Add Display Clock Controller driver for SM6450
 dt-bindings: pinctrl: Add Qualcomm SM6450 TLMM bindings
 pinctrl: qcom: Add SM6450 pinctrl driver
 dt-bindings: clock: qcom,rpmhcc: Add SM6450
 clk: qcom: clk-rpmh: Add support for SM6450
 dt-bindings: power: qcom,rpmpd: Add SM6450
 pmdomain: qcom: rpmhpd: Add SM6450 power domains
+dt-bindings: interconnect: Add Qualcomm SM6450
+interconnect: qcom: Add SM6450 interconnect provider driver
 dt-bindings: qcom: Add SM6450 compatibles for PDC, IPCC and EPSS
 dt-bindings: spmi: Add SM6450 SPMI PMIC arbiter
 dt-bindings: mfd: qcom,spmi-pmic: Add PM6450

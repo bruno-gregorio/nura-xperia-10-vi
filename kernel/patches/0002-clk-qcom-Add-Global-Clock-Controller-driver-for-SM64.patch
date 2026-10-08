@@ -52,13 +52,13 @@ index 8051d481c..429f9720a 100644
  obj-$(CONFIG_SM_GCC_8250) += gcc-sm8250.o
 diff --git a/drivers/clk/qcom/gcc-sm6450.c b/drivers/clk/qcom/gcc-sm6450.c
 new file mode 100644
-index 000000000..dfea36877
+index 000000000..fe41abb57
 --- /dev/null
 +++ b/drivers/clk/qcom/gcc-sm6450.c
 @@ -0,0 +1,2775 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
-+ * Copyright (c) 2026, Qualcomm Innovation Center, Inc. All rights reserved.
++ * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc. All rights reserved.
 + */
 +
 +#include <linux/clk-provider.h>
@@ -302,7 +302,7 @@ index 000000000..dfea36877
 +};
 +
 +static const struct clk_parent_data gcc_parent_data_5[] = {
-+	{ .index = DT_BI_TCXO, .name = "bi_tcxo" },
++	{ .index = DT_BI_TCXO },
 +	{ .hw = &gcc_gpll0.clkr.hw },
 +	{ .hw = &gcc_gpll9.clkr.hw },
 +	{ .hw = &gcc_gpll4.clkr.hw },

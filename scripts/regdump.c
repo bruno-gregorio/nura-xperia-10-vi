@@ -14,6 +14,7 @@
  * scripts/tsh.py to push over telnet (@push in a command file):
  *
  *   aarch64-linux-gnu-gcc -Os -static -nostdlib -fno-asynchronous-unwind-tables \
+ *       -Wl,-z,max-page-size=4096 \
  *       -include out/linux/tools/include/nolibc/nolibc.h \
  *       -o out/tools/regdump scripts/regdump.c -lgcc
  *

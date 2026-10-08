@@ -1896,22 +1896,46 @@ as what it would have fixed.
   once the dwc3 core can probe at all.
 
   The second watchdog probe ran and found nothing, and round 22 started at
-  23:39. The SMCCC finding came during round 22. A third plan was written,
-  then replaced by a fourth before it ran anything. The fourth,
-  `out/try-kernel/plan-20261007d.sh`, waits for the second queue to finish
+  23:39. The SMCCC finding came during round 22. Two more plans were
+  written and each replaced before it ran anything; the reason for the
+  second change is the bullet after this one. The one queued,
+  `out/try-kernel/plan-20261008e.sh`, waits for the second queue to finish
   round 22, then:
   - installs pkgrel 9 into the rootfs between rounds, and stops if it
     cannot confirm `-r9` and fresh boot images;
-  - `DEVPROBE=1 DTB=out/milestone/scm.dtb`, the device probe on pkgrel 9;
-  - `WDTPROBE=1` on the same tree, the watchdog through the v1.0 UUID
-    query;
-  - if that finds no working watchdog, `WDTPROBE=1` again with
-    `qcom_scm.force_gunyah_wdt=1`;
-  - if either works, round 23, the real init on `scm.dtb` with
-    `gunyah_wdt.start_at_boot=1`, the force option if it was needed, and
-    the round 21 options.
+  - `WDTPROBE=1 DTB=out/milestone/scm.dtb`, the watchdog through the v1.0
+    UUID query;
+  - if that finds no watchdog that resets the board, `WDTPROBE=1` again
+    with `qcom_scm.force_gunyah_wdt=1`;
+  - `DEVPROBE=1` on the same tree. If a watchdog resets the board, it runs
+    with the watchdog armed from boot. If not, it runs with
+    `deferred_probe_timeout=-1 regulator_ignore_unused`;
+  - only if the verdict is that the watchdog works, round 23: the real init
+    on `scm.dtb` with `gunyah_wdt.start_at_boot=1`, the force option if it
+    was needed, and the round 21 options.
 
   The results go here.
+- **Round 22 went silent past the longest a resetting round can take** —
+  Verified 2026-10-08, 00:36. The real init on `scm.dtb`, pkgrel 7, round
+  21's options. At 3376 seconds nothing had answered. Seven attempts that
+  each reach the last mark and reset take about 3370 seconds with the
+  fallback boot, so at least one attempt was ended by nothing.
+- **No mainline boot has come back from more than about 5 seconds after
+  `/init`** — Verified from the rounds in this file, with one reading that
+  is only a Guess. Every round that fell back by itself was a probe that
+  rebooted within 5 seconds of `/init`. Every round that let the kernel run
+  longer went silent: 18, 19, 20 and 22, and probably 21. Rounds 18 and 19
+  each had an explanation in the init, and both were fixed. Rounds 20 to
+  22 had none. Two things the kernel does on a timer fall in the gap. The
+  deferred-probe timeout fires 10 seconds after the initcalls
+  (`driver_deferred_probe_timeout`, `drivers/base/dd.c`), and then
+  fw_devlink lets consumers of suppliers with no driver probe without them.
+  The unused-regulator cleanup runs 30 seconds after them
+  (`regulator_init_complete_work`, `drivers/regulator/core.c`). Either
+  could touch hardware this tree describes wrongly and stop the bus. That
+  is the guess, and it is why the queue no longer gives a probe more than
+  5 seconds without a watchdog or both of those switched off.
+
 
 ## The boot images
 

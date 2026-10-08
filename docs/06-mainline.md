@@ -701,6 +701,43 @@ WIP commits on branch `sm6450-display` in `out/linux`, built into
 with W=1, checkpatch `--strict` warns only about MAINTAINERS for new files,
 and `check-dt.py` accounts for all 80 addresses in the display tree.
 
+### The remote processors: four nodes and no new code
+
+The ADSP, CDSP, modem and WPSS are where charging, audio, the modem and
+Wi-Fi start, and all four describe themselves to the PAS driver with values
+it already has. The vendor's `qcom_q6v5_pas.c` gives parrot the same
+crash-reason item, PAS id, minidump id and SSCTL instance as waipio
+(SM8450) for the ADSP, CDSP and modem, and SC7280's for the WPSS. So the
+nodes name an SM6450 compatible with an existing one as fallback, and
+pkgrel 13's driver binds them unchanged.
+
+- **The fallbacks are the ones whose rails match.** The ADSP falls back to
+  `qcom,sm8350-adsp-pas` and the modem to `qcom,sm8450-mpss-pas`, which
+  take LCX and LMX, and CX and MSS. The CDSP falls back to
+  `qcom,sm6350-cdsp-pas` rather than SM8450's, because SM8450's CDSP votes
+  on MXC and SM6450 has none. Its downstream node names CX and MX, as
+  SM6350's binding does. The WPSS falls back to `qcom,sc7280-wpss-pas`, on
+  CX and MX.
+- **The rest is the downstream node's.** That covers the watchdog interrupts
+  (PDC 6 for the ADSP, GIC SPI 578, 264 and 587 for the others), the smp2p
+  bits, the IPCC clients, and the glink labels and remote ids (`lpass` 2,
+  `cdsp` 5, `modem` 1, `wpss` 13). It also covers the reserved regions
+  already in the dtsi.
+- **Downstream lists `shutdown-ack` on all four.** The modem's and WPSS's
+  bindings take it. The ADSP's and CDSP's allow five interrupts, so those
+  two leave it out, as SM8450's do; sysmon treats it as optional.
+- **The board names its firmware** under `qcom/sm6450/Sony/columbia/`, as
+  the other Sony boards do. The firmware itself sits in the stock `modem`
+  partition and has not been collected.
+
+The three binding commits are on branch `sm6450-remoteproc` in `out/linux`
+and pass `dt_binding_check`. The two WIP DT commits sit on
+`sm6450-remoteproc-dt` above them. `CHECK_DTBS=y` is clean, and
+`check-dt.py` finds all four addresses exactly in the stock tree.
+`check-dt.py` does not compare `interrupts-extended`, so those were checked
+against the stock nodes by name instead. None of it has run;
+`out/milestone/remoteproc.dtb` is the round that does.
+
 ### What is deliberately not written yet
 
 **The UFS PHY, which was on disk after all.** This paragraph used to say the

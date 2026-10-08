@@ -1814,7 +1814,11 @@ as what it would have fixed.
   seconds. The queue recorded that as a bootloader giving up, and its
   `markdecode` lines are noise: they assume seven attempts. The card and
   `rddata` both came back empty. That is what the missing SCM node
-  predicts: no SD controller, so the hook had nowhere to write.
+  predicts: no SD controller, so the hook had nowhere to write. Whether it
+  hung is not known. With `MARKS="4 8"` an attempt that reaches the last
+  mark, 38, lasts up to about 477 seconds before the USB watchdog resets
+  it, so seven attempts can take well over 2742 seconds. A round that was
+  resetting normally could still have been short of its fallback.
 - **The watchdog probe with the SCM node: still no `/dev/watchdog0`** —
   Verified 2026-10-07, 23:39. pkgrel 7 with `DTB=out/milestone/scm.dtb`.
   The round fell back in 158 seconds, 4.9 of each attempt after `/init`,

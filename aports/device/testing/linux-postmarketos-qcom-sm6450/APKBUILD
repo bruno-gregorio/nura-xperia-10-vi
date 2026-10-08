@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=8
+pkgrel=9
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -64,6 +64,14 @@ _config="config-$_flavor.$arch"
 # gunyah_wdt.start_at_boot=1 the watchdog starts at probe and the watchdog
 # core feeds it until userspace takes over, so a kernel that hangs is reset by
 # the hypervisor instead of waiting for someone to hold the buttons.
+#
+# bringup-gunyah-wdt-smccc-1-0.patch is ours too. qcom_scm registers the
+# watchdog only once the hypervisor has answered the SMCCC vendor UID query
+# with Gunyah's UUID, and makes that query with arm_smccc_1_1_invoke(), which
+# below SMCCC v1.1 fails without calling anything. This firmware reports
+# v1.0, so the watchdog was never registered. The patch asks again with a
+# v1.0 call, and qcom_scm.force_gunyah_wdt=1 skips the question for the case
+# where the hypervisor does not answer it either.
 source="
 	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
 	$_config
@@ -72,6 +80,7 @@ source="
 	backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
 	bringup-milestones.patch
 	bringup-gunyah-wdt-start-at-boot.patch
+	bringup-gunyah-wdt-smccc-1-0.patch
 "
 builddir="$srcdir/linux-$pkgver"
 
@@ -129,4 +138,5 @@ bc0af09ecf74003c2c9403c3f48a7f686c006031f88b3602ef12ab092ffad9fb6a9a18918c8a4c08
 c008b7cf41b8820bf26deb4fef5b8e68d093e88106eeda58b4828f4f7ac031a6374e0815f1d4a72e01ea03cf42070285455d7720ff382c08d88d4163d25bff77  backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
 693ed8dff51fabd84fcabe6b579383bfcdc817687122f9bb43d9257d6e27ccc83979acdd4754718336d8fe1e3bf2375a41007f56ccdb7fbcd1549e19eeb2f760  bringup-milestones.patch
 14abdadc4cc557639c31735477fbffed1be4d4844ed273d8737fc5daf6227d846d8916b6debca6520d8add3bff4e2f8d7738fcc8755d9d49d8ad4f85486045ab  bringup-gunyah-wdt-start-at-boot.patch
+e8470a76d0bc049cb8aceb3194bd7e3be0f39b32cdf8c5499ce011bf09f9d638e9fb3ddf3433981e1b742804ec717e50dc99c4a2dbd0ac6a9adb77ee7d4f9586  bringup-gunyah-wdt-smccc-1-0.patch
 "

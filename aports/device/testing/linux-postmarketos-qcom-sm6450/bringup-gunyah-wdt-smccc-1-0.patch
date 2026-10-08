@@ -1,0 +1,64 @@
+diff --git a/drivers/firmware/qcom/qcom_scm.c b/drivers/firmware/qcom/qcom_scm.c
+index 68d9af5..39b3b4d 100644
+--- a/drivers/firmware/qcom/qcom_scm.c
++++ b/drivers/firmware/qcom/qcom_scm.c
+@@ -2233,6 +2233,47 @@ static void qcom_scm_gunyah_wdt_free(void *data)
+ 	platform_device_unregister(gunyah_wdt_dev);
+ }
+ 
++/*
++ * Bring-up only, NOT FOR UPSTREAM in this form.
++ *
++ * arm_smccc_hypervisor_has_uuid() makes its query with arm_smccc_1_1_invoke(),
++ * which has no conduit below SMCCC v1.1 and fails without making the call.
++ * The firmware on SM6450 (and the Sony Xperia 10 VI) reports v1.0 - "psci: SMC
++ * Calling Convention v1.0" in its own boot log - so on this board the check
++ * is false whether or not Gunyah is there, and the watchdog is never
++ * registered. The Call UID query itself predates v1.1: it is one of the
++ * general service queries of the original SMC Calling Convention. So below
++ * v1.1, ask again with an SMCCC v1.0 call over SMC, the conduit every call
++ * this driver makes already uses.
++ */
++static bool qcom_scm_hypervisor_has_uuid(const uuid_t *hyp_uuid)
++{
++	struct arm_smccc_res res;
++	uuid_t uuid;
++
++	if (arm_smccc_get_version() >= ARM_SMCCC_VERSION_1_1)
++		return arm_smccc_hypervisor_has_uuid(hyp_uuid);
++
++	arm_smccc_smc(ARM_SMCCC_VENDOR_HYP_CALL_UID_FUNC_ID,
++		      0, 0, 0, 0, 0, 0, 0, &res);
++	if ((int)res.a0 == SMCCC_RET_NOT_SUPPORTED)
++		return false;
++
++	uuid = smccc_res_to_uuid(res.a0, res.a1, res.a2, res.a3);
++	return uuid_equal(&uuid, hyp_uuid);
++}
++
++/*
++ * Bring-up only, NOT FOR UPSTREAM. Registers the Gunyah watchdog without
++ * asking the hypervisor who it is, in case the query above goes unanswered
++ * on this firmware. Not as reckless as it sounds: gunyah_wdt's probe makes
++ * a STATUS call first and gives up with -ENODEV if nothing answers it.
++ * Inert unless qcom_scm.force_gunyah_wdt=1 is on the command line.
++ */
++static bool force_gunyah_wdt;
++module_param(force_gunyah_wdt, bool, 0444);
++MODULE_PARM_DESC(force_gunyah_wdt, "Register the Gunyah watchdog without the hypervisor UUID check");
++
+ static void qcom_scm_gunyah_wdt_init(struct qcom_scm *scm)
+ {
+ 	struct platform_device *gunyah_wdt_dev;
+@@ -2248,8 +2289,9 @@ static void qcom_scm_gunyah_wdt_init(struct qcom_scm *scm)
+ 	};
+ 
+ 	/* Bail out if we are not running under Gunyah */
+-	if (!IS_ENABLED(CONFIG_HAVE_ARM_SMCCC_DISCOVERY) ||
+-	    !arm_smccc_hypervisor_has_uuid(&gunyah_uuid))
++	if (!force_gunyah_wdt &&
++	    (!IS_ENABLED(CONFIG_HAVE_ARM_SMCCC_DISCOVERY) ||
++	     !qcom_scm_hypervisor_has_uuid(&gunyah_uuid)))
+ 		return;
+ 
+ 	/*

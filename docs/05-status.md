@@ -2178,6 +2178,17 @@ as what it would have fixed.
   `dev-ref-clk-freq` is 0, which is 19.2 MHz, so a mainline boot has nothing
   there to rewrite that a stock boot would not. What it may set is
   WriteBooster, which stock Android turns on too.
+- **The display clock controller** — Done 2026-10-08, not yet run on the
+  device and not in the kernel package. Branch `sm6450-dispcc` in
+  `out/linux`, generated from the vendor's `dispcc-parrot.c` by the clock
+  converter, which now has the ravelin/sm4450 display pair as a second
+  self-test. `check-tables.sh` agrees with the vendor on all 66 shared
+  offsets, the driver compiles with W=1, and the binding check, `CHECK_DTBS=y`
+  and `check-dt.py` are clean. The node has no consumer yet, so when it does
+  run, the most it should do is take over the display clocks the bootloader
+  left running; what it does to the splash screen then is unknown.
+  "The display clock controller" in [06-mainline.md](06-mainline.md) has the
+  rules it applies.
 
 ## The boot images
 

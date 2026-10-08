@@ -358,8 +358,10 @@ vendor driver carefully" into "write the conversion, run it on the pair where
 the answer is known, and score it".
 
 - `scripts/downstream-to-mainline.py` does the clock controllers. Run on
-  ravelin it reproduces upstream `gcc-sm4450.c` to 97.6%, and its header
-  generator reproduces `qcom,sm4450-gcc.h` exactly, all 182 defines.
+  ravelin it reproduces upstream `gcc-sm4450.c` to 98.3% and
+  `dispcc-sm4450.c` to 95.7%, and its header generator gives
+  `qcom,sm4450-gcc.h`'s numbering exactly, all 182 defines, and
+  `qcom,sm4450-dispcc.h` byte for byte.
 - `scripts/pinctrl-to-mainline.py` does the TLMM. Run on ravelin it reproduces
   `pinctrl-sm4450.c` to 96.6%, and a semantic comparison of the five things
   that reach the hardware — pin descriptors, function enum, pingroup rows,
@@ -374,7 +376,7 @@ the answer is known, and score it".
 The residual percentages are not slop to be cleaned up later. Each one is a
 listed judgement call that the self-test can never close, because it is a place
 where the upstream submitter knew something the vendor source does not say.
-The clk converter's docstring enumerates its eight; the pinctrl converter's
+The clk converter's docstring enumerates its own; the pinctrl converter's
 are the 21 function names parrot has that ravelin does not, resolved from
 `pinctrl-milos.c` and sm4450's own sibling naming rather than guessed.
 
@@ -511,6 +513,45 @@ None of these is a guess, and each one is a different kind of argument.
   and SPI 133 for the core are exactly SM6350's, which puts `hs_phy_irq` at
   131 - and a sweep of every GIC line the stock tree claims shows 131 and 132
   free. That is the single inferred number in the storage and USB work.
+
+### The display clock controller, generated the same way
+
+Display is the long pole, and its first piece is the clock controller. The
+SM4450 pair covers it too - `dispcc-ravelin.c` downstream, `dispcc-sm4450.c`
+upstream - so the converter grew a `--block disp_cc` mode and a second
+self-test pair rather than a hand transcription. Branch `sm6450-dispcc` in
+`out/linux` has the binding, `qcom,sm6450-dispcc.h`, `dispcc-sm6450.c` and a
+WIP node for `sm6450.dtsi`. It is not in the kernel package and has not run.
+
+- **Parrot's controller is ravelin's plus DisplayPort.** Of the vendor's 74
+  clocks, 30 are ravelin's under the same names and the other 44 are four DP
+  transmitters' aux, link, pixel and crypto clocks, the layout SM8550 has.
+  `scripts/check-tables.sh` agrees on all 66 offsets the two files share;
+  the one it reports dropped is `disp_cc_sleep_clk`, which is an always-on
+  write to the same register instead, as upstream does on SM4450.
+- **The rules that reach hardware were derived, not copied.** The DP link
+  clock sources become `clk_byte2_ops` with no frequency table: the vendor's
+  table is in kHz for its own DP driver, and drm/msm sets the link rate
+  through them to the PHY, as 18 of 19 upstream display controllers spell
+  it. The DSI byte divider becomes writable and stops passing rate requests
+  up, because drm/msm sets `byte_intf_clk` to half the byte clock itself. A
+  Lucid EVO PLL's `.cal_l` and the output bits of `.user_ctl_val` go,
+  because upstream's configure and enable write those themselves - which is
+  also what the GCC pair's `gcc_gpll3` was showing.
+- **The GDSCs come from the stock tree.** `disp_cc_mdss_core_gdsc` at
+  `0x9000` and `_int2_` at `0xb000`, hardware-triggered and retained, as the
+  live tree's `qcom,support-hw-trigger` and `qcom,retain-regs` say.
+- **The probe is the post-6.17 one.** PLL setup, the always-on branches and
+  the MDP clock-gating write go to `qcom_cc_driver_data` and the probe is one
+  `qcom_cc_probe()` call, as on Milos and Glymur. Runtime PM is off: like
+  SC7280's and SM6350's, this controller sits on CX with no power domain of
+  its own in the tree.
+- **The GCC driver came out one line different when regenerated.** The old
+  rules left a vendor `.name = "bi_tcxo"` fallback on one parent; branch
+  `sm6450-gccfix` holds fixups that drop it, give the header upstream's
+  layout with unchanged numbering, and replace the 2026 copyright with the
+  vendor file's 2021-2022, since the code is Qualcomm's. They fold in with
+  the next series update.
 
 ### What is deliberately not written yet
 

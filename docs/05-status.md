@@ -3039,16 +3039,48 @@ as what it would have fixed.
     D+ and D- over, and leaves overrides set.
 
   The transcript is `out/try-kernel/live-r59.txt`.
-- **Round 60: the PHY holds its reference gate** — Planned. Plan x boots
-  `out/milestone/hsref-r16.dtb`: the package's tree with branch
-  `sm6450-hsref`'s one commit, which gives the PHY
-  `GCC_EUSB3_0_CLKREF_EN` as its `ref` clock instead of CXO, as stock
-  does. `out/tools/hsref-watch.sh` boots the ADSP with the link up and
-  logs the gate's bit with every poll. It dumps the PHY's first 0xb0
-  bytes before the ADSP, after it, and after a re-probe of the
-  controller, if the link goes and the re-probe is needed. A difference
-  between the second and third dumps would name what the ADSP leaves
-  behind.
+- **Round 60: the reference gate goes after the link does** — Verified
+  2026-10-08, 17:45 to 17:49. Plan x booted
+  `out/milestone/hsref-r16.dtb`, in which the PHY holds
+  `GCC_EUSB3_0_CLKREF_EN` as its `ref` clock, as on stock.
+  `out/tools/hsref-watch.sh` booted the ADSP with the link up, read the
+  gate's bit with every poll, and dumped the PHY. The transcript is
+  `out/try-kernel/live-r60.txt`, and
+  `out/try-kernel/bootlog-card-20261008-175352.txt` is the card dump.
+  - **Verified:** the gate is not the cause. The ADSP came up at 137.10 s.
+    The link was in Suspend by 137.30 s with the gate still on. The gate
+    read off only at 137.85 s, as the UDC fell to `default`. The clock
+    framework still counted the PHY's enable then, so something outside
+    Linux cleared the bit while Linux held it.
+  - **Verified:** the driver's unbind and bind brought the host back
+    again. It bound at 157.1 s and the host configured the gadget at
+    161.3 s, with the ADSP running. The link stayed On until the end at
+    192.6 s, and the gate was back on, because the PHY's init enables it.
+    The host saw one disconnect at 17:47:24 and the next enumeration 23 s
+    later.
+  - **Verified, but incomplete:** the PHY dumps differ only at offsets
+    0x20 and 0x30. They read 0x0e and 0x65 before the ADSP, 0x06 and 0x00
+    once the link had gone, and 0x03 and 0x00 after the rebind. Every
+    word reads as one byte repeated four times. The watcher's `cut` kept
+    only the first word of each `regdump` line, so the dumps hold offsets
+    0x00, 0x10 and so on to 0xa0, and nothing else. UTMI_CTRL0 at 0x3c,
+    CFG0 at 0x94 and the rest were never read.
+  - **Reasoned:** 0x20 and 0x30 are not registers mainline's driver
+    writes. The dump after the rebind came before the gadget bound, with
+    no pull-up on D+, so it says nothing about a working link. They look
+    like status that follows the lines, not settings left behind.
+- **Round 61: a runtime cycle of the controller** — Planned. Plan y
+  boots `out/milestone/hsref-r16.dtb` again. `out/tools/phy-watch.sh`
+  dumps the PHY's whole block, 0x11c bytes as stock's `reg` gives it,
+  and QSCRATCH, before the ADSP and once the link has gone. It also reads
+  UTMI_CTRL0, UTMI_CTRL1, CFG0, 0x20 and 0x30 with every poll. Then it
+  unbinds the gadget, allows the controller's runtime PM, and binds the
+  gadget again once the controller has suspended. dwc3 forbids runtime PM
+  at probe, which is why round 59's phase 1 never suspended. In device
+  mode, the controller's runtime suspend runs the PHY's exit and its
+  resume runs the PHY's init. That would be a recovery inside the driver
+  model, which a fix can use, and a re-probe is not. If it fails, round
+  59's driver unbind and bind follows, inside the lease's 90 s.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -3824,8 +3856,10 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   with the lease, unless something resets the PHY. Round 59 found that
   something: unbinding and binding the controller's driver, which takes
   the PHY through its reset and init again, brought the host back with
-  the ADSP running. That is a recovery, not a fix. Round 60 looks for
-  what the ADSP leaves behind in the PHY.
+  the ADSP running. That is a recovery, not a fix. Round 60 showed that
+  the PHY's reference gate goes only after the link has. Round 61 dumps
+  the whole PHY, and tries a runtime suspend and resume of the
+  controller, which runs the PHY's exit and init inside the driver model.
 
 ## Next steps, in order
 
@@ -3935,8 +3969,8 @@ port boots" above. What is left starts from there.
    the charger and the Type-C port read correctly. So the peer was not
    what the link was missing. Round 59 found a recovery: a re-probe of
    the controller and its PHY after the ADSP is up brings the host back,
-   so a round can now boot the ADSP and keep its shell. Round 60 looks for
-   the fix. Charging, audio, the modem and Wi-Fi all start here.
+   so a round can now boot the ADSP and keep its shell. Rounds 60 and 61
+   look for the fix. Charging, audio, the modem and Wi-Fi all start here.
 7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and

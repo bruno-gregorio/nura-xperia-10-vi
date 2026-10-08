@@ -1,6 +1,6 @@
 branch: sm6450-display
 series: sm6450
-tip:    a149346205a0403a42895f76690c06b0731b3cbe
+tip:    67f40f461606d122c9712a6edec8faee6401e6be
 base:   d8d698757e2d9de6a44ad50151b3dfd638bd9aea drm/msm/dpu: Add SM6450 support
         (git describe: v6.18.55-46-gd8d698757)
 patches: 7

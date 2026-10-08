@@ -9,17 +9,24 @@ Content-Transfer-Encoding: 8bit
 
 Describe the Samsung SOFEF01-M with the AMS605DK01 panel on DSI0, its
 reset and TE pins, and the 1.8V I/O rail switched by PM6150L GPIO 9.
-The OLED supply rails stay as the bootloader configured them.
+
+That switch is enabled with the GPIO low: the stock tree flags it
+active-low, and its regulator driver, unlike regulator-fixed, does not
+let enable-active-high override the flag. Driven high, the rail is off,
+and the panel takes writes but answers no read and sends no TE.
+
+The panel's vci, PM6150L L4, gets the 3.0V floor the stock panel node
+asks for; the panel driver sets no voltage on it.
 
 To be folded into the board device tree once the panel lights up.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 93 +++++++++++++++++++
- 1 file changed, 93 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 99 ++++++++++++++++++-
+ 1 file changed, 98 insertions(+), 1 deletion(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 3d761b4c3..271dacb94 100644
+index 3d761b4c3..9762bd26b 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -7,6 +7,7 @@
@@ -30,19 +37,23 @@ index 3d761b4c3..271dacb94 100644
  #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
  
  #define PMK8350_SID 0
-@@ -43,6 +44,22 @@ key-volume-down {
+@@ -43,6 +44,26 @@ key-volume-down {
  			wakeup-source;
  		};
  	};
 +
++	/*
++	 * The panel's 1.8V logic supply is switched on by driving PM6150L
++	 * GPIO 9 low. With it the other way round the panel still takes
++	 * writes, but sends neither TE nor a read reply.
++	 */
 +	panel_vddio_1p8: regulator-panel-vddio {
 +		compatible = "regulator-fixed";
 +		regulator-name = "panel_vddio_1p8";
 +		regulator-min-microvolt = <1800000>;
 +		regulator-max-microvolt = <1800000>;
 +
-+		gpio = <&pm6150l_gpios 9 GPIO_ACTIVE_HIGH>;
-+		enable-active-high;
++		gpio = <&pm6150l_gpios 9 GPIO_ACTIVE_LOW>;
 +		startup-delay-us = <233>;
 +
 +		pinctrl-0 = <&panel_vddio_en>;
@@ -53,7 +64,16 @@ index 3d761b4c3..271dacb94 100644
  };
  
  &apps_rsc {
-@@ -273,6 +290,59 @@ pm6150l_bob: bob {
+@@ -221,7 +242,7 @@ pm6150l_l1: ldo1 {
+ 		};
+ 
+ 		pm6150l_l4: ldo4 {
+-			regulator-min-microvolt = <2700000>;
++			regulator-min-microvolt = <3000000>;
+ 			regulator-max-microvolt = <3300000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -273,6 +294,59 @@ pm6150l_bob: bob {
  	};
  };
  
@@ -113,7 +133,7 @@ index 3d761b4c3..271dacb94 100644
  &pm6450_gpios {
  	vol_down_n: vol-down-n-state {
  		pins = "gpio1";
-@@ -351,6 +421,29 @@ &sdhc_2 {
+@@ -351,6 +425,29 @@ &sdhc_2 {
  	status = "okay";
  };
  

@@ -658,6 +658,21 @@ Everything here is about `linux-postmarketos-qcom-sm6450`, our own 6.18 kernel.
   distrobox, with gcc and no pahole, also drops `CONFIG_CFI` and
   `CONFIG_DEBUG_INFO_BTF`, which only clang and pahole in the build chroot
   can satisfy.
+- **pkgrel 7 lets the Gunyah watchdog run from boot** — Done 2026-10-07.
+  Built and installed, and the parameter and its message are in the
+  installed `vmlinuz` (`#8-postmarketos`); not yet run on the device.
+  `CONFIG_GUNYAH_WATCHDOG` goes from `m` to `y`, because a module would only
+  load from the init, after the window this is meant to cover. A
+  bring-up-only patch, `bringup-gunyah-wdt-start-at-boot.patch`, adds
+  `gunyah_wdt.start_at_boot`. With it the driver starts the watchdog at
+  probe instead of stopping it, and sets `WDOG_HW_RUNNING`, so the watchdog
+  core's own kernel thread feeds it until something opens `/dev/watchdog0`
+  (`CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`, `CONFIG_WATCHDOG_OPEN_TIMEOUT=0`).
+  A kernel that stops scheduling stops feeding it, and the hypervisor bites
+  32 seconds later. The parameter is off by default and is not for
+  upstream. Whether a bite resets this board in a way the bootloader counts
+  as an attempt is what the `WDTPROBE` round tests; see "The real init on
+  mainline".
 
 ## The first mainline flash
 
@@ -1023,7 +1038,7 @@ had become the priority.
   pkgrel 5 did, costs 14 MB of kernel image; see "The mainline kernel
   package".
 - **`try-kernel.sh --log` reads the card back, and each round is labelled**
-  — Done 2026-10-07, not yet run against the device. In recovery it runs
+  — Done 2026-10-07, and run against the device the same night. In recovery it runs
   the one line that `bootlog.py card-sh read` prints, through
   `adb exec-out`. That line finds the card with the hook's own checks and
   reads nothing if none passes. It then decodes the region: the newest
@@ -1034,6 +1049,15 @@ had become the priority.
   the same way. When it installs the hook, `try-kernel.sh` also puts
   `pmbl.round=<time>` on the command line, which every record carries, so a
   record left over from an older round cannot pass for this one's.
+
+  Its first run on the device stopped at 24 MB of the card's 134, and then
+  lost adb before it read `rddata`. Recovery brings adb up and then, four
+  seconds later, re-enumerates USB as it settles its gadget configuration:
+  product `0xd001` and then `0x4ee2` in the host's log. The read had started
+  in that gap. `--log` now waits until adb has answered every second for ten
+  seconds in a row, and reads again if a read comes back short. Verified the
+  same night: from recovery, both regions read whole, 134,283,264 and
+  16,777,216 bytes.
 
 ## Why the kernel resets
 
@@ -1585,7 +1609,8 @@ as what it would have fixed.
   the dwc3 core failed, 3 a UDC that configfs never bound the gadget to, 4 a
   bound gadget whose UDC is `not attached`, so no host saw it, and 5 one
   that got partway with a host. Rung 6, added after round 19, is a bind
-  that never returned; see below.
+  that never returned, and rung 7, added after round 20, is a host that
+  configured the gadget; see below for both.
 
   `MARKS="4 8"` on `try-kernel.sh` numbers 38 steps across both stages, with
   `debug_shell` as mark 24, eight seconds apart so the seven rungs fit between
@@ -1672,6 +1697,130 @@ as what it would have fixed.
   line runs in, so the substitution waited for the stuck reader anyway, and
   the record stopped there. The job now has all three of its descriptors
   redirected.
+- **Round 20: the hook on the card, and nothing on it** — Verified
+  2026-10-07. pkgrel 6, `DTB=out/milestone/clkref-sdvolt.dtb`,
+  `MARKS="4 8"`, the log hook on,
+  `CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1"` and
+  `WAIT=4800`. Again 80 minutes of nothing, with no fallback, and the phone
+  went back into fastboot only by hand. The host's last USB event from the
+  phone was at 21:06:14, when it rebooted out of fastboot. The first start
+  died before flashing, because `fastboot reboot` reported an error for a
+  reboot that happened. `settle_slot` and `--log` now treat that as a
+  warning and let the wait for the phone decide.
+
+  When recovery read the card's log region, it was blank, counter block
+  included, and so was `rddata`. No attempt wrote a record. Either `/init`
+  never ran, or the hook ran and never found the card. Round 20 cannot tell
+  those apart, and nothing yet says whether the card comes up on mainline
+  at all.
+- **The clkref tree is the one thing rounds 19 and 20 share that earlier
+  boots lacked** — Guess. Both flashed the tree that gives the HS PHY
+  `GCC_EUSB3_0_CLKREF_EN`, and neither came back. Round 18 was silent too, on
+  the package tree without the gate, but its watchdog stood down by design,
+  so it is no control. If turning the gate on hangs the bus, the kernel
+  stops before `/init`. That would explain both the silence and the empty
+  card. The missing SCM node below explains both as well, and more simply,
+  so the clkref round waits until the dwc3 core can probe at all.
+- **A hung kernel now has something to reset it, if the Gunyah watchdog
+  works** — Reasoned. It is built into pkgrel 7 (see "The mainline kernel
+  package"), and a round of its own tests it before anything relies on it.
+  `WDTPROBE=1` on `try-kernel.sh` replaces `/init` with a probe and adds
+  `gunyah_wdt.start_at_boot=1`. The probe lets the kernel feed the watchdog
+  for 50 seconds. Then it opens `/dev/watchdog0`, which stops the kernel
+  feeding it, and never writes to it. The length of each attempt says what
+  happened, measured from `/init`, and `bootlog.py wdtdecode <total>` reads
+  a round's total back:
+  - about 5 seconds: there is no `/dev/watchdog0`, so the driver never
+    registered;
+  - about 31 seconds: it bit while the kernel should have been feeding it,
+    so `start_at_boot` is not safe;
+  - about 82 seconds: it was fed, starved and bitten, so the watchdog works
+    and a hung kernel resets;
+  - about 150 seconds: it never bit, and the probe reset the board itself,
+    so a bite does not reset this board.
+
+  Every outcome but one ends in a reset, so the round falls back to stock
+  without help. The exception is a bite that leaves the board in a
+  crash-dump mode, which would need the buttons, and only this round can
+  find that out.
+- **No outcome of a round should wait for hands any more** — Done
+  2026-10-07. Tested on the host, and the first part also on the device.
+  - The `--log` fix above.
+  - The USB watchdog no longer stands down for good when a host configures
+    the gadget. That would have left the one boot that worked sitting in the
+    initramfs all night, with every round after it waiting. It now gives
+    that boot ten minutes, long enough to harvest it, and `/pmhold` still
+    keeps the phone. Then it resets as rung 7, which `markdecode` knows to
+    read 600 seconds lower. Tested under busybox ash against fake sysfs
+    trees: a gadget that stays configured, a host that leaves during the
+    window, and rungs 4 and 6 unchanged.
+  - `scripts/queue.sh <plan>` runs rounds back to back. A plan is a shell
+    fragment that calls `round NAME VAR=value ...` once per round, and it can
+    branch on `ROUND_RESULT`, `ROUND_TOTAL` and `wdt_verdict`. After every
+    round the queue waits for the phone to be reachable again. It tells a
+    gadget it can reach over telnet to reset at once, rather than wait out
+    the window, and it reads the card and `rddata` if try-kernel did not.
+    If the phone stays silent for three hours, the queue stops, because no
+    round after that one could start. Its parsing was tested against the
+    logs of rounds 19 and 20 and of an earlier fallback round.
+  - `try-kernel.sh` and `queue.sh` each run from an unlinked copy of
+    themselves. Editing either during a round changes nothing about that
+    round.
+- **The Gunyah watchdog probe: no `/dev/watchdog0`** — Verified 2026-10-07,
+  22:42. pkgrel 7, `WDTPROBE=1`, the package's own tree. The round came back
+  on stock in 158 seconds: 18.3 seconds an attempt, 4.9 of them after
+  `/init`, which is the probe finding no watchdog, waiting five seconds and
+  rebooting. So this kernel on this tree reaches `/init` and reboots cleanly
+  seven times running, and the Gunyah watchdog driver never registered.
+- **It never registered because our tree has no SCM node** — Verified in
+  the tree and the sources. `qcom_scm` is what registers the `gunyah-wdt`
+  device, from its probe (the backported
+  `firmware: qcom: scm: Register gunyah watchdog device`), and
+  `sm6450.dtsi` had no `firmware { scm }` node, so `qcom_scm` never probed.
+  Upstream's SM4450 tree, which ours started from, has no SCM node either,
+  but it has no SMMU, and ours does.
+- **Without SCM, USB and the SD card cannot probe at all** — Reasoned, from
+  the 6.18 sources; this is the likeliest single cause of every silent
+  mainline round so far. `qcom_smmu_create`
+  (`drivers/iommu/arm/arm-smmu/arm-smmu-qcom.c`) defers the apps SMMU until
+  `qcom_scm_is_available()`, and the generic `qcom,smmu-500` match carries an
+  impl, so the check applies to ours. The dwc3 core and `sdhc_2` both name
+  `apps_smmu` in `iommus`, so fw_devlink holds them until it binds. The
+  deferred-probe timeout does not release them, because
+  `fw_devlink_no_driver` (`drivers/base/core.c`) relaxes only links to a
+  supplier no driver can match, and arm-smmu matches this one. So the dwc3
+  glue and the HS PHY bind, the core never does, and there is no UDC. That
+  is rung 2 on the ladder, and it fits round 18's phone never pulling D+
+  up. The card never appears, so the hook has nowhere to write. That fits
+  round 20's blank card, whether or not `/init` ran.
+- **pkgrel 8 adds the node** — Done 2026-10-07, committed and not yet built.
+  It is the plain node upstream uses on this generation, compatible and
+  `#reset-cells`, behind a binding commit that documents
+  `qcom,scm-sm6450`. The binding allows no interrupt for it, and there is
+  no TCSR syscon node yet for `qcom,dload-mode`. The board DTB passes
+  `CHECK_DTBS=y` and differs from pkgrel 7's by that node alone; it is
+  `out/milestone/scm.dtb`, which rounds use through `DTB=` until the
+  package is built.
+- **The night of 2026-10-07** — Running. The first queue started round 21
+  at 22:47, the real init on the package tree without the watchdog, since
+  the probe had found none:
+
+      MARKS="4 8" WAIT=4800 \
+      CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1" \
+      scripts/try-kernel.sh
+
+  The SCM finding came while it ran. The queue was stopped, leaving the
+  round alone, and a second one adopted it, with a new plan,
+  `out/try-kernel/plan-20261007b.sh` (under `out/`, so not in git):
+  - `WDTPROBE=1 DTB=out/milestone/scm.dtb`, the watchdog probe again on the
+    tree with SCM;
+  - unless that probe fails to reach a verdict, round 22, the real init on
+    `scm.dtb` with the round 21 options, plus
+    `gunyah_wdt.start_at_boot=1` if the verdict is that the watchdog
+    works.
+
+  The clkref tree is off the night's list. It only makes sense to test
+  once the dwc3 core can probe at all. The results go here.
 
 ## The boot images
 
@@ -2408,20 +2557,14 @@ port boots" above. What is left starts from there.
    ran the real init, and nothing reached the host. Round 19 did not even
    fall back to stock, which the watchdog should have forced; "The real init
    on mainline" has why the gadget bind is the likeliest culprit and what
-   now keeps it from silencing the logging. The next round is pkgrel 6 with
-   the log hook on, writing to the SD card:
-
-       DTB=out/milestone/clkref-sdvolt.dtb MARKS="4 8" \
-       CMDLINE_ADD="nokaslr hardlockup_panic=1 softlockup_panic=1" \
-       WAIT=4800 scripts/try-kernel.sh
-
-   If the card comes up, its records say where the init stopped and which
-   task was stuck, and `scripts/try-kernel.sh --log` reads them back. If it
-   does not, the round's total still names the init step and the rung USB
-   stopped on, rung 6 included. A total past 500 seconds an attempt now
-   means the watchdog's sysrq reset did not land either, which points at a
-   hard hang rather than a stuck sleep. What follows is the history of
-   getting this far.
+   now keeps it from silencing the logging. Round 20 then ran with the log
+   hook writing to the SD card, and the card came back blank. Then the
+   Gunyah watchdog probe showed our tree has no SCM node, which on its own
+   keeps the SMMU, and so the dwc3 core and the SD card, from ever probing.
+   The night of 2026-10-07 runs, unattended under `scripts/queue.sh`, the
+   real init on the package tree, then the watchdog probe and the real init
+   on the tree with SCM; "The real init on mainline" has the commands. What
+   follows is the history of getting this far.
 
    The boot itself was the open question for a while: it has happened twice. The first flash on 2026-10-06 was
    refused by ABL outright, and the second - after the dtbo and the board-id
@@ -2461,20 +2604,17 @@ port boots" above. What is left starts from there.
    from the host. That is enough to bisect a blind boot, coarsely, one number
    at a time, without touching the phone.
 
-2. **Let a hard hang reset itself.** Round 19 needed hands on the phone,
-   because nothing resets a kernel that has stopped. The Gunyah watchdog
-   can, and both halves of it are already in the package: the backports
-   are applied and `CONFIG_GUNYAH_WATCHDOG=m`. With the APSS watchdog node
-   gone, `qcom_scm` registers the `gunyah-wdt` device itself. What is
-   missing is the module in the initramfs, where `modules-initfs.mainline`
-   can put it without a kernel rebuild, and something to pet it. Alpine's
-   busybox has a `watchdog` applet, so the init can start
-   `watchdog -T 32 -t 4 /dev/watchdog0` near the top. 32 seconds is the
-   most Gunyah allows. Two things are unknown, and they are why this waits
-   for its own round, after the card has given a log: whether a Gunyah
-   bite resets the phone the way the bootloader counts an attempt, or drops
-   it into a crash-dump mode that needs the buttons anyway, and whether the
-   driver's status call even answers on this hypervisor.
+2. **Let a hard hang reset itself.** Rounds 19 and 20 needed hands on the
+   phone, because nothing resets a kernel that has stopped. pkgrel 7 builds
+   the Gunyah watchdog in and can start it at probe, and the kernel feeds it
+   for as long as it schedules; see "The real init on mainline". The first
+   `WDTPROBE` round found no watchdog, because nothing registers it without
+   the SCM node that pkgrel 8 adds. What is still open is whether a bite
+   resets this board in a way the bootloader counts, which the second
+   `WDTPROBE` round answers. If it does, every real-init
+   round from then on carries `gunyah_wdt.start_at_boot=1`. If it does not,
+   the hang has to be found from the boots that do reset, and the clkref
+   round goes last in every queue.
 3. **Find where stock stage 1 wedges.** Still unknown, and now diagnosable:
    the watchdog arms on line 5 instead of line 35, so a hang becomes a reset
    loop that ends in Android with a flash log to read. The log hook arms right

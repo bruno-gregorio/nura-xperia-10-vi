@@ -493,6 +493,12 @@ cmd_log() {
 		sleep 5
 		wait_for_adb 120 >/dev/null || die "recovery never came up"
 	elif fastboot devices | grep -q .; then
+		# Before anything changes them: a round ended by hand, or by
+		# the bootloader giving up, is only decodable if we know how
+		# many attempts it began, and set-active resets the count.
+		for s in a b; do
+			say "slot $s: retry-count $(getvar "slot-retry-count:$s"), unbootable $(getvar "slot-unbootable:$s"), successful $(getvar "slot-successful:$s")"
+		done
 		cur=$(getvar current-slot)
 		if [ "$(getvar "slot-successful:$cur")" != "yes" ]; then
 			# Recovery borrows its device tree, command line and a

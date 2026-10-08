@@ -1,4 +1,5 @@
 branch: sm6450-remoteproc-dt
+series: sm6450
 tip:    aaaf3ef44e20a993f14245451d97f6927e262229
 base:   c4d873dbca9934f0a01853654d392b22aeade81a drm/msm/dpu: Add SM6450 support
         (git describe: v6.18.55-35-gc4d873dbc)

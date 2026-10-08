@@ -1,4 +1,5 @@
 branch: sm6450-gccfix
+series: sm6450
 tip:    3e8fe12c57c1334bbd443a60d604d4901cc0f265
 base:   725bd2f3c81d54edccb66fead01d4c0c222e2231 Linux 6.18.55
         (git describe: v6.18.55)

@@ -25,15 +25,15 @@ To be folded into the SM6450 DT / board DT once it has probed on the device.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 11 +++
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 10 +++
  arch/arm64/boot/dts/qcom/sm6450.dtsi          | 84 ++++++++++++++++---
- 2 files changed, 83 insertions(+), 12 deletions(-)
+ 2 files changed, 82 insertions(+), 12 deletions(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 1d1c9c5d7..ebd2fad54 100644
+index 303419c10..5fddd9f9d 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -331,12 +331,23 @@ &uart3 {
+@@ -331,8 +331,18 @@ &uart3 {
  	status = "okay";
  };
  
@@ -44,21 +44,16 @@ index 1d1c9c5d7..ebd2fad54 100644
 + * at high speed, off the UTMI clock alone.
 + */
  &usb_1 {
-+	qcom,select-utmi-as-pipe-clk;
-+
- 	status = "okay";
- };
- 
- &usb_1_dwc3 {
- 	dr_mode = "otg";
+ 	dr_mode = "peripheral";
 +	maximum-speed = "high-speed";
 +	phys = <&usb_1_hsphy>;
 +	phy-names = "usb2-phy";
- 	usb-role-switch;
- };
++	qcom,select-utmi-as-pipe-clk;
  
+ 	status = "okay";
+ };
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-index c770a0099..8811adaaa 100644
+index 34f0c93a3..58a6e4377 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 @@ -7,6 +7,7 @@
@@ -128,13 +123,17 @@ index c770a0099..8811adaaa 100644
 +			};
 +		};
 +
- 		usb_1: usb@a6f8800 {
- 			compatible = "qcom,sm6450-dwc3", "qcom,dwc3";
- 			reg = <0x0 0x0a6f8800 0x0 0x400>;
-@@ -851,14 +898,6 @@ usb_1: usb@a6f8800 {
+ 		usb_1: usb@a600000 {
+ 			compatible = "qcom,sm6450-dwc3", "qcom,snps-dwc3";
+ 			reg = <0x0 0x0a600000 0x0 0xfc100>;
+@@ -856,17 +903,10 @@ usb_1: usb@a600000 {
  
- 			resets = <&gcc GCC_USB30_PRIM_BCR>;
+ 			iommus = <&apps_smmu 0x80 0x0>;
  
+-			phys = <&usb_1_hsphy>;
+-			phy-names = "usb2-phy";
+-			maximum-speed = "high-speed";
+-
 -			/*
 -			 * There is a USB3 + DP combo PHY at 0x88e8000, but
 -			 * which upstream QMP generation it is has not been
@@ -142,48 +141,37 @@ index c770a0099..8811adaaa 100644
 -			 * at high speed off the UTMI clock alone.
 -			 */
 -			qcom,select-utmi-as-pipe-clk;
--
- 			#address-cells = <2>;
- 			#size-cells = <2>;
- 			ranges;
-@@ -870,9 +909,10 @@ usb_1_dwc3: usb@a600000 {
- 				reg = <0x0 0x0a600000 0x0 0xcd00>;
- 				interrupts = <GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>;
- 				iommus = <&apps_smmu 0x80 0x0>;
--				phys = <&usb_1_hsphy>;
--				phy-names = "usb2-phy";
--				maximum-speed = "high-speed";
-+				phys = <&usb_1_hsphy>,
-+				       <&usb_1_qmpphy QMP_USB43DP_USB3_PHY>;
-+				phy-names = "usb2-phy",
-+					    "usb3-phy";
++			phys = <&usb_1_hsphy>,
++			       <&usb_1_qmpphy QMP_USB43DP_USB3_PHY>;
++			phy-names = "usb2-phy",
++				    "usb3-phy";
  
- 				snps,dis-u1-entry-quirk;
- 				snps,dis-u2-entry-quirk;
-@@ -884,6 +924,26 @@ usb_1_dwc3: usb@a600000 {
- 				snps,usb2-gadget-lpm-disable;
- 				snps,usb2-lpm-disable;
- 				tx-fifo-resize;
+ 			snps,dis-u1-entry-quirk;
+ 			snps,dis-u2-entry-quirk;
+@@ -880,6 +920,26 @@ usb_1: usb@a600000 {
+ 			tx-fifo-resize;
+ 
+ 			status = "disabled";
 +
-+				ports {
-+					#address-cells = <1>;
-+					#size-cells = <0>;
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
 +
-+					port@0 {
-+						reg = <0>;
++				port@0 {
++					reg = <0>;
 +
-+						usb_1_dwc3_hs: endpoint {
-+						};
-+					};
-+
-+					port@1 {
-+						reg = <1>;
-+
-+						usb_1_dwc3_ss: endpoint {
-+							remote-endpoint = <&usb_1_qmpphy_usb_ss_in>;
-+						};
++					usb_1_dwc3_hs: endpoint {
 +					};
 +				};
- 			};
++
++				port@1 {
++					reg = <1>;
++
++					usb_1_dwc3_ss: endpoint {
++						remote-endpoint = <&usb_1_qmpphy_usb_ss_in>;
++					};
++				};
++			};
  		};
  
+ 		pdc: interrupt-controller@b220000 {

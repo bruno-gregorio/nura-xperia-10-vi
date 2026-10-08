@@ -19,14 +19,14 @@ To be folded into the SM6450 DT / board DT once it has probed on the device.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 36 +++++++++++++------
- 1 file changed, 25 insertions(+), 11 deletions(-)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 35 +++++++++++++------
+ 1 file changed, 25 insertions(+), 10 deletions(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index ebd2fad54..523bd1ce4 100644
+index 5fddd9f9d..c0a2b7582 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -327,27 +327,25 @@ &sdhc_2 {
+@@ -327,22 +327,21 @@ &sdhc_2 {
  	status = "okay";
  };
  
@@ -50,20 +50,15 @@ index ebd2fad54..523bd1ce4 100644
 - * at high speed, off the UTMI clock alone.
 - */
  &usb_1 {
--	qcom,select-utmi-as-pipe-clk;
--
- 	status = "okay";
- };
- 
- &usb_1_dwc3 {
- 	dr_mode = "otg";
+ 	dr_mode = "peripheral";
 -	maximum-speed = "high-speed";
 -	phys = <&usb_1_hsphy>;
 -	phy-names = "usb2-phy";
- 	usb-role-switch;
- };
+-	qcom,select-utmi-as-pipe-clk;
  
-@@ -372,3 +370,19 @@ &usb_1_hsphy {
+ 	status = "okay";
+ };
+@@ -368,3 +367,19 @@ &usb_1_hsphy {
  
  	status = "okay";
  };

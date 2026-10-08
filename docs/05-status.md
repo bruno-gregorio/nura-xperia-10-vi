@@ -2932,6 +2932,82 @@ as what it would have fixed.
 
   It reads named power supply attributes only. It never reads the
   battery's `serial_number`, nor any `uevent`, which carries it.
+- **Round 57: `pmic_glink` runs, and the link still goes** — Verified
+  2026-10-08, 17:09 to 17:16. Round 56 again, on `glink-r16.dtb` with
+  `cmds-r56.sh`. The card's first attempt carries the watcher's log;
+  `out/try-kernel/bootlog-card-20261008-171718.txt` is the dump.
+  - **Verified:** every module loaded, and "remote processor adsp is now
+    up" came at 124.61 s. UCSI registered at 125.07 s, interface version
+    1.0.0. Port 0 came up as data role device and power role sink, with a
+    partner. The auxiliary bus held the altmode, power-supply and UCSI
+    devices and the pd-mapper.
+  - **Verified:** the first battery and charger readings on mainline,
+    from `qcom_battmgr` at 138 s. The battery was Full at 99 %, 4.482 V
+    and 33.0 °C. The USB input was online at 5.11 V and 235 mA, detected
+    as SDP. UCSI's own supply reported a PD source offering 3 A. The
+    readings at 159, 191 and 223 s matched.
+  - **Verified:** the link went as in rounds 37 and 52. It was in Suspend
+    by 124.73 s, 0.12 s after the ADSP came up, while the SOF number in
+    DSTS kept advancing until 125.19 s. At 125.32 s the UDC read `not
+    attached`, and after that the link stayed in Suspend. VBUS never
+    went: the charger read 5.1 V throughout. The pull-up toggle at 159 s
+    and the gadget rebind at 192 s returned 0 and changed nothing. The
+    role switch has no `role` file, because dwc3 does not allow userspace
+    control, so the 45 s step wrote nothing.
+  - **Verified on the host:** its kernel log has one clean `USB
+    disconnect`, 119 s after it enumerated the phone, and then nothing
+    until the phone rebooted 336 s later. There were no reset attempts and
+    no failed enumerations, so after the drop the host never saw a pull-up
+    on D+. The host's port is a Type-C port with PD 3.0.
+  - **Verified:** the lease worked again: "hold lapsed at 242: gadget last
+    configured at 152, /pmhold touched 119 s ago". The watchdog reset the
+    phone at about 441 s of uptime. The next six attempts each reset
+    within 18 s, as designed. Stock came back about five minutes after
+    the drop, with no one at the phone.
+  - **Reasoned:** the power domains are not the cause. Until every
+    consumer has probed, rpmhpd holds every domain at its highest level,
+    and the boot log says its `sync_state` waits on the four remoteprocs.
+    Loading `qcom_q6v5_pas` releases it. But round 34 loaded the same
+    driver, all four remoteprocs bound at 97.5 s, and its shell went on
+    answering. So the votes coming down do not take USB with them; the
+    ADSP running does.
+  - **Guess:** the charger firmware starts with BC1.2 detection on D+ and
+    D-, or with a PD reset. Either one upsets the PHY while the gadget
+    holds D+ up, and the PHY or the controller does not recover without a
+    reset. Stock boots the ADSP long before its gadget connects. Round 59
+    tests that order.
+- **Round 58: the QUP wrappers and USB are DMA-coherent** — Verified
+  2026-10-08, 17:19. pkgrel 16 on `out/milestone/coherent-r16.dtb`: the
+  package's tree with branch `sm6450-coherent`. It marks both QUP
+  wrappers and the USB controller `dma-coherent`, as stock does, and gives
+  wrapper 0 stock's SMMU stream, 0x163. A coherence mismatch corrupts DMA
+  silently, so the round checked both directions:
+  - a 4 MiB random file pushed over the gadget hashed on the phone to the
+    host's SHA-256;
+  - the first 256 KiB of it, sent back as base64, decoded on the host to
+    the same bytes.
+
+  Round 54's checks passed as well. The vblanks came 16.80 ms apart, the
+  backlight read back 400, `sda` to `sdc` were there, the touchscreen
+  bound and the Bluetooth setup completed. No context fault was logged.
+  The transcript is `out/try-kernel/live-r58.txt`.
+- **Round 59: the ADSP with the gadget unbound** — Planned. Plan w runs
+  it on pkgrel 16's own tree, with no `pmic_glink` and no role switch, so
+  that only the ADSP changes. `out/tools/order-watch.sh` runs detached
+  and logs to the kernel log. It stops at the first phase in which a
+  host configures the gadget again:
+  0. a gadget unbind and rebind with no ADSP, as a control. Nothing has
+     tested that yet, and if the host does not come back from it, the
+     failed recoveries of rounds 52 and 57 say nothing about the ADSP;
+  1. the ADSP booted with the gadget unbound, so nothing holds D+ up,
+     and the gadget bound again 20 s after the ADSP is up;
+  2. the controller's driver unbound and bound, which takes the PHY
+     through its reset and init again;
+  3. the ADSP stopped, and the gadget bound once more.
+
+  It also logs the PHY's three supplies, and the glue's `HS_PHY_CTRL`
+  with the controller's registers, which it reads only while the driver
+  is bound and the controller is runtime active.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -3614,7 +3690,7 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   anywhere.
 - **Modem, Wi-Fi, audio, camera.** On mainline, the four remote
   processors they run on are in pkgrel 15's series. Round 34 probed
-  them, and rounds 37 and 52 booted the ADSP, which took the USB link
+  them, and rounds 37, 52 and 57 booted the ADSP, which took the USB link
   with it both times (see "Round 52"). Of what sits above them, only the WLAN node is
   written. All of them need firmware from the stock partitions, which is
   not redistributable and is not packaged here. Plan n read it from
@@ -3698,12 +3774,14 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   which 6.18 handles in `dwc3-qcom-legacy.c`; new SoCs upstream use the
   flattened `qcom,snps-dwc3` form. Round 25 ran the flattened node, and
   pkgrel 15's series carries it.
-- **No `pmic_glink` that has run.** The ADSP's charger and Type-C
-  firmware has no peer on our side yet. Pkgrel 16 builds `pmic_glink`,
-  `ucsi_glink` and `qcom_battmgr`, and the board's `pmic-glink` node is
-  WIP on branch `sm6450-glink`. Round 56 runs both. Without them there is
-  no battery reading, no charger control and no orientation. Rounds 37
-  and 52 suggest there is no USB either, once the ADSP runs.
+- **USB does not survive the ADSP.** `pmic_glink`, UCSI and the
+  battery manager work: round 57 read the battery and the charger and saw
+  the Type-C port (see "Round 57"). The board's `pmic-glink` node is still
+  WIP on branch `sm6450-glink`. But in rounds 37, 52 and 57, booting the
+  ADSP took the USB link within 0.2 s, and nothing on our side has brought
+  the host back. Until that changes, every round that boots the ADSP ends
+  with the lease. Round 59 looks for the order or the reset that keeps
+  the link.
 
 ## Next steps, in order
 
@@ -3806,13 +3884,14 @@ port boots" above. What is left starts from there.
    kernel, and only if that ever needs a screen.
 6. **The remote processors, then their firmware.** Round 34 probed all
    four without firmware, plan n collected the firmware partition, and
-   rounds 37 and 52 booted the ADSP. Both times it took the USB link
-   0.7 s later (see "Round 52"). Round 52 also showed that the lease ends
-   such a round without anyone at the phone. The guess is that the ADSP
-   needs its peer on our side: `pmic_glink` with UCSI and a role switch
-   to dwc3, as on upstream's SM8550 boards, with `qrtr-smd` under it.
-   Pkgrel 16 builds them, and round 56 runs them. Charging, audio, the
-   modem and Wi-Fi all start there.
+   rounds 37, 52 and 57 booted the ADSP. Each time it took the USB link
+   within 0.2 s, and the lease ended the round without anyone at the phone
+   (see "Round 57"). Round 57 had `pmic_glink`, UCSI and the battery
+   manager with `qrtr-smd` under them, and they all worked: the battery,
+   the charger and the Type-C port read correctly. So the peer was not
+   what the link was missing. Round 59 tries the ADSP with the gadget
+   unbound, then a re-probe of the controller and its PHY. Charging,
+   audio, the modem and Wi-Fi all start here.
 7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and

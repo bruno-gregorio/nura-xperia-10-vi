@@ -1917,7 +1917,8 @@ as what it would have fixed.
   The results go here.
 - **Round 22 went silent past the longest a resetting round can take** —
   Verified 2026-10-08, 00:36. The real init on `scm.dtb`, pkgrel 7, round
-  21's options. At 3376 seconds nothing had answered. Seven attempts that
+  21's options. At 3376 seconds nothing had answered, and nothing had by
+  the end of the 4800-second wait either. Seven attempts that
   each reach the last mark and reset take about 3370 seconds with the
   fallback boot, so at least one attempt was ended by nothing.
 - **No mainline boot has come back from more than about 5 seconds after

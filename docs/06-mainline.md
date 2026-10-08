@@ -608,10 +608,11 @@ form, where `link_nodes` is a flexible array and IDs are gone.
   names there, decoded through the vendor GCC header.
 
 The driver compiles with W=1, checkpatch `--strict` has nothing to say, and
-the binding check is clean. Branch `sm6450-icc` in `out/linux` adds the
-nodes to `sm6450.dtsi` - the two virtual NoCs at the root and the other ten
-in address order - and the first three consumers: the QUP wrapper and its
-UART, the SD controller and USB. Data paths carry `QCOM_ICC_TAG_ALWAYS`, the
+the binding check is clean. The SoC commit on `sm6450-fold` in
+`out/linux` adds the nodes to `sm6450.dtsi` - the two virtual NoCs at the
+root and the other ten in address order - and the first three consumers:
+the QUP wrapper and its UART, the SD controller and USB. They were the WIP
+branch `sm6450-icc` until rounds 30 and 31 ran them. Data paths carry `QCOM_ICC_TAG_ALWAYS`, the
 CPU's configuration paths `QCOM_ICC_TAG_ACTIVE_ONLY`, as upstream's trees do.
 `CHECK_DTBS=y` is clean and `check-dt.py` accounts for every address.
 

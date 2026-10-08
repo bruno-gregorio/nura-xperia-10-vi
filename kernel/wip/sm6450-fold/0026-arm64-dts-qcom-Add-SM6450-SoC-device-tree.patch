@@ -10,12 +10,16 @@ Add the base device tree for SM6450: eight CPUs in one cluster (four
 Cortex-A55 and four Cortex-A78) with their idle states and PSCI power
 domains, the carve-outs the firmware owns, GCC, TLMM, the GIC, PDC,
 IPCC, the TCSR mutex, the memory-mapped timer, the RPMh RSC with its
-clock and power domain controllers, the EPSS CPU frequency controller,
-the QUPv3 wrapper holding the debug UART, the SPMI arbiter with both
-its buses, the AOSS side channel and its sleep stats, SMEM with the
-four SMP2P edges that ride on it, the apps SMMU, the SD card
-controller, USB with its high-speed PHY, and the two TSENS controllers
-with the thermal zones they feed.
+clock and power domain controllers, the ten NoCs and two virtual
+interconnect providers, the EPSS CPU frequency controller, the QUPv3
+wrapper holding the debug UART, the SPMI arbiter with both its buses,
+the AOSS side channel and its sleep stats, SMEM with the four SMP2P
+edges that ride on it, the apps SMMU, the SD card controller, USB with
+its high-speed PHY, and the two TSENS controllers with the thermal zones
+they feed.
+
+The SD card's bandwidth votes are SM6350's, like the rest of its OPP
+table.
 
 TSENS0 has two sensors on each Cortex-A78 core and TSENS1 one on each
 Cortex-A55 core. The CPU zones throttle through cpufreq at 110 C, and
@@ -34,16 +38,16 @@ MMIO watchdog is described.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- arch/arm64/boot/dts/qcom/sm6450.dtsi | 1964 ++++++++++++++++++++++++++
- 1 file changed, 1964 insertions(+)
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 2078 ++++++++++++++++++++++++++
+ 1 file changed, 2078 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450.dtsi
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..ee1b15de1
+index 000000000..d3ce77005
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,1964 @@
+@@ -0,0 +1,2078 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -51,6 +55,8 @@ index 000000000..ee1b15de1
 +
 +#include <dt-bindings/clock/qcom,rpmh.h>
 +#include <dt-bindings/clock/qcom,sm6450-gcc.h>
++#include <dt-bindings/interconnect/qcom,icc.h>
++#include <dt-bindings/interconnect/qcom,sm6450-rpmh.h>
 +#include <dt-bindings/interrupt-controller/arm-gic.h>
 +#include <dt-bindings/mailbox/qcom-ipcc.h>
 +#include <dt-bindings/power/qcom-rpmpd.h>
@@ -353,6 +359,18 @@ index 000000000..ee1b15de1
 +			compatible = "qcom,scm-sm6450", "qcom,scm";
 +			#reset-cells = <1>;
 +		};
++	};
++
++	clk_virt: interconnect-0 {
++		compatible = "qcom,sm6450-clk-virt";
++		#interconnect-cells = <2>;
++		qcom,bcm-voters = <&apps_bcm_voter>;
++	};
++
++	mc_virt: interconnect-1 {
++		compatible = "qcom,sm6450-mc-virt";
++		#interconnect-cells = <2>;
++		qcom,bcm-voters = <&apps_bcm_voter>;
 +	};
 +
 +	memory@80000000 {
@@ -770,6 +788,9 @@ index 000000000..ee1b15de1
 +			clocks = <&gcc GCC_QUPV3_WRAP_0_M_AHB_CLK>,
 +				 <&gcc GCC_QUPV3_WRAP_0_S_AHB_CLK>;
 +			clock-names = "m-ahb", "s-ahb";
++			interconnects = <&clk_virt MASTER_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS
++					 &clk_virt SLAVE_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS>;
++			interconnect-names = "qup-core";
 +			#address-cells = <2>;
 +			#size-cells = <2>;
 +			status = "disabled";
@@ -780,16 +801,82 @@ index 000000000..ee1b15de1
 +				clocks = <&gcc GCC_QUPV3_WRAP0_S3_CLK>;
 +				clock-names = "se";
 +				interrupts = <GIC_SPI 604 IRQ_TYPE_LEVEL_HIGH>;
++				interconnects = <&clk_virt MASTER_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS
++						 &clk_virt SLAVE_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS>,
++						<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++						 &cnoc2 SLAVE_QUP_0 QCOM_ICC_TAG_ACTIVE_ONLY>;
++				interconnect-names = "qup-core", "qup-config";
 +				pinctrl-0 = <&qup_uart3_tx>, <&qup_uart3_rx>;
 +				pinctrl-names = "default";
 +				status = "disabled";
 +			};
 +		};
 +
++		cnoc2: interconnect@1500000 {
++			compatible = "qcom,sm6450-cnoc2";
++			reg = <0x0 0x01500000 0x0 0x1000>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		cnoc3: interconnect@1502000 {
++			compatible = "qcom,sm6450-cnoc3";
++			reg = <0x0 0x01502000 0x0 0x1000>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		system_noc: interconnect@1680000 {
++			compatible = "qcom,sm6450-system-noc";
++			reg = <0x0 0x01680000 0x0 0x1e200>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		pcie_anoc: interconnect@16c0000 {
++			compatible = "qcom,sm6450-pcie-anoc";
++			reg = <0x0 0x016c0000 0x0 0xe280>;
++			#interconnect-cells = <2>;
++			clocks = <&gcc GCC_AGGRE_NOC_PCIE_0_AXI_CLK>,
++				 <&gcc GCC_CFG_NOC_PCIE_ANOC_AHB_CLK>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		aggre1_noc: interconnect@16e0000 {
++			compatible = "qcom,sm6450-aggre1-noc";
++			reg = <0x0 0x016e0000 0x0 0x1c080>;
++			#interconnect-cells = <2>;
++			clocks = <&gcc GCC_AGGRE_UFS_PHY_AXI_CLK>,
++				 <&gcc GCC_AGGRE_USB3_PRIM_AXI_CLK>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		aggre2_noc: interconnect@1700000 {
++			compatible = "qcom,sm6450-aggre2-noc";
++			reg = <0x0 0x01700000 0x0 0x31080>;
++			#interconnect-cells = <2>;
++			clocks = <&rpmhcc RPMH_IPA_CLK>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		mmss_noc: interconnect@1740000 {
++			compatible = "qcom,sm6450-mmss-noc";
++			reg = <0x0 0x01740000 0x0 0x1f080>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
 +		tcsr_mutex: hwlock@1f40000 {
 +			compatible = "qcom,tcsr-mutex";
 +			reg = <0x0 0x01f40000 0x0 0x20000>;
 +			#hwlock-cells = <1>;
++		};
++
++		lpass_ag_noc: interconnect@3c40000 {
++			compatible = "qcom,sm6450-lpass-ag-noc";
++			reg = <0x0 0x03c40000 0x0 0x17200>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
 +		};
 +
 +		sdhc_2: mmc@8804000 {
@@ -806,6 +893,12 @@ index 000000000..ee1b15de1
 +				 <&rpmhcc RPMH_CXO_CLK>;
 +			clock-names = "iface", "core", "xo";
 +			resets = <&gcc GCC_SDCC2_BCR>;
++
++			interconnects = <&aggre2_noc MASTER_SDCC_2 QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
++					<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++					 &cnoc2 SLAVE_SDCC_2 QCOM_ICC_TAG_ACTIVE_ONLY>;
++			interconnect-names = "sdhc-ddr", "cpu-sdhc";
 +
 +			/*
 +			 * The stock tree packs these into one qcom,dll-hsr-list;
@@ -827,18 +920,23 @@ index 000000000..ee1b15de1
 +
 +				/*
 +				 * The two frequencies are the stock tree's. The
-+				 * corner each one needs is not in it, and these
-+				 * are SM6350's, which has the same two
-+				 * frequencies and the same DLL and DDR words.
++				 * corner and the bandwidth each one needs are not
++				 * in it, and these are SM6350's, which has the
++				 * same two frequencies and the same DLL and DDR
++				 * words.
 +				 */
 +				opp-100000000 {
 +					opp-hz = /bits/ 64 <100000000>;
 +					required-opps = <&rpmhpd_opp_svs_l1>;
++					opp-peak-kBps = <790000 131000>;
++					opp-avg-kBps = <50000 50000>;
 +				};
 +
 +				opp-202000000 {
 +					opp-hz = /bits/ 64 <202000000>;
 +					required-opps = <&rpmhpd_opp_nom>;
++					opp-peak-kBps = <3190000 294000>;
++					opp-avg-kBps = <261438 300000>;
 +				};
 +			};
 +		};
@@ -875,6 +973,12 @@ index 000000000..ee1b15de1
 +			assigned-clocks = <&gcc GCC_USB30_PRIM_MOCK_UTMI_CLK>,
 +					  <&gcc GCC_USB30_PRIM_MASTER_CLK>;
 +			assigned-clock-rates = <19200000>, <133333333>;
++
++			interconnects = <&aggre1_noc MASTER_USB3_0 QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
++					<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++					 &cnoc2 SLAVE_USB3_0 QCOM_ICC_TAG_ACTIVE_ONLY>;
++			interconnect-names = "usb-ddr", "apps-usb";
 +
 +			/*
 +			 * The stock tree names four of the five glue
@@ -1371,6 +1475,20 @@ index 000000000..ee1b15de1
 +			interrupt-names = "dcvsh-irq-0", "dcvsh-irq-1";
 +			#freq-domain-cells = <1>;
 +			#clock-cells = <1>;
++		};
++
++		gem_noc: interconnect@19100000 {
++			compatible = "qcom,sm6450-gem-noc";
++			reg = <0x0 0x19100000 0x0 0xbb800>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		nsp_noc: interconnect@320c0000 {
++			compatible = "qcom,sm6450-nsp-noc";
++			reg = <0x0 0x320c0000 0x0 0x10000>;
++			#interconnect-cells = <2>;
++			qcom,bcm-voters = <&apps_bcm_voter>;
 +		};
 +	};
 +

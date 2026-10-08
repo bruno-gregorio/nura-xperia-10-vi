@@ -1,0 +1,6 @@
+branch: sm6450-gpucc
+series: sm6450-fold
+tip:    eb9e15071d06fa5fbe0d6adcb57601ccb96008a9
+base:   7ab775973813a9f80101629e7af5e34b029b00ee drm/msm/dpu: Add SM6450 support
+        (git describe: v6.18.55-36-g7ab775973)
+patches: 3

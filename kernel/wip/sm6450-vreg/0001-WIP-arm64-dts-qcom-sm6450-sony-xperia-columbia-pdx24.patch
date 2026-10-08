@@ -1,0 +1,142 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 15:00:08 -0300
+Subject: [PATCH] WIP: arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246:
+ Raise the regulator floors
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The regulator windows come from the stock tree, but few mainline
+consumers set a voltage: not ufshcd, not the QMP and Femto PHYs, not the
+DSI host. For an RPMh rail it cannot read back, the regulator core
+applies the bottom of the window, so those rails came up below the
+voltage the vendor driver starts them at, its qcom,init-voltage. UFS's
+VCCQ sat at 1.08 V and VCCQ2 at 1.62 V, both under the UFS minimum.
+
+Raise the fourteen floors that are below that voltage to it. The ceilings
+are unchanged.
+
+To be folded into the SM6450 DT / board DT once it has probed on the device.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 28 +++++++++----------
+ 1 file changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index 303419c10..acfcbe48c 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -51,33 +51,33 @@ regulators-0 {
+ 		qcom,pmic-id = "b";
+ 
+ 		pm6450_s6: smps6 {
+-			regulator-min-microvolt = <1010000>;
++			regulator-min-microvolt = <1052000>;
+ 			regulator-max-microvolt = <1170000>;
+ 		};
+ 
+ 		pm6450_s7: smps7 {
+-			regulator-min-microvolt = <880000>;
++			regulator-min-microvolt = <972000>;
+ 			regulator-max-microvolt = <1174000>;
+ 		};
+ 
+ 		pm6450_s8: smps8 {
+-			regulator-min-microvolt = <1224000>;
++			regulator-min-microvolt = <1272000>;
+ 			regulator-max-microvolt = <1654000>;
+ 		};
+ 
+ 		pm6450_s9: smps9 {
+-			regulator-min-microvolt = <850000>;
++			regulator-min-microvolt = <2208000>;
+ 			regulator-max-microvolt = <2208000>;
+ 		};
+ 
+ 		pm6450_l1: ldo1 {
+-			regulator-min-microvolt = <300000>;
++			regulator-min-microvolt = <504000>;
+ 			regulator-max-microvolt = <650000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+ 
+ 		pm6450_l3: ldo3 {
+-			regulator-min-microvolt = <870000>;
++			regulator-min-microvolt = <904000>;
+ 			regulator-max-microvolt = <970000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -89,7 +89,7 @@ pm6450_l4: ldo4 {
+ 		};
+ 
+ 		pm6450_l5: ldo5 {
+-			regulator-min-microvolt = <830000>;
++			regulator-min-microvolt = <880000>;
+ 			regulator-max-microvolt = <920000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -101,7 +101,7 @@ pm6450_l6: ldo6 {
+ 		};
+ 
+ 		pm6450_l7: ldo7 {
+-			regulator-min-microvolt = <830000>;
++			regulator-min-microvolt = <912000>;
+ 			regulator-max-microvolt = <920000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -124,7 +124,7 @@ pm6450_l12: ldo12 {
+ 		};
+ 
+ 		pm6450_l13: ldo13 {
+-			regulator-min-microvolt = <1080000>;
++			regulator-min-microvolt = <1200000>;
+ 			regulator-max-microvolt = <1304000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -136,7 +136,7 @@ pm6450_l14: ldo14 {
+ 		};
+ 
+ 		pm6450_l16: ldo16 {
+-			regulator-min-microvolt = <1140000>;
++			regulator-min-microvolt = <1200000>;
+ 			regulator-max-microvolt = <1260000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -148,7 +148,7 @@ pm6450_l18: ldo18 {
+ 		};
+ 
+ 		pm6450_l19: ldo19 {
+-			regulator-min-microvolt = <1620000>;
++			regulator-min-microvolt = <1800000>;
+ 			regulator-max-microvolt = <1980000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -172,7 +172,7 @@ pm6450_l22: ldo22 {
+ 		};
+ 
+ 		pm6450_l23: ldo23 {
+-			regulator-min-microvolt = <1650000>;
++			regulator-min-microvolt = <1800000>;
+ 			regulator-max-microvolt = <1950000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -182,7 +182,7 @@ pm6450_l24: ldo24 {
+ 		};
+ 
+ 		pm6450_l25: ldo25 {
+-			regulator-min-microvolt = <2700000>;
++			regulator-min-microvolt = <3072000>;
+ 			regulator-max-microvolt = <3544000>;
+ 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+ 		};
+@@ -211,7 +211,7 @@ regulators-1 {
+ 		qcom,pmic-id = "e";
+ 
+ 		pm6150l_s8: smps8 {
+-			regulator-min-microvolt = <1816000>;
++			regulator-min-microvolt = <1872000>;
+ 			regulator-max-microvolt = <2040000>;
+ 		};
+ 

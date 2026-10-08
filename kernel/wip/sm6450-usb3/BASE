@@ -1,6 +1,6 @@
 branch: sm6450-usb3
 series: sm6450-fold
-tip:    b0fa35fd73deba72a504ded16538a2f394c42a41
-base:   d9ab9e0cf1127799bed46c0e2e51315b7b9153bb drm/msm/dpu: Add SM6450 support
-        (git describe: v6.18.55-36-gd9ab9e0cf)
+tip:    aa178f8036e645777121e9c8149027069e89224b
+base:   7ab775973813a9f80101629e7af5e34b029b00ee drm/msm/dpu: Add SM6450 support
+        (git describe: v6.18.55-36-g7ab775973)
 patches: 4

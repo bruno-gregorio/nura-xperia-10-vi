@@ -1,6 +1,6 @@
 branch: sm6450-bt
 series: sm6450
-tip:    9e8a8d13940dcbc17b79078201675d9eb2cbbcff
+tip:    d739664d28cedbac8f02207f76e4a6056e2caad7
 base:   c4d873dbca9934f0a01853654d392b22aeade81a drm/msm/dpu: Add SM6450 support
         (git describe: v6.18.55-35-gc4d873dbc)
-patches: 2
+patches: 3

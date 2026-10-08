@@ -676,7 +676,8 @@ Everything here is about `linux-postmarketos-qcom-sm6450`, our own 6.18 kernel.
 - **pkgrel 8 gives the SoC tree its SCM node** — Done 2026-10-07, built and
   never installed. See "The real init on mainline" for why it matters.
 - **pkgrel 9 lets `qcom_scm` find Gunyah on SMCCC v1.0 firmware** — Done
-  2026-10-07, built; the overnight queue installs it. One more bring-up
+  2026-10-07, built, and installed in the rootfs by the overnight queue at
+  04:02 on 2026-10-08, with fresh boot images. One more bring-up
   patch, `bringup-gunyah-wdt-smccc-1-0.patch`, with the reasoning in "The
   real init on mainline".
 
@@ -1844,7 +1845,7 @@ as what it would have fixed.
   v1.1 guarantee. Stock relies on the same thing on this same firmware, so
   that is not a new risk.
 - **pkgrel 9 asks in a way v1.0 can answer** — Done 2026-10-07, built at
-  23:53, and installed by the queue between rounds (see below). The bring-up
+  23:53, and installed by the queue at 04:02 (see below); not yet run. The bring-up
   patch `bringup-gunyah-wdt-smccc-1-0.patch` repeats the UID query below
   v1.1 with `arm_smccc_smc()`, an SMCCC v1.0 call, over SMC, which every
   call `qcom_scm` makes already uses. The Call UID query is one of the
@@ -1913,6 +1914,14 @@ as what it would have fixed.
   - only if the verdict is that the watchdog works, round 23: the real init
     on `scm.dtb` with `gunyah_wdt.start_at_boot=1`, the force option if it
     was needed, and the round 21 options.
+
+  Round 22 hung, and nobody was at the phone, so the second queue gave up
+  at 04:01 after its three-hour wait. The fifth plan then installed pkgrel
+  9 and stopped at its first round, which found no phone. A sixth,
+  `out/try-kernel/plan-20261008f.sh`, replaced it. It waits up to a day
+  for the phone, logs the bootloader's counters from fastboot, reads the
+  card round 22 may have written, and then runs the fifth plan's rounds
+  unchanged.
 
   The results go here.
 - **Round 22 went silent past the longest a resetting round can take** —

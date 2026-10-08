@@ -3107,8 +3107,7 @@ as what it would have fixed.
     back once more. The driver bound at 165.7 s and the gadget was
     configured by 169.9 s, with the ADSP running.
 - **Round 62: USB survives the ADSP** — Verified 2026-10-08, 18:32 to
-  18:42, the first round started from fastboot with the phone already
-  there. Plan z put pkgrel 17 in the rootfs and booted
+  18:42. Plan z put pkgrel 17 in the rootfs and booted
   `out/milestone/glinkref-r17.dtb`, which is round 57's glink tree plus
   round 60's PHY reference gate, with `out/tools/usbfix-watch.sh`. The
   transcript is `out/try-kernel/live-r62.txt`, and
@@ -3136,8 +3135,12 @@ as what it would have fixed.
     GENERAL_CFG read 0x0d afterwards, where round 61 read 0x04, and there
     was no `failed to enable ep0out`. The only complaint was dwc3-qcom's
     usual `HS-PHY not in L2` on the way into suspend.
-  - **Not captured:** the host's kernel log. The plan's `journalctl -k`
-    found nothing after the host's own reboot earlier that evening.
+  - **Verified on the host:** its kernel log, in
+    `out/try-kernel/queue-20261008-183229.log`, agrees. It shows a USB
+    disconnect at 18:35:26 and the phone enumerated again at 18:35:29,
+    which was the ADSP and the re-init. Then a disconnect at 18:35:43
+    and the next enumeration at 18:35:50, which was the runtime suspend
+    phase. The two are 17 s apart on the host and on the phone.
   - **Reasoned:** the device report comes after the firmware's writes,
     not before. The firmware reports the data role once its BC1.2
     detection knows the port type, and it leaves the PHY non-driving

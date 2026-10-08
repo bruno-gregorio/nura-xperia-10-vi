@@ -222,6 +222,15 @@ build_vendor_boot() {
 		say "STAGE=1: replacing /init with the staged module probe"
 		"$ROOT/scripts/bootlog.py" stage "$WORK/vendor_boot.img" "$WORK/vendor_boot-stage.img"
 		mv "$WORK/vendor_boot-stage.img" "$WORK/vendor_boot.img"
+	elif [ "${DEVPROBE:-0}" = "1" ]; then
+		# Answers "how far did the devices this port waits on get?":
+		# whether qcom_scm bound and registered the Gunyah watchdog, and
+		# whether the SMMU, the dwc3 core and the SD controller bound.
+		# The same length-of-attempt channel as WDTPROBE, decoded with
+		#   bootlog.py devdecode <total>
+		say "DEVPROBE=1: replacing /init with the device probe"
+		"$ROOT/scripts/bootlog.py" devprobe "$WORK/vendor_boot.img" "$WORK/vendor_boot-d.img"
+		mv "$WORK/vendor_boot-d.img" "$WORK/vendor_boot.img"
 	elif [ "${WDTPROBE:-0}" = "1" ]; then
 		# Answers "does the Gunyah watchdog reset a hung kernel?", which
 		# has to be yes before a round can be left to run unattended:

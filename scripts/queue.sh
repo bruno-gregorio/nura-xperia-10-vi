@@ -153,6 +153,13 @@ wdt_verdict() {
 		| sed -n 's/^verdict: //p'
 }
 
+# "<scm state> <bound bits>" for a DEVPROBE round, or "other"; see
+# bootlog.py devdecode for what the numbers mean.
+dev_verdict() {
+	"$ROOT/scripts/bootlog.py" devdecode "$ROUND_TOTAL" 2>/dev/null \
+		| sed -n 's/^verdict: //p'
+}
+
 plan=$(mktemp "$WORK/.plan.XXXXXX")
 cp -- "$1" "$plan"
 note "queue starting from $1"

@@ -1930,22 +1930,85 @@ as what it would have fixed.
   the end of the 4800-second wait either. Seven attempts that
   each reach the last mark and reset take about 3370 seconds with the
   fallback boot, so at least one attempt was ended by nothing.
-- **No mainline boot has come back from more than about 5 seconds after
-  `/init`** — Verified from the rounds in this file, with one reading that
-  is only a Guess. Every round that fell back by itself was a probe that
-  rebooted within 5 seconds of `/init`. Every round that let the kernel run
-  longer went silent: 18, 19, 20 and 22, and probably 21. Rounds 18 and 19
-  each had an explanation in the init, and both were fixed. Rounds 20 to
-  22 had none. Two things the kernel does on a timer fall in the gap. The
-  deferred-probe timeout fires 10 seconds after the initcalls
-  (`driver_deferred_probe_timeout`, `drivers/base/dd.c`), and then
-  fw_devlink lets consumers of suppliers with no driver probe without them.
-  The unused-regulator cleanup runs 30 seconds after them
-  (`regulator_init_complete_work`, `drivers/regulator/core.c`). Either
-  could touch hardware this tree describes wrongly and stop the bus. That
-  is the guess, and it is why the queue no longer gives a probe more than
-  5 seconds without a watchdog or both of those switched off.
-
+- **Withdrawn: no mainline boot comes back from more than about 5 seconds
+  after `/init`** — Withdrawn 2026-10-08. The rounds it listed are as it
+  said, but the reading was wrong: round 22's kernel was still running 1138
+  seconds after boot, long past both the deferred-probe timeout and the
+  regulator cleanup it blamed. What the long rounds share is that nothing
+  reset the phone, see below.
+- **Round 22 was one attempt, alive for at least 19 minutes** — Verified
+  2026-10-08, from fastboot and the card. `slot-retry-count:a` read 6.
+  Set-active makes it 7 and each attempt takes one off, so the bootloader
+  started our kernel once and it never reset. The card held that attempt's
+  record 600, the hook's last by design, written at 1138 seconds of uptime.
+  The round went silent because nothing reset the phone, not because the
+  SoC hung.
+- **What round 22's kernel had working** — Verified, from that record. The
+  SCM firmware node bound. The SMMU probed: SMMUv2, 126 stream-match groups,
+  77 context banks, coherent table walks. The SD card came up at SDR104 and
+  the hook wrote to it. The init reached `debug_shell` at 17 seconds.
+- **USB waited on a regulator block that could not probe** — Verified from
+  the same record, and checked against stock's log. `a600000.usb` deferred
+  on `88e3000.phy`, and the PHY waited on `regulators-0/ldo25`.
+  `regulators-0` had failed outright: "ldo8: could not find RPMh address
+  for resource ldob8". `regulators-2` failed over `ldog2`. The mainline
+  driver registers a block's regulators in one probe and gives up at the
+  first resource command DB does not know, so one bad child loses all of
+  them. Stock's tree declares the same 45 regulators ours did, and stock's
+  log has the same misses for ldob8, ldob17 and ldog2 to ldog6. Stock
+  survives them because each of its regulators is a device of its own.
+- **The PMR735A is not fitted** — Verified from stock's log. Stock's reads
+  at SID 6 fail just as ours did ("transaction failed (0x3)"), its PMR735A
+  GPIO and temperature-alarm drivers fail with -EIO, and command DB has none
+  of its five LDOs.
+- **The board tree no longer describes them** — Done 2026-10-08, in the
+  board commit in `out/linux`. Not yet run on the device. `pm6450_l8`,
+  `pm6450_l17` and the whole `regulators-2` block are gone, and so are the
+  PMR735A include and its SID. Nothing referenced any of them, and 38
+  regulators remain. The DTB passes `CHECK_DTBS=y`. Decompiled next to
+  `scm.dtb`, it differs by those nodes, the PMR735A's thermal zone and the
+  phandle numbers, and nothing else. It is `out/milestone/regs.dtb`. The
+  commit that made the PMR735A's SID overridable existed only for this
+  board, so it leaves the series.
+- **The USB watchdog did not reset round 22, and nothing says why** —
+  Verified that it did not. The cause is unknown. It should have reset at
+  about 360 seconds: 13 to `/init`, 150 asleep, 196 for the mark at
+  `debug_shell`, and 1 for the rung. Its first act on the way out is sysrq
+  `w`, which logs "sysrq: Show Blocked State", and record 600 has no such
+  line; its dmesg ends at 31.9 seconds. The watchdog in round 22's image,
+  rebuilt the same way into the scratchpad, is intact and is the code that
+  was tested. Nothing in pmOS's init or `debug_shell` signals it, as far as
+  reading them goes. The record could not say more: it listed only tasks in
+  `D` state, and the watchdog, if it was alive at all, would have been in
+  `S`.
+- **The log hook now backs the watchdog up, and both say what they did** —
+  Done 2026-10-08, in `scripts/bootlog.py`. Tested under pmport's busybox
+  1.37 against a fake card and sysfs. Not yet run on the device.
+  - Past 500 seconds of uptime (`BACKUP_S`), the hook resets the phone
+    itself unless `/pmhold` exists: sysrq `w`, one more record, then sysrq
+    `b`. The watchdog's own latest is under 470 seconds, so a round the
+    backup ended decodes differently, and `markdecode` names it. A gadget
+    a host has configured adds the watchdog's 600-second hold to both.
+  - The watchdog writes each step to `/pmwd.log`: armed, awake with its
+    pid, its rung and mark, sysrq, resetting. Every record copies that file
+    in, and lists every userspace task with its parent, state, session, the
+    kernel function it sleeps in, and its command line.
+  - Rung 1 also counts `usb@a600000` bound, for the flattened dwc3 binding.
+- **wdtprobe3: the Gunyah watchdog registers, and does not bite** —
+  Verified 2026-10-08, 08:45. pkgrel 9 on `scm.dtb`. It fell back after
+  1168 seconds, 149 seconds an attempt after `/init`. That is the probe's
+  own reboot after it starved `/dev/watchdog0` for its whole window. So the
+  device appeared, which it never did before pkgrel 9's v1.0 UUID query,
+  and starving it did not reset the board. Why the hypervisor does not
+  bite is open. Until it does, nothing resets a hang that stops the CPUs.
+- **The queue after wdtprobe3** — Done 2026-10-08, 08:46. The sixth plan
+  would have run the forced probe and the device probe, and then stopped
+  short of the real init for want of a watchdog.
+  `out/try-kernel/plan-20261008g.sh` replaced it during the forced probe,
+  which it adopts. It then runs round 23: the real init on `regs.dtb`,
+  `MARKS="4 8"`, with `nokaslr hardlockup_panic=1 softlockup_panic=1`.
+  The device probe was dropped, because round 22's card record already
+  answers what it asked.
 
 ## The boot images
 
@@ -2614,12 +2677,12 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   "Rooted debugging" and read the live tree plus `dtbo` over adb; dump `dtbo`
   from the bootloader; or decompile it out of a firmware download. The first is
   a toggle and a re-run of `scripts/device-collect.sh`.
-- **Mainline now has an SoC tree, four PMICs and a board, and they build.**
+- **Mainline now has an SoC tree, three PMICs and a board, and they build.**
   Twenty-three patches against v6.18.55 in
   [../kernel/patches/](../kernel/patches/): `gcc-sm6450.c` and
   `pinctrl-sm6450.c`, the RPMh clock and power-domain tables, the PM6450
   regulator data, `sm6450.dtsi` at 1320 lines, `pm6450.dtsi`, and
-  `sm6450-sony-xperia-columbia-pdx246.dts` with all 45 regulators, the keys,
+  `sm6450-sony-xperia-columbia-pdx246.dts` with its 38 regulators, the keys,
   the SD card and USB. The two drivers were generated by a program whose correctness is
   proved on the ravelin/sm4450 pair and then checked register-by-register
   against the parrot sources; the device trees are cross-checked by
@@ -2686,10 +2749,11 @@ port boots" above. What is left starts from there.
    hook writing to the SD card, and the card came back blank. Then the
    Gunyah watchdog probe showed our tree has no SCM node, which on its own
    keeps the SMMU, and so the dwc3 core and the SD card, from ever probing.
-   The night of 2026-10-07 runs, unattended under `scripts/queue.sh`, the
-   real init on the tree with SCM, then the device probe, which says
-   whether SCM let the SMMU, USB and the card bind at last. "The real init
-   on mainline" has the commands. What
+   Round 22, on the tree with SCM, had the SMMU and the card working, and
+   USB waiting on a regulator block the board described wrongly. Round 23
+   runs the real init on the corrected tree, unattended under
+   `scripts/queue.sh`, and the log hook now resets any boot the USB
+   watchdog does not. "The real init on mainline" has the rounds. What
    follows is the history of getting this far.
 
    The boot itself was the open question for a while: it has happened twice. The first flash on 2026-10-06 was

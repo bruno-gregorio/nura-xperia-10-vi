@@ -2250,6 +2250,33 @@ as what it would have fixed.
     read from the kernel: the DPU's revision, which drivers bound, the
     connector, the backlight, and the MDSS interrupt counts before and after
     a line written to the framebuffer console.
+- **The remote processors** — Written 2026-10-08, not yet run. The ADSP,
+  CDSP, modem and WPSS each name an SM6450 compatible with an existing one
+  as fallback, because the vendor's PAS driver gives parrot the same values
+  as SM8450 (ADSP, CDSP, modem) and SC7280 (WPSS). The fallbacks are chosen
+  so that each one's power domains are the rails the stock node names.
+  pkgrel 13's driver binds them unchanged. The binding changes are on
+  branch `sm6450-remoteproc` in `out/linux` and the WIP nodes on
+  `sm6450-remoteproc-dt`. `dt_binding_check`, `CHECK_DTBS=y` and
+  `check-dt.py` are clean.
+  - **Reasoned:** the interrupts, smp2p bits, IPCC clients and glink ids,
+    which are the stock nodes', checked by name because `check-dt.py` does
+    not compare `interrupts-extended`.
+  - **Reasoned:** that leaving `shutdown-ack` off the ADSP and CDSP, as
+    their bindings require, costs nothing; sysmon treats it as optional.
+  - **A guess:** that probing with no firmware is harmless. Probe attaches
+    the power domains without voting and requests interrupts; the firmware
+    request fails and each processor stays offline.
+  - **Not collected:** the firmware. The board names
+    `qcom/sm6450/Sony/columbia/{adsp,cdsp,modem,wpss}.mbn`.
+
+  Plan n runs after plan m: round 34 boots `out/milestone/remoteproc.dtb`
+  (`regs.dtb` plus the four nodes) on pkgrel 13. `cmds-r34.sh` pushes r13's
+  `qrtr`, `qcom_pil_info`, `qcom_common`, `qcom_q6v5` and `qcom_q6v5_pas`
+  into the shell and loads them, then reads `/sys/class/remoteproc`, the
+  deferred devices and dmesg. `qrtr` goes first because sysmon opens a QRTR
+  socket at probe and defers without one. "The remote processors" in
+  [06-mainline.md](06-mainline.md) has the mapping.
 
 ## The boot images
 
@@ -2407,9 +2434,10 @@ as what it would have fixed.
   fine in both, 29788 KB OKAY; it is only the boot command that is refused,
   and staging `vendor_boot` first changes nothing. `scripts/flash.sh
   flash-boot` is what replaces it.
-- **The debug shell itself is still only Reasoned.** `pmos.debug-shell` is
-  handled in `init_2nd.sh` before root is looked for, so it should not need a
-  rootfs, but nothing has reached it yet.
+- **The debug shell works without a rootfs** — Verified 2026-10-08 by
+  round 23. `pmos.debug-shell` is handled in `init_2nd.sh` before root is
+  looked for. On pkgrel 10 with `regs.dtb` the harvest reached it over
+  telnet, and it had started at 4.97 seconds of uptime.
 - **The host side of the debug shell is ready and tested** — Verified. Fedora
   ships no `telnet`, `nc` or `socat`, and this project may not install onto the
   host, so `scripts/telnet.py` is the fallback: tested against a stub that
@@ -2899,9 +2927,11 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   On the mainline kernel it is drm/msm's GPU side, which already knows a7xx
   parts, plus the GMU and zap-shader firmware; that is the path that leads
   anywhere.
-- **Modem, Wi-Fi, Bluetooth, audio, camera.** None attempted. Wi-Fi and audio
-  additionally need firmware from the stock `/vendor/firmware`, which is not
-  redistributable and is not packaged here.
+- **Modem, Wi-Fi, Bluetooth, audio, camera.** On mainline, the four remote
+  processors they run on are described but have not run (see "The remote
+  processors" above); nothing above them is written. All of them need
+  firmware from the stock partitions, which is not redistributable, is not
+  packaged here, and has not been collected.
 - **No `soc-qcom-sm6450` package.** pmOS has no SoC package for this chip; the
   device package carries everything.
 - **`pmb install` cannot finish inside a rootless container**, because
@@ -3073,7 +3103,13 @@ port boots" above. What is left starts from there.
    plan now, because the mainline kernel exists to stop depending on Android
    vendor modules. It stays an option only for the downstream bring-up
    kernel, and only if that ever needs a screen.
-6. **Small things the live system asked for.** Nothing sets the clock, so it
+6. **The remote processors, then their firmware.** The nodes are written
+   and round 34 probes them without firmware (see "The remote processors"
+   above). Once they probe cleanly, the firmware comes off the stock
+   partitions, read-only, through the mainline kernel once UFS works or
+   through the downstream kernel before then. Charging, audio, the modem
+   and Wi-Fi all start there.
+7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and
    `systemd-firstboot.service` both fail benignly and should either be fixed

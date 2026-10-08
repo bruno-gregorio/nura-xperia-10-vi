@@ -1,0 +1,161 @@
+#!/bin/sh
+# Run rounds back to back with nobody at the phone.
+#
+#   scripts/queue.sh <plan>
+#
+# A plan is a shell fragment. It calls `round NAME [VAR=value ...]` once per
+# round, which runs try-kernel.sh with those variables, and it can branch on
+# what each round left behind:
+#
+#   ROUND_RESULT  fallback, gadget, fastboot, ours, nothing or failed - what
+#                 try-kernel's RESULT line said, or failed for no such line
+#   ROUND_TOTAL   seconds from the reboot into the round to the phone
+#                 answering, the number markdecode and wdtdecode read back
+#
+# and `adopt NAME PID`, which does the same for a round already started by
+# hand into out/try-kernel/run-NAME.log, once process PID has exited.
+#
+# Why this exists: until 2026-10-07 every round ended with a person reading
+# its log and typing the next command, and a round that ended at 3 a.m.
+# meant a phone idle until morning. Rounds run up to an hour, so a night is
+# five or six of them only if nothing waits between them.
+#
+# What it will not do is go on after a round that left the phone silent. It
+# waits for the phone to come back by itself - a hung attempt the watchdog
+# resets, or a gadget whose window runs out - for up to BACK_WAIT seconds,
+# three hours by default, and stops the queue if it does not, because every
+# round after that one needs the phone and none of them can get it back.
+#
+# Every round's card and rddata records are read before the next one starts,
+# by try-kernel itself on a fallback and by --log otherwise, because --log
+# also clears both and a record left over would be read as the next round's.
+set -u
+
+ROOT=${QUEUE_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
+WORK="$ROOT/out/try-kernel"
+
+# Run from a copy, the same way and for the same reason as try-kernel.sh:
+# a night of rounds is hours of sh reading this file as it goes.
+if [ -z "${QUEUE_ROOT:-}" ]; then
+	mkdir -p "$WORK"
+	snap=$(mktemp "$WORK/.queue.XXXXXX")
+	cp -- "$0" "$snap"
+	QUEUE_ROOT=$ROOT exec sh "$snap" "$@"
+fi
+case "$0" in */.queue.*) rm -f -- "$0" ;; esac
+
+[ $# -eq 1 ] && [ -r "$1" ] || { echo "usage: scripts/queue.sh <plan>" >&2; exit 2; }
+
+QLOG="$WORK/queue-$(date +%Y%m%d-%H%M%S).log"
+note() { echo "$(date '+%F %T') $*" | tee -a "$QLOG"; }
+
+phone_state() {
+	if fastboot devices 2>/dev/null | grep -q .; then
+		echo fastboot
+	elif adb devices 2>/dev/null | sed 1d | grep -qE 'device$|recovery$'; then
+		echo adb
+	elif [ -n "$(ls /dev/ttyACM* 2>/dev/null)" ] \
+		|| ip -o link show 2>/dev/null | grep -qE ': (usb[0-9]|enp[0-9]+s[0-9]+[a-z0-9]*u[0-9])'; then
+		echo gadget
+	else
+		echo none
+	fi
+}
+
+# Ask a boot of ours that is up on the network gadget to reset now, rather
+# than wait out the watchdog's window. Each reset is an attempt the
+# bootloader counts, so seven of them land on the stock slot.
+kick_gadget() {
+	printf '%s\n' 'echo b > /proc/sysrq-trigger' 'reboot -f -n' \
+		| timeout 20 python3 "$ROOT/scripts/telnet.py" 172.16.42.1 23 \
+			>/dev/null 2>&1 || true
+}
+
+# Wait for the phone to be somewhere try-kernel can start from.
+bring_back() {
+	limit=${BACK_WAIT:-10800}
+	i=0
+	while [ "$i" -lt "$limit" ]; do
+		case "$(phone_state)" in
+		fastboot|adb) return 0 ;;
+		gadget) kick_gadget ;;
+		esac
+		command sleep 15
+		i=$((i + 15))
+	done
+	return 1
+}
+
+# Fill ROUND_RESULT and ROUND_TOTAL in from a round's log.
+parse_round() {
+	log=$1
+	ROUND_TOTAL=$(awk '
+		/^== waiting\. our kernel answering/ { w = 1; next }
+		w && match($0, /(up after|dropped into fastboot after|USB gadget appeared after|nothing after) [0-9]+s/) {
+			s = substr($0, RSTART, RLENGTH); sub(/s$/, "", s)
+			n = split(s, a, " "); print a[n]; exit
+		}' "$log")
+	case "$(grep -m1 '^RESULT:' "$log")" in
+	"RESULT: nothing came up"*)        ROUND_RESULT=nothing ;;
+	"RESULT: the bootloader gave up"*) ROUND_RESULT=fastboot ;;
+	"RESULT: the initramfs got USB"*)  ROUND_RESULT=gadget ;;
+	"RESULT: OUR KERNEL BOOTED"*)      ROUND_RESULT=ours ;;
+	"RESULT: it crashed"*)             ROUND_RESULT=fallback ;;
+	*)                                 ROUND_RESULT=failed ;;
+	esac
+}
+
+# Everything after the round itself: get the phone back, read its logs.
+finish_round() {
+	name=$1
+	log="$WORK/run-$name.log"
+	parse_round "$log"
+	note "round $name: $ROUND_RESULT after ${ROUND_TOTAL:-?} s"
+	if [ "$ROUND_RESULT" = failed ]; then
+		note "round $name: try-kernel stopped before a result; its last lines:"
+		tail -5 "$log" | tee -a "$QLOG"
+	fi
+	if ! bring_back; then
+		note "the phone has not come back in ${BACK_WAIT:-10800} s; stopping the queue"
+		exit 1
+	fi
+	# A fallback already ran --log inside try-kernel; the other results
+	# did not, and a --log that died part way did not finish either.
+	if ! grep -q 'clearing rddata for the next round' "$log"; then
+		note "round $name: reading the card and rddata"
+		"$ROOT/scripts/try-kernel.sh" --log > "$WORK/log-$name.txt" 2>&1 \
+			|| note "round $name: --log failed, see $WORK/log-$name.txt"
+	fi
+	[ "$ROUND_RESULT" = failed ] && { note "stopping the queue"; exit 1; }
+	return 0
+}
+
+round() {
+	name=$1
+	shift
+	note "round $name: $*"
+	env "$@" "$ROOT/scripts/try-kernel.sh" > "$WORK/run-$name.log" 2>&1 < /dev/null
+	finish_round "$name"
+}
+
+adopt() {
+	name=$1
+	note "round $name: adopted, waiting for process $2 to end"
+	while kill -0 "$2" 2>/dev/null; do
+		command sleep 30
+	done
+	finish_round "$name"
+}
+
+# Branch helpers for plans.
+wdt_verdict() {
+	"$ROOT/scripts/bootlog.py" wdtdecode "$ROUND_TOTAL" 2>/dev/null \
+		| sed -n 's/^verdict: //p'
+}
+
+plan=$(mktemp "$WORK/.plan.XXXXXX")
+cp -- "$1" "$plan"
+note "queue starting from $1"
+. "$plan"
+rm -f -- "$plan"
+note "queue done"

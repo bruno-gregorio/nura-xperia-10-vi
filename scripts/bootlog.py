@@ -547,25 +547,29 @@ def wdtdecode(total):
     # The same model as markdecode: seven attempts, then 30 s for the
     # fallback boot to answer.
     pre = 13.34
+    # The first word is a verdict for scripts/queue.sh to branch on.
     cases = [
-        (5, "no /dev/watchdog0: the driver never registered"),
-        (WDTPROBE_WAIT - 19, "bitten while the kernel should have been"
-         " feeding it: start_at_boot is not safe to use"),
-        (WDTPROBE_WAIT + 32, "fed, then starved and bitten: the watchdog"
-         " works, and a hung kernel will now reset"),
-        (WDTPROBE_WAIT + WDTPROBE_STARVE, "starved and never bitten:"
-         " it does not reset this board"),
+        (5, "none", "no /dev/watchdog0: the driver never registered"),
+        (WDTPROBE_WAIT - 19, "unsafe", "bitten while the kernel should have"
+         " been feeding it: start_at_boot is not safe to use"),
+        (WDTPROBE_WAIT + 32, "works", "fed, then starved and bitten: the"
+         " watchdog works, and a hung kernel will now reset"),
+        (WDTPROBE_WAIT + WDTPROBE_STARVE, "nobite", "starved and never"
+         " bitten: it does not reset this board"),
     ]
     per = (total - 30) / 7
     print(f"  {total:.0f} s total, {per:.1f} s an attempt,"
           f" {per - pre:.1f} s of it after /init")
     best = min(cases, key=lambda c: abs(per - pre - c[0]))
-    for after, what in cases:
-        mark = "->" if (after, what) == best else "  "
-        print(f"  {mark} {after:4d} s  {what}")
+    for case in cases:
+        mark = "->" if case == best else "  "
+        print(f"  {mark} {case[0]:4d} s  {case[2]}")
+    verdict = best[1]
     if abs(per - pre - best[0]) > 15:
         print("  no case fits within 15 s an attempt: something else"
               " happened, such as a panic before /init (panic=60)")
+        verdict = "other"
+    print(f"verdict: {verdict}")
 
 
 

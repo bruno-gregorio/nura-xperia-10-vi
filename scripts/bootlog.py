@@ -915,6 +915,9 @@ pmstage_reset
 # Seconds from the top of /init to the watchdog's decision. Also the offset
 # markdecode takes off a round's total, so the two live in one place.
 WATCHDOG_S = 150
+# How long a gadget a host has configured keeps the phone before the
+# watchdog resets it anyway: rung 7, below.
+CONFIGURED_HOLD_S = 600
 
 USB_WATCHDOG = """
 # --- pdx246: make a hung boot recoverable ----------------------------------
@@ -961,7 +964,7 @@ USB_WATCHDOG = """
 	# 4  the gadget is bound and the UDC is "not attached": no host saw it
 	# 5  the gadget is bound and the UDC got partway with a host
 	# 6  binding the gadget never returned, see below
-	# A configured UDC is a host that enumerated us, and stands this down.
+	# 7  a host configured the gadget, and the window below ran out
 	# _t counts the tenths of a second spent waiting in here, which come off
 	# the delay at the end, so the total still names the rung exactly.
 	_t=0
@@ -979,7 +982,22 @@ USB_WATCHDOG = """
 		_u=3
 		_st=""
 		read -r _st < "$_udc/state" 2>/dev/null
-		[ "$_st" = configured ] && exit 0
+		# A host enumerated us, which is what all this is for. This
+		# used to stand down for good here, and on a night with nobody
+		# at the phone that is a trap: the boot that worked sits in the
+		# initramfs until someone holds the buttons, and every round
+		# queued after it waits too. So the host gets ten minutes to
+		# read what it wants - or to create /pmhold, below, and keep
+		# the phone - and then this resets as for any other rung, the
+		# attempts run out and stock comes back by itself.
+		if [ "$_st" = configured ]; then
+			/bin/busybox sleep @HOLD@
+			_st=""
+			read -r _st < "$_udc/state" 2>/dev/null
+			[ "$_st" = configured ] && _u=7
+		fi
+	fi
+	if [ "$_u" = 3 ]; then
 		# Read from a child, with a time limit. configfs takes the
 		# gadget's lock to answer, and the init's write to the same file
 		# holds that lock for the whole bind - so a bind that never
@@ -1127,7 +1145,8 @@ def usbquirk(src, dst):
             if wd not in text:
                 sys.exit("error: could not find 'set -a' in init")
             text = text.replace(wd, wd + USB_WATCHDOG.lstrip("\n").replace(
-                "@WAIT@", str(WATCHDOG_S)), 1)
+                "@WAIT@", str(WATCHDOG_S)).replace(
+                "@HOLD@", str(CONFIGURED_HOLD_S)), 1)
         e[2] = text.encode()
         patched.append(name)
 
@@ -1258,7 +1277,12 @@ def markdecode(total, base, scale, table=None):
               " a second round at another panic scale, then"
               " k = (total2 - total1) / (7 * 0.992 * (pscale2 - pscale1)).")
         return
-    if per > 500:
+    held = extra > CONFIGURED_HOLD_S - 2
+    if held:
+        print(f"  {CONFIGURED_HOLD_S} s of that is the window a configured"
+              " gadget gets, so a host enumerated the phone (rung 7)")
+        extra -= CONFIGURED_HOLD_S
+    if extra > 500 - ATTEMPT_S - WATCHDOG_S:
         print("  longer than any mark can make it: the watchdog never fired,"
               " or its reset never finished, and something else reset the"
               " phone.")
@@ -1276,14 +1300,18 @@ def markdecode(total, base, scale, table=None):
            "UDC exists, gadget not bound to it",
            "gadget bound, UDC not attached (no host saw it)",
            "gadget bound, UDC partway with a host",
-           "binding the gadget never returned (configfs lock held)"]
-    if scale <= len(udc):
-        print(f"  warning: scale {scale} is too small to keep {len(udc)}"
+           "binding the gadget never returned (configfs lock held)",
+           "a host configured the gadget"]
+    # Rung 7 sits CONFIGURED_HOLD_S above the others, so only the first
+    # seven have to fit between two marks.
+    rungs = [7] if held else range(7)
+    if scale <= 7:
+        print(f"  warning: scale {scale} is too small to keep 7"
               " USB states apart; use 8")
     cands = []
     for k in range(kmax + 1):
         v = 0 if k == 0 else base + scale * k
-        for u in range(len(udc)):
+        for u in rungs:
             cands.append((abs(extra - v - u), k, u, v))
     cands.sort()
     for err, k, u, v in cands[:3]:

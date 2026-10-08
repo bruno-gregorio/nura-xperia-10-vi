@@ -45,7 +45,21 @@
 # rather than only on the way down.
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+ROOT=${TRY_KERNEL_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}
+
+# Run from a copy of this file. sh reads a script as it goes, and a round
+# lasts up to an hour, so an edit saved meanwhile changes the lines the round
+# has yet to read - which once made a running round do something no version
+# of the file says. The copy is unlinked as soon as it starts, and sh keeps
+# reading the open file, so nothing is left behind and this file is always
+# free to edit.
+if [ -z "${TRY_KERNEL_ROOT:-}" ]; then
+	mkdir -p "$ROOT/out/try-kernel"
+	snap=$(mktemp "$ROOT/out/try-kernel/.running.XXXXXX")
+	cp -- "$0" "$snap"
+	TRY_KERNEL_ROOT=$ROOT exec sh "$snap" "$@"
+fi
+case "$0" in */.running.*) rm -f -- "$0" ;; esac
 DEVICE=sony-pdx246
 BOOT="$ROOT/.pmb/work/chroot_rootfs_$DEVICE/boot"
 STOCK="$ROOT/out/device-dump-root/stock"
@@ -435,6 +449,26 @@ cmd_try() {
 # Read the log the initramfs wrote to flash. Hands-free from any state the
 # device can be in: Android can be told to reboot into recovery, and recovery
 # is where adb has the root needed to read a raw partition.
+# Recovery brings adb up and then, a few seconds later, re-enumerates USB as
+# it settles its own gadget configuration - product 0xd001, then 0x4ee2, seen
+# on 2026-10-07. A read started in between is cut off part way: that night it
+# took the card read down at 24 MB of 134, and the rddata read after it. So
+# wait until adb has answered every second for ten seconds in a row.
+settle_adb() {
+	ok=0
+	i=0
+	while [ "$ok" -lt 10 ] && [ "$i" -lt 120 ]; do
+		sleep 1
+		i=$((i + 1))
+		if adb get-state >/dev/null 2>&1; then
+			ok=$((ok + 1))
+		else
+			ok=0
+		fi
+	done
+	[ "$ok" -ge 10 ]
+}
+
 cmd_log() {
 	if adb devices | sed 1d | grep -qE 'recovery$'; then
 		say "already in recovery"
@@ -466,6 +500,7 @@ cmd_log() {
 		die "no device in adb or fastboot"
 	fi
 
+	settle_adb || die "adb never stayed up for ten seconds"
 	[ "$(adb shell id -u 2>/dev/null | tr -d '\r')" = "0" ] \
 		|| die "adb is not root here - this needs recovery, not Android"
 
@@ -477,9 +512,19 @@ cmd_log() {
 	# or writes nothing if no card passes, which is also what happens if
 	# recovery does not bring the card up at all.
 	say "reading the log region on the SD card"
-	adb exec-out "$("$ROOT/scripts/bootlog.py" card-sh read)" \
-		> "$WORK/bootlog-card.bin" || true
-	card=$(wc -c < "$WORK/bootlog-card.bin")
+	# Read again if adb drops part way. Nothing about a cut-off read is
+	# worth decoding when a whole one is a few seconds away.
+	for try in 1 2 3; do
+		if adb exec-out "$("$ROOT/scripts/bootlog.py" card-sh read)" \
+			> "$WORK/bootlog-card.bin"; then
+			card=$(wc -c < "$WORK/bootlog-card.bin")
+			{ [ "$card" = 0 ] || [ "$card" = 134283264 ]; } && break
+		fi
+		card=$(wc -c < "$WORK/bootlog-card.bin")
+		[ "$try" = 3 ] && break
+		say "the card read stopped at $card bytes; reading again once adb settles"
+		settle_adb || true
+	done
 	if [ "$card" -gt 0 ]; then
 		# 2049 blocks of 64 KiB, bootlog.py's CARD_REGION_BLOCKS.
 		[ "$card" = 134283264 ] \
@@ -494,8 +539,14 @@ cmd_log() {
 		say "no card in recovery that passes the checks, so none read"
 	fi
 	say "reading rddata"
-	adb exec-out 'dd if=/dev/block/by-name/rddata bs=65536 count=256 2>/dev/null' \
-		> "$WORK/bootlog.bin"
+	for try in 1 2 3; do
+		adb exec-out 'dd if=/dev/block/by-name/rddata bs=65536 count=256 2>/dev/null' \
+			> "$WORK/bootlog.bin" \
+			&& [ "$(wc -c < "$WORK/bootlog.bin")" = 16777216 ] && break
+		[ "$try" = 3 ] && die "could not read rddata whole"
+		say "the rddata read was cut off; reading again once adb settles"
+		settle_adb || true
+	done
 	echo
 	"$ROOT/scripts/bootlog.py" decode "$WORK/bootlog.bin" || true
 
@@ -622,5 +673,5 @@ case "${1:-}" in
 	--harvest) shift; cmd_harvest "$@" ;;
 	--restore) shift; cmd_restore "$@" ;;
 	"")        cmd_try ;;
-	*)         die "usage: $0 [--log | --harvest | --restore]" ;;
+	*)         die "usage: scripts/try-kernel.sh [--log | --harvest | --restore]" ;;
 esac

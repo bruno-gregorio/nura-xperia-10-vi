@@ -20,6 +20,9 @@ To keep the controller's state, the USB GDSC needs to stay in
 retention, as it does on other similar SoCs. Change its mode to
 PWRSTS_RET_ON.
 
+To be folded into "clk: qcom: Add Global Clock Controller driver for SM6450"
+once a round has run the controller through a runtime suspend with it.
+
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  drivers/clk/qcom/gcc-sm6450.c | 2 +-

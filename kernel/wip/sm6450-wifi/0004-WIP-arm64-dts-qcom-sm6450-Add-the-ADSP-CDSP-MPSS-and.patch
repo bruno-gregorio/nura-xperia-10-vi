@@ -1,0 +1,213 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 12:09:29 -0300
+Subject: [PATCH] WIP: arm64: dts: qcom: sm6450: Add the ADSP, CDSP, MPSS and
+ WPSS
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add the four peripheral authentication service remoteprocs. Their reg,
+watchdog interrupts, smp2p bits, IPCC clients and glink remote ids are the
+downstream tree's; the power domains are the rails its cx-supply and
+mx-supply name (LCX and LMX for the ADSP, CX and MSS for the modem, CX and
+MX for the CDSP and WPSS).
+
+Downstream lists shutdown-ack for all four. The ADSP and CDSP bindings this
+falls back to allow five interrupts, so those two leave it out, as SM8450
+does; sysmon treats it as optional.
+
+To be folded into the SM6450 DT once it has probed on the device.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 162 +++++++++++++++++++++++++++
+ 1 file changed, 162 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+index c770a0099..7c7f863d6 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+@@ -745,6 +745,87 @@ tcsr_mutex: hwlock@1f40000 {
+ 			#hwlock-cells = <1>;
+ 		};
+ 
++		remoteproc_adsp: remoteproc@3000000 {
++			compatible = "qcom,sm6450-adsp-pas", "qcom,sm8350-adsp-pas";
++			reg = <0x0 0x03000000 0x0 0x10000>;
++
++			interrupts-extended = <&pdc 6 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_adsp_in 0 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_adsp_in 1 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_adsp_in 2 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_adsp_in 3 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "wdog", "fatal", "ready",
++					  "handover", "stop-ack";
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "xo";
++
++			power-domains = <&rpmhpd RPMHPD_LCX>,
++					<&rpmhpd RPMHPD_LMX>;
++			power-domain-names = "lcx", "lmx";
++
++			memory-region = <&pil_adsp_mem>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			qcom,smem-states = <&smp2p_adsp_out 0>;
++			qcom,smem-state-names = "stop";
++
++			status = "disabled";
++
++			glink-edge {
++				interrupts-extended = <&ipcc IPCC_CLIENT_LPASS
++							     IPCC_MPROC_SIGNAL_GLINK_QMP
++							     IRQ_TYPE_EDGE_RISING>;
++				mboxes = <&ipcc IPCC_CLIENT_LPASS
++						IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++				label = "lpass";
++				qcom,remote-pid = <2>;
++			};
++		};
++
++		remoteproc_mpss: remoteproc@4080000 {
++			compatible = "qcom,sm6450-mpss-pas", "qcom,sm8450-mpss-pas";
++			reg = <0x0 0x04080000 0x0 0x10000>;
++
++			interrupts-extended = <&intc GIC_SPI 264 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 0 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 1 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 2 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 3 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_modem_in 7 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "wdog", "fatal", "ready", "handover",
++					  "stop-ack", "shutdown-ack";
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "xo";
++
++			power-domains = <&rpmhpd RPMHPD_CX>,
++					<&rpmhpd RPMHPD_MSS>;
++			power-domain-names = "cx", "mss";
++
++			memory-region = <&pil_mpss_mem>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			qcom,smem-states = <&smp2p_modem_out 0>;
++			qcom,smem-state-names = "stop";
++
++			status = "disabled";
++
++			glink-edge {
++				interrupts-extended = <&ipcc IPCC_CLIENT_MPSS
++							     IPCC_MPROC_SIGNAL_GLINK_QMP
++							     IRQ_TYPE_EDGE_RISING>;
++				mboxes = <&ipcc IPCC_CLIENT_MPSS
++						IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++				label = "modem";
++				qcom,remote-pid = <1>;
++			};
++		};
++
+ 		sdhc_2: mmc@8804000 {
+ 			compatible = "qcom,sm6450-sdhci", "qcom,sdhci-msm-v5";
+ 			reg = <0x0 0x08804000 0x0 0x1000>;
+@@ -810,6 +891,47 @@ usb_1_hsphy: phy@88e3000 {
+ 			status = "disabled";
+ 		};
+ 
++		remoteproc_wpss: remoteproc@8a00000 {
++			compatible = "qcom,sm6450-wpss-pas", "qcom,sc7280-wpss-pas";
++			reg = <0x0 0x08a00000 0x0 0x10000>;
++
++			interrupts-extended = <&intc GIC_SPI 587 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 0 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 1 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 2 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 3 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_wpss_in 7 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "wdog", "fatal", "ready", "handover",
++					  "stop-ack", "shutdown-ack";
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "xo";
++
++			power-domains = <&rpmhpd RPMHPD_CX>,
++					<&rpmhpd RPMHPD_MX>;
++			power-domain-names = "cx", "mx";
++
++			memory-region = <&pil_wpss_mem>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			qcom,smem-states = <&smp2p_wpss_out 0>;
++			qcom,smem-state-names = "stop";
++
++			status = "disabled";
++
++			glink-edge {
++				interrupts-extended = <&ipcc IPCC_CLIENT_WPSS
++							     IPCC_MPROC_SIGNAL_GLINK_QMP
++							     IRQ_TYPE_EDGE_RISING>;
++				mboxes = <&ipcc IPCC_CLIENT_WPSS
++						IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++				label = "wpss";
++				qcom,remote-pid = <13>;
++			};
++		};
++
+ 		usb_1: usb@a6f8800 {
+ 			compatible = "qcom,sm6450-dwc3", "qcom,dwc3";
+ 			reg = <0x0 0x0a6f8800 0x0 0x400>;
+@@ -1308,6 +1430,46 @@ cpufreq_hw: cpufreq@17d91000 {
+ 			#freq-domain-cells = <1>;
+ 			#clock-cells = <1>;
+ 		};
++
++		remoteproc_cdsp: remoteproc@32300000 {
++			compatible = "qcom,sm6450-cdsp-pas", "qcom,sm6350-cdsp-pas";
++			reg = <0x0 0x32300000 0x0 0x10000>;
++
++			interrupts-extended = <&intc GIC_SPI 578 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_cdsp_in 0 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_cdsp_in 1 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_cdsp_in 2 IRQ_TYPE_EDGE_RISING>,
++					      <&smp2p_cdsp_in 3 IRQ_TYPE_EDGE_RISING>;
++			interrupt-names = "wdog", "fatal", "ready",
++					  "handover", "stop-ack";
++
++			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clock-names = "xo";
++
++			power-domains = <&rpmhpd RPMHPD_CX>,
++					<&rpmhpd RPMHPD_MX>;
++			power-domain-names = "cx", "mx";
++
++			memory-region = <&pil_cdsp_mem>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			qcom,smem-states = <&smp2p_cdsp_out 0>;
++			qcom,smem-state-names = "stop";
++
++			status = "disabled";
++
++			glink-edge {
++				interrupts-extended = <&ipcc IPCC_CLIENT_CDSP
++							     IPCC_MPROC_SIGNAL_GLINK_QMP
++							     IRQ_TYPE_EDGE_RISING>;
++				mboxes = <&ipcc IPCC_CLIENT_CDSP
++						IPCC_MPROC_SIGNAL_GLINK_QMP>;
++
++				label = "cdsp";
++				qcom,remote-pid = <5>;
++			};
++		};
+ 	};
+ 
+ 	timer {

@@ -1,0 +1,5 @@
+branch: sm6450-remoteproc
+tip:    a1a86ad915a6e88f99453f4485ea44555e8f1970
+base:   c4d873dbca9934f0a01853654d392b22aeade81a drm/msm/dpu: Add SM6450 support
+        (git describe: v6.18.55-35-gc4d873dbc)
+patches: 3

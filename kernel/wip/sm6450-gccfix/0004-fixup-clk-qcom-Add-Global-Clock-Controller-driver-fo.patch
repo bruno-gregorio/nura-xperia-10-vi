@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 10:26:48 -0300
+Subject: [PATCH] fixup! clk: qcom: Add Global Clock Controller driver for
+ SM6450
+
+Drop the .name fallback the converter left on one bi_tcxo parent, and keep the vendor driver's copyright years.
+---
+ drivers/clk/qcom/gcc-sm6450.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/clk/qcom/gcc-sm6450.c b/drivers/clk/qcom/gcc-sm6450.c
+index dfea36877..fe41abb57 100644
+--- a/drivers/clk/qcom/gcc-sm6450.c
++++ b/drivers/clk/qcom/gcc-sm6450.c
+@@ -1,6 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
+- * Copyright (c) 2026, Qualcomm Innovation Center, Inc. All rights reserved.
++ * Copyright (c) 2021-2022, Qualcomm Innovation Center, Inc. All rights reserved.
+  */
+ 
+ #include <linux/clk-provider.h>
+@@ -244,7 +244,7 @@ static const struct parent_map gcc_parent_map_5[] = {
+ };
+ 
+ static const struct clk_parent_data gcc_parent_data_5[] = {
+-	{ .index = DT_BI_TCXO, .name = "bi_tcxo" },
++	{ .index = DT_BI_TCXO },
+ 	{ .hw = &gcc_gpll0.clkr.hw },
+ 	{ .hw = &gcc_gpll9.clkr.hw },
+ 	{ .hw = &gcc_gpll4.clkr.hw },

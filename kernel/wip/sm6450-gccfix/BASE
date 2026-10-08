@@ -1,0 +1,6 @@
+branch: sm6450-gccfix
+tip:    3e8fe12c57c1334bbd443a60d604d4901cc0f265
+base:   725bd2f3c81d54edccb66fead01d4c0c222e2231 Linux 6.18.55
+        (git describe: v6.18.55)
+patches: 4
+under:  21 commits between base and these, on sm6450 under other SHAs

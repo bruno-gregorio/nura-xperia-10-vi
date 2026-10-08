@@ -1,0 +1,6 @@
+branch: sm6450-ufs
+tip:    6ca451a846308f6bbb76d9a790e86111f57f9280
+base:   725bd2f3c81d54edccb66fead01d4c0c222e2231 Linux 6.18.55
+        (git describe: v6.18.55)
+patches: 7
+under:  21 commits between base and these, on sm6450 under other SHAs

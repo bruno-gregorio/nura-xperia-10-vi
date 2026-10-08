@@ -1,0 +1,5 @@
+branch: sm6450-wifi
+tip:    806da447b1e534c665db3f4628243bfe11e15401
+base:   c4d873dbca9934f0a01853654d392b22aeade81a drm/msm/dpu: Add SM6450 support
+        (git describe: v6.18.55-35-gc4d873dbc)
+patches: 8

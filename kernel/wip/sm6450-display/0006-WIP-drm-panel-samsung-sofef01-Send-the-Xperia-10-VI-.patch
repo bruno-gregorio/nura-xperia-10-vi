@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 11:41:28 -0300
+Subject: [PATCH] WIP: drm/panel: samsung-sofef01: Send the Xperia 10 VI FLM
+ setting
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The Xperia 10 V and 10 VI both carry the AMS605DK01 panel, but their
+downstream trees program the FLM pins differently: 8f 27 25 on the 10 V
+and 8f 27 27 on the 10 VI. Pick the 10 VI value by machine compatible
+until it is known whether the 10 V value also works there, and whether
+this belongs in a separate compatible or a DT property.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/gpu/drm/panel/panel-samsung-sofef01.c | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/panel/panel-samsung-sofef01.c b/drivers/gpu/drm/panel/panel-samsung-sofef01.c
+index bb1cefd16..062f2fcb9 100644
+--- a/drivers/gpu/drm/panel/panel-samsung-sofef01.c
++++ b/drivers/gpu/drm/panel/panel-samsung-sofef01.c
+@@ -132,12 +132,13 @@ static int samsung_sofef01_m_program(struct samsung_sofef01_m *ctx)
+ 		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xf0, 0x5a, 0x5a);
+ 		mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0xb0, 0x02, 0x8f);
+ 
+-		if (ctx->panel_type == PANEL_TYPE_DK01)
+-			/* Downstream Xperia 10 V: FLM1,FLM2 On */
+-			mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x8f, 0x27, 0x25);
+-		else if (0) /* TODO: Both use the DK01 panel */
++		if (ctx->panel_type == PANEL_TYPE_DK01 &&
++		    of_machine_is_compatible("sony,pdx246"))
+ 			/* Downstream Xperia 10 VI: FLM1 On, FLM2 On */
+ 			mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x8f, 0x27, 0x27);
++		else if (ctx->panel_type == PANEL_TYPE_DK01)
++			/* Downstream Xperia 10 V: FLM1,FLM2 On */
++			mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x8f, 0x27, 0x25);
+ 		else
+ 			/* Downsteam: FLM1 on, FLM2 off */
+ 			mipi_dsi_dcs_write_seq_multi(&dsi_ctx, 0x8f, 0x27, 0x05);

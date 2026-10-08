@@ -46,6 +46,7 @@ aports/device/testing/linux-sony-pdx246/    downstream kernel package (Sony 5.10
 aports/device/testing/linux-postmarketos-qcom-sm6450/
                                             mainline kernel package (6.18 + our series)
 kernel/patches/                             the mainline series, one patch per commit
+kernel/wip/                                 WIP topic branches not yet in the series
 patches/                                    fixes pmbootstrap needs to run rootless
 scripts/                                    bootstrap, pmbootstrap wrapper, aports sync, device probe, flashing
 docs/                                       device facts, design, build, flashing, status
@@ -79,6 +80,8 @@ Every command runs inside the `pmport` distrobox container.
    `scripts/sync-kernel-patches.sh` writes it out both as that single diff and
    as the reviewable series in `kernel/patches/`. Run it after every kernel
    commit, then `./scripts/pmb checksum linux-postmarketos-qcom-sm6450`.
+   Work not yet folded into the series sits on `sm6450-*` topic branches;
+   `scripts/export-wip.sh` copies their own commits to `kernel/wip/`.
 
 3. **Build the boot images.** Do not pass `--split`; this device flashes the
    combined image.

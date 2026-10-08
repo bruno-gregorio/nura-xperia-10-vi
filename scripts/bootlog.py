@@ -80,6 +80,22 @@ CARD_HALF_BLOCKS = 128         # 8 MiB, ample for a 4 MiB ring buffer
 CARD_REGION_BLOCKS = 1 + CARD_SLOTS * 2 * CARD_HALF_BLOCKS
 CTR_MAGIC = b"PMBOOTCTR"
 
+# Seconds from the top of /init to the USB watchdog's decision. Also the
+# offset markdecode takes off a round's total, so the two live in one place.
+WATCHDOG_S = 150
+# How long a gadget a host has configured keeps the phone before the
+# watchdog resets it anyway: rung 7, below.
+CONFIGURED_HOLD_S = 600
+# Uptime at which the log hook resets the phone itself, if the USB watchdog
+# has not. Round 22 is why: the kernel and the hook were alive at 1138 s,
+# and the watchdog, which should have reset the phone at about 360 s, had
+# gone without a word. The latest the watchdog can go on its own is
+# WATCHDOG_S + the highest mark, 308 with MARKS="4 8", + rung 6, under 470 s
+# of uptime; this is far enough past that for markdecode to tell the two
+# apart. A gadget a host has configured adds CONFIGURED_HOLD_S, as it does
+# for the watchdog.
+BACKUP_S = 500
+
 
 # The shell half. Sourced by the initramfs init, which is a busybox ash script,
 # so everything here has to be POSIX sh with busybox applets only.
@@ -193,6 +209,23 @@ pmbootlog_tasks() {
 	done
 }
 
+pmbootlog_ps() {
+	# Every userspace task: pid, parent, state, session, the kernel
+	# function it sleeps in, and its command line. A task that is only
+	# asleep - S, not D - shows in neither the blocked-task list nor sysrq
+	# w, and that is what the USB watchdog was in round 22, if it was
+	# anything at all. Kernel threads are left out: they are children of
+	# kthreadd, pid 2, and there are hundreds of them.
+	for _p in /proc/[0-9]*; do
+		_st=""
+		read -r _st < "$_p/stat" 2>/dev/null || continue
+		_st=${_st##*) }
+		set -- $_st
+		[ "${_p##*/}" = 2 ] || [ "$2" = 2 ] && continue
+		echo "${_p##*/} ppid $2 $1 sid $4 in $(cat "$_p/wchan" 2>/dev/null): $(tr '\0' ' ' < "$_p/cmdline" 2>/dev/null)"
+	done
+}
+
 pmbootlog_record() {
 	# The record itself. $1 is its sequence number and $2 the attempt.
 	echo "''' + LOG_MAGIC.decode() + r''' seq=$1 attempt=$2 uptime=$(cut -d' ' -f1 /proc/uptime)"
@@ -204,6 +237,10 @@ pmbootlog_record() {
 	dmesg 2>/dev/null
 	echo "--- init log ---"
 	cat /pmOS_init.log 2>/dev/null
+	echo "--- usb watchdog ---"
+	cat /pmwd.log 2>/dev/null
+	echo "--- processes ---"
+	pmbootlog_try ps pmbootlog_ps
 	echo "--- blocked tasks ---"
 	pmbootlog_try tasks pmbootlog_tasks
 	echo "--- modules ---"
@@ -278,10 +315,38 @@ pmbootlog_start() {
 		else
 			c=0
 		fi
-		# Keep going for ten minutes. A hang leaves the last record
-		# behind; a panic leaves the one before the reset.
+		# Keep going for ten minutes or so. A hang leaves the last record
+		# behind; a panic leaves the one before the reset. Longer while a
+		# configured gadget holds the phone, because the backup below
+		# waits that much longer too.
 		n=0
-		while [ "$n" -lt 600 ]; do
+		bw=""
+		while [ "$n" -lt 600 ] || [ -e /pmwd.hold ]; do
+			# The USB watchdog's backup. In round 22 this loop ran
+			# for its whole ten minutes while the watchdog, which
+			# should have reset the phone long before, never did and
+			# never said why - and the phone sat there until morning.
+			# So past BACKUP_S of uptime this resets it itself, the
+			# same way: the stacks of blocked tasks into the ring
+			# buffer, one more record, which is certain to be put
+			# together after them, then sysrq b. Up here, before
+			# the record, so that a card that has gone missing,
+			# which skips the write, does not skip this too.
+			# /pmhold stops it as it stops the watchdog.
+			if [ -z "$bw" ]; then
+				_up=""
+				read -r _up _x < /proc/uptime 2>/dev/null
+				_lim=@BACKUP_S@
+				[ -e /pmwd.hold ] && _lim=$((_lim + @HOLD_S@))
+				if [ -n "$_up" ] && [ "${_up%.*}" -ge "$_lim" ] && [ ! -e /pmhold ]; then
+					echo "backup: no reset by uptime $_up, the log hook resets after record $((n + 1))" >> /pmwd.log
+					[ -w /proc/sysrq-trigger ] && echo w > /proc/sysrq-trigger
+					bw=$n
+				fi
+			elif [ ! -e /pmhold ]; then
+				[ -w /proc/sysrq-trigger ] && echo b > /proc/sysrq-trigger
+				/bin/busybox reboot -f -n
+			fi
 			n=$((n + 1))
 			pmbootlog_record "$n" "$c" > /pmbootlog.tmp 2>/dev/null
 			# The trailer carries the md5 of everything above it, so a
@@ -326,7 +391,9 @@ pmbootlog_start
     "@CARD_REGION@", str(CARD_REGION)).replace(
     "@CARD_SLOTS@", str(CARD_SLOTS)).replace(
     "@CARD_HALF_BLOCKS@", str(CARD_HALF_BLOCKS)).replace(
-    "@CARD_REGION_BLOCKS@", str(CARD_REGION_BLOCKS))
+    "@CARD_REGION_BLOCKS@", str(CARD_REGION_BLOCKS)).replace(
+    "@BACKUP_S@", str(BACKUP_S)).replace(
+    "@HOLD_S@", str(CONFIGURED_HOLD_S))
 
 
 # ---------------------------------------------------------------- cpio newc
@@ -1015,12 +1082,8 @@ pmstage_reset
 # ever. Nothing resets the phone, so the bootloader never begins another
 # attempt and the retry counter never moves - the one failure mode that cannot
 # be recovered without someone pressing buttons.
-# Seconds from the top of /init to the watchdog's decision. Also the offset
-# markdecode takes off a round's total, so the two live in one place.
-WATCHDOG_S = 150
-# How long a gadget a host has configured keeps the phone before the
-# watchdog resets it anyway: rung 7, below.
-CONFIGURED_HOLD_S = 600
+# WATCHDOG_S and CONFIGURED_HOLD_S are at the top of the file, next to the
+# log hook's BACKUP_S, which is built around them.
 
 USB_WATCHDOG = """
 # --- pdx246: make a hung boot recoverable ----------------------------------
@@ -1055,12 +1118,22 @@ USB_WATCHDOG = """
 # the ladder starts at the UDC. bootlog.py markdecode reads both numbers back
 # out of a round's total.
 (
+	# Everything it does from here on goes into /pmwd.log as well, which
+	# the log hook copies into every record. Round 22 is why: this never
+	# reset the phone, and nothing said whether it was dead, asleep or
+	# stuck. The root is the initramfs, writable from the start.
+	echo "armed" > /pmwd.log
 	# A working boot has USB up in about sixteen seconds, so this is far
 	# longer than it needs and far shorter than waiting for a person. It is
 	# also past udevadm settle's own 120-second timeout, so a settle that
 	# never finishes still lets the init get on before this looks.
 	/bin/busybox sleep @WAIT@
-	# 0  the dwc3 glue (usb@a6f8800) has no driver
+	_up=""
+	read -r _up _x < /proc/uptime
+	read -r _me _x < /proc/self/stat
+	echo "awake at $_up, pid $_me" >> /pmwd.log
+	# 0  no dwc3 node has a driver: neither the glue, usb@a6f8800, nor the
+	#    core, usb@a600000, which the flattened binding makes the only one
 	# 1  the glue is bound, the HS PHY (phy@88e3000) is not
 	# 2  glue and PHY are bound, but there is no UDC - the dwc3 core failed
 	# 3  a UDC exists, but configfs never bound the gadget to it
@@ -1072,7 +1145,9 @@ USB_WATCHDOG = """
 	# the delay at the end, so the total still names the rung exactly.
 	_t=0
 	_u=0
-	[ -e /sys/bus/platform/devices/a6f8800.usb/driver ] && _u=1
+	for _g in a6f8800 a600000; do
+		[ -e /sys/bus/platform/devices/$_g.usb/driver ] && _u=1
+	done
 	[ "$_u" -eq 1 ] && [ -e /sys/bus/platform/devices/88e3000.phy/driver ] && _u=2
 	_udc=""
 	for _s in /sys/class/udc/*; do
@@ -1094,6 +1169,9 @@ USB_WATCHDOG = """
 		# the phone - and then this resets as for any other rung, the
 		# attempts run out and stock comes back by itself.
 		if [ "$_st" = configured ]; then
+			# The log hook's backup waits this much longer too.
+			: > /pmwd.hold
+			echo "configured, holding for @HOLD@ s" >> /pmwd.log
 			/bin/busybox sleep @HOLD@
 			_st=""
 			read -r _st < "$_udc/state" 2>/dev/null
@@ -1132,6 +1210,8 @@ USB_WATCHDOG = """
 	_m=0
 	[ -r /pmmark ] && read -r _m < /pmmark
 	case "$_m" in ''|*[!0-9]*) _m=0 ;; esac
+	read -r _up _x < /proc/uptime
+	echo "rung $_u, mark $_m, at $_up" >> /pmwd.log
 	# Same hold file as the staged probe: a shell that got in can stop this.
 	while [ -e /pmhold ]; do /bin/busybox sleep 5; done
 	# On the way out, put the kernel stack of every blocked task into the
@@ -1142,6 +1222,7 @@ USB_WATCHDOG = """
 	_lim=$(( (_m + _u) * 10 ))
 	[ "$_lim" -gt 60 ] && _lim=60
 	if [ -w /proc/sysrq-trigger ]; then
+		echo "sysrq w" >> /pmwd.log
 		/bin/busybox echo w > /proc/sysrq-trigger
 		_s0=""
 		[ -r /pmbl.seq ] && read -r _s0 < /pmbl.seq
@@ -1166,6 +1247,8 @@ USB_WATCHDOG = """
 		/bin/busybox sleep 0.1
 		_w=$((_w + 1))
 	done
+	read -r _up _x < /proc/uptime
+	echo "resetting at $_up" >> /pmwd.log
 	# sysrq b restarts at once. reboot(2) is the fallback without sysrq, and
 	# a poor one: it runs every driver's shutdown under that device's lock,
 	# so a bind stuck holding one can stop it too. -n at least keeps sync
@@ -1385,6 +1468,15 @@ def markdecode(total, base, scale, table=None):
         print(f"  {CONFIGURED_HOLD_S} s of that is the window a configured"
               " gadget gets, so a host enumerated the phone (rung 7)")
         extra -= CONFIGURED_HOLD_S
+    # The log hook's backup goes at BACKUP_S of uptime, which starts about
+    # 1.1 s before /init does, and then writes one more record, about 2.5 s.
+    backup = BACKUP_S - WATCHDOG_S + 1.4
+    if abs(extra - backup) < 8:
+        print(f"  the log hook's backup, at {BACKUP_S} s of uptime: the USB"
+              " watchdog never reset the phone. The records' \"usb"
+              " watchdog\" section says how far it got, and \"processes\""
+              " what it was waiting in.")
+        return
     if extra > 500 - ATTEMPT_S - WATCHDOG_S:
         print("  longer than any mark can make it: the watchdog never fired,"
               " or its reset never finished, and something else reset the"

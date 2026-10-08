@@ -25,6 +25,9 @@
 # resets, or a gadget whose window runs out - for up to BACK_WAIT seconds,
 # three hours by default, and stops the queue if it does not, because every
 # round after that one needs the phone and none of them can get it back.
+# Each round also waits that long for the phone before it starts, so a
+# queue chained after one that stopped this way runs its plan whole once
+# someone brings the phone back, instead of failing its first round.
 #
 # Every round's card and rddata records are read before the next one starts,
 # by try-kernel itself on a fallback and by --log otherwise, because --log
@@ -149,6 +152,19 @@ finish_round() {
 round() {
 	name=$1
 	shift
+	# A queue that starts after one which gave up on the phone, or a plan
+	# that goes on after a round left it elsewhere, would otherwise spend
+	# this round on try-kernel failing to find it, and stop.
+	case "$(phone_state)" in
+	fastboot | adb) ;;
+	*)
+		note "round $name: waiting for the phone"
+		if ! bring_back; then
+			note "round $name: no phone in ${BACK_WAIT:-10800} s; stopping the queue"
+			exit 1
+		fi
+		;;
+	esac
 	note "round $name: $*"
 	# Each round keeps its own harvest and live transcript, which a shared
 	# path would leave to the next round to overwrite. A plan's own

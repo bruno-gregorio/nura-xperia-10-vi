@@ -1634,6 +1634,12 @@ as what it would have fixed.
   scales. It is kept at one second a step so that it stays under the
   watchdog's 163-second floor unless the hang comes more than a minute and a
   half into the init, and the two can be told apart by length alone.
+  Half of this was wrong, found 2026-10-08 and Verified against
+  `kernel/watchdog.c`: `hardlockup_panic=` is not a boot parameter - round
+  23's log lists it among the unknown ones - and the hard-lockup panic is
+  set by `nmi_watchdog=panic`. So rounds 19 to 23 ran with a hard-lockup
+  detector that only warns; `softlockup_panic=1` was real. Plans from round
+  24 on pass `nmi_watchdog=panic softlockup_panic=1`.
 - **Round 19: the real init with the marks, and nothing came back at all** —
   Verified 2026-10-07. pkgrel 4, `DTB=out/milestone/clkref.dtb`,
   `MARKS="4 8"`, `BOOTLOG=0`,
@@ -2084,6 +2090,62 @@ as what it would have fixed.
   `dt_binding_check`, and decompiled it differs from `regs.dtb` in the USB
   node alone. Round 25, the second round of plan i, boots it. The change
   waits on branch `sm6450-usbflat` in `out/linux` until that round passes.
+- **wdtprobe5: with cpuidle off, the phone did not come back** — Verified
+  2026-10-08, 09:41. pkgrel 10 on `regs.dtb`, with `cpuidle.off=1` and
+  `gunyah_wdt.start_at_boot=1`. Nothing answered in 1800 seconds: no
+  fallback, no fastboot, and nothing of the phone's on the host's USB bus,
+  not even Qualcomm's dump-mode ID. wdtprobe3 and wdtprobe4, the same probe
+  with cpuidle on, fell back after 1168 seconds each. The probe's `/init`
+  ends in `reboot -f` whatever the watchdog does, so a kernel that kept
+  running would have come back; something stopped it, and the phone needed
+  hands again.
+- **So the watchdog counts without cpuidle, and its bite stops the board** —
+  Reasoned. This is the outcome the cpuidle bullet above predicts, and the
+  one it warned about: the count ran once the CPUs stopped suspending, and
+  the bite did not reset. Gunyah resets for a bite only when the watchdog
+  is marked critical or fatal (`watchdog_bite()` in the open source); any
+  other bite is a virtual interrupt to a handler VM, and whatever handles
+  it on this phone leaves it stopped. The backported driver registers no
+  bark handler, so the kernel never saw the bark coming either. A hang that
+  `cpuidle.off=1` causes by itself would look the same from outside, and
+  is the less likely reading: wdtprobe5's kernel is round 23's, which ran
+  its whole init with cpuidle on.
+- **The Gunyah watchdog is not a backstop on this board** — Reasoned, from
+  the two bullets above. Arming it turns a hang into one that needs the
+  power key, which is what it was meant to prevent. Next-steps item 2 is
+  closed that way. No round may open `/dev/watchdog0` or pass
+  `gunyah_wdt.start_at_boot=1`; round 24's two watchdog phases were taken
+  out of `cmds-r24.sh` before plan i started, for that reason. A hang has to
+  become a panic instead, and `panic=60` resets: the soft-lockup panic was
+  always on, and the hard-lockup one is from round 24 on (see the correction
+  under "The marks feed a second channel").
+- **TSENS and 28 thermal zones** — Done 2026-10-08, not yet run on the
+  device. Two TSENS v2 controllers at `0xc263000` and `0xc265000`, with
+  the stock tree's interrupts, and every zone the stock tree reads from
+  them under its stock sensor: tsens0 has two sensors per gold core,
+  tsens1 one per silver core. CPU zones throttle through cpufreq at 110 C,
+  the stock emergency point, and every zone is critical at 115 C, where the
+  stock reset monitor sits. The node layout follows upstream sar2130p,
+  which has the same addresses. `CHECK_DTBS=y` and the binding check are
+  clean, and decompiled, `out/milestone/thermal.dtb` differs from
+  `regs.dtb` in the thermal nodes and phandle numbering alone. Round 26,
+  plan j, boots it after plan i, and `cmds-r26.sh` loads cores 4, 7 and 0
+  one at a time through a cgroup cpuset to check that each zone follows its
+  stock core. Branch `sm6450-thermal` in `out/linux`.
+- **The USB3 PHY is SM8350's** — Verified against sources 2026-10-08. The
+  stock init sequence writes exactly the registers upstream's
+  `sm8350_usb3dpphy_cfg` does and agrees on 144 of 152 values. The eight
+  that differ are RX and PCS tuning. See "What is deliberately not written
+  yet" in [06-mainline.md](06-mainline.md); `scripts/qmp-score.py` is the
+  scorer.
+- **A register dump from the live shell** — Done 2026-10-08, tested off the
+  device. `scripts/regdump.c` reads physical registers through `/dev/mem`,
+  read-only, and builds against the kernel's nolibc to 4.9 KB.
+  `scripts/tsh.py` takes `@push LOCAL REMOTE` in a command file and carries
+  a binary into the shell in base64 lines. `out/try-kernel/cmds-r27.sh`
+  reads the UFS PHY as the bootloader left it, if its clocks and GDSC are
+  on, for `qmp-score.py` to identify its table. It waits for a kernel with
+  `CONFIG_DEVMEM`, which pkgrel 10 does not have.
 
 ## The boot images
 
@@ -2870,18 +2932,16 @@ port boots" above. What is left starts from there.
    at a time, without touching the phone.
 
 2. **Let a hard hang reset itself.** Rounds 19 and 20 needed hands on the
-   phone, because nothing resets a kernel that has stopped. pkgrel 7 builds
-   the Gunyah watchdog in and can start it at probe, and the kernel feeds it
-   for as long as it schedules; see "The real init on mainline". Two
-   `WDTPROBE` rounds found no watchdog. The first lacked the SCM node that
-   registers it. The second had the node, but `qcom_scm`'s hypervisor check
-   cannot pass on SMCCC v1.0 firmware, which this is. pkgrel 9 asks with a
-   v1.0 call, and can skip the question. What is still open is whether a
-   bite resets this board in a way the bootloader counts, which the next
-   `WDTPROBE` rounds answer. If it does, every real-init
-   round from then on carries `gunyah_wdt.start_at_boot=1`. If it does not,
-   the hang has to be found from the boots that do reset, and the clkref
-   round goes last in every queue.
+   phone, because nothing resets a kernel that has stopped. The Gunyah
+   watchdog was the plan, and it is closed: it registers, it only counts
+   with cpuidle off, and wdtprobe5 says its bite stops the board instead of
+   resetting it. See "The real init on mainline". What is left is the
+   kernel's own: the soft- and hard-lockup detectors panic with
+   `softlockup_panic=1 nmi_watchdog=panic`, and `panic=60` resets. That
+   covers a kernel that is still taking timer interrupts on some CPU. A
+   wedge that stops every CPU at once, such as a bus access that never
+   completes, still needs the power key, which is why `cmds-r27.sh` reads
+   nothing whose clock is off.
 3. **Find where stock stage 1 wedges.** Still unknown, and now diagnosable:
    the watchdog arms on line 5 instead of line 35, so a hang becomes a reset
    loop that ends in Android with a flash log to read. The log hook arms right

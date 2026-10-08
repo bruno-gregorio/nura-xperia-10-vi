@@ -2177,8 +2177,9 @@ as what it would have fixed.
   reads such a header, it is upstream's SM8350/SM8450 table with two tx
   values changed on both lanes. "The UFS PHY" in
   [06-mainline.md](06-mainline.md) has the numbers.
-- **UFS on the mainline kernel** — Done 2026-10-08, not yet run on the
-  device. Branch `sm6450-ufs` in `out/linux`: binding lines for the PHY, the
+- **UFS on the mainline kernel** — Done 2026-10-08. Round 28 ran it and
+  timed out setting fDeviceInit (see "Round 28: UFS links up, then the
+  first query times out"). Branch `sm6450-ufs` in `out/linux`: binding lines for the PHY, the
   controller and the ICE, `qcom,sm6450-qmp-ufs-phy` in the QMP UFS driver
   (agreeing with the vendor table on all 125 registers it writes), and the
   host, PHY and ICE nodes with the stock tree's clocks, reset, SMMU stream,
@@ -2467,6 +2468,50 @@ as what it would have fixed.
 
 ## The boot images
 
+- **Round 28: UFS links up, then the first query times out** — Verified
+  2026-10-08, 14:21. pkgrel 11 on `ufs8450.dtb`. The ICE probed (v3.2.1,
+  raw keys only), and the host got through link startup and NOP OUT. Then
+  setting fDeviceInit timed out three times, 1.5 seconds each, and the
+  probe failed with -EAGAIN; no disk. The UFS GDSC was on and no clock
+  was missing. The transcript is `out/try-kernel/live-r28.txt`.
+  - The plan's disk count was wrong. `cmds-r28.sh` echoed `/sys/block/sd*`
+    unexpanded when there was no disk, plan k counted that line as one,
+    and so round 29, the same boot without the ICE, never ran. Its rail
+    grep used `l13`-style names, where this kernel's are `ldo13`, and
+    matched nothing.
+- **Round 27: the UFS PHY was not dumped** — Verified 2026-10-08, 14:30.
+  pkgrel 11 on `regs.dtb`. The UFS GDSC was off, so `cmds-r27.sh` left
+  the PHY alone, as written. The USB3 PHY's aux clocks and GDSC were on.
+- **The board leaves every RPMh rail at the bottom of its window** —
+  Verified 2026-10-08, from round 24's log and live shell. The board copies
+  the stock tree's windows, but few mainline consumers set a voltage: not
+  ufshcd, not the QMP and Femto PHYs, not drm/msm's DSI. For a rail it
+  cannot read back, the regulator core sets the window's floor, and round
+  24's log has the 42 "Setting min-max" lines that say so. Stock's vendor
+  driver starts each rail at its `qcom,init-voltage` instead. Fourteen
+  rails differ, and among them:
+  - UFS: VCCQ (L13) at 1.08 V and VCCQ2 (L19) at 1.62 V, where stock
+    starts them at 1.2 V and 1.8 V. Both are under the UFS minimum. The
+    PHY's L5 is at 0.83 V for 0.88 V, and its L16 at 1.14 V for 1.2 V.
+  - The USB2 PHY: L25 at 2.7 V for 3.072 V and L23 at 1.65 V for 1.8 V.
+    USB works regardless.
+  - The USB3 PHY: L7 at 0.83 V for 0.912 V, and L16.
+  - DSI: L5 as vdds and L16 as vdda.
+- **So the UFS timeout may be under-voltage** — Guess, the likeliest of
+  the candidates: a device that answers NOP OUT and then not a query fits
+  a device controller running out of spec. `scripts/vreg-floors.py`
+  rewrites a decompiled tree so every floor below the stock init voltage
+  is raised to it, and changes nothing else. The `-vreg` trees in
+  `out/milestone/` are built that way, and the queued rounds now use them:
+  - Round 32, plan m, boots `display-vreg.dtb`, or `display-noqos-vreg.dtb`.
+  - Round 38, plan o, boots `usb3-8350-vreg.dtb`.
+  - Rounds 39 and 40, new in plan o after round 38, retry UFS on
+    `ufs8450-vreg.dtb`, and without the ICE on `ufs8450-noice-vreg.dtb`
+    if round 39 finds no disk. `cmds-r39.sh` is `cmds-r28.sh` with both
+    mistakes fixed.
+
+  The fix in the series is a board change, the floors raised in the
+  source. It waits until a round has run on it.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

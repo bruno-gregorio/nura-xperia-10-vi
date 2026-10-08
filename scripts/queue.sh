@@ -150,7 +150,11 @@ round() {
 	name=$1
 	shift
 	note "round $name: $*"
-	env "$@" "$ROOT/scripts/try-kernel.sh" > "$WORK/run-$name.log" 2>&1 < /dev/null
+	# Each round keeps its own harvest and live transcript, which a shared
+	# path would leave to the next round to overwrite. A plan's own
+	# HARVEST_OUT or LIVE_OUT, coming later, wins.
+	env HARVEST_OUT="$WORK/harvest-$name.txt" LIVE_OUT="$WORK/live-$name.txt" \
+		"$@" "$ROOT/scripts/try-kernel.sh" > "$WORK/run-$name.log" 2>&1 < /dev/null
 	finish_round "$name"
 }
 

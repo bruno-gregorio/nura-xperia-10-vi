@@ -203,6 +203,10 @@ actually does, and it corrects three of the guesses.
   is a numbered mark, so a boot that dies reports *where*, and `HANDOFF=1`
   makes the last stage `exec` into the stock second stage instead of stopping.
 - **`scripts/telnet.py`** — a shell in the initramfs, before `switch_root`.
+- **`scripts/tsh.py`** — the same shell for a script: runs commands there one
+  at a time and waits for each to finish, which `telnet.py` fed from a pipe
+  does not. `try-kernel.sh` runs a file of them with `LIVE=file` as soon as a
+  round reaches the shell, so a queued round can carry its own experiment.
 - **`scripts/ssh.py`** — a shell in the booted system, after it.
 - **`scripts/sdcard-install.sh`** — writes the rootfs to the SD card from the
   phone's own initramfs shell, so the card never has to come out.

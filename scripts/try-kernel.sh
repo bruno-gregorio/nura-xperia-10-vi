@@ -451,7 +451,9 @@ cmd_try() {
 		echo "RESULT: the initramfs got USB up. That is a live link into a"
 		echo "  boot that would otherwise only be visible as elapsed time."
 		echo
-		cmd_harvest || true
+		if cmd_harvest && [ -n "${LIVE:-}" ]; then
+			run_live
+		fi
 	elif [ "$got" = "_$spare" ]; then
 		echo "RESULT: OUR KERNEL BOOTED. adb answers on slot $got."
 	else
@@ -596,7 +598,23 @@ cmd_log() {
 # which is normally root:dialout. Where one of those is missing this says so
 # and stops, because fixing it is a change to the host and therefore the
 # user's call - scripts/console.sh prints the exact commands.
-HARVEST="$ROOT/out/probe-harvest.txt"
+HARVEST="${HARVEST_OUT:-$ROOT/out/probe-harvest.txt}"
+
+# LIVE=file runs a plan's own commands in the shell the harvest just used,
+# before anything resets the phone: one per line, each to completion, through
+# scripts/tsh.py. That is what turns a round that reaches the debug shell into
+# an experiment of its own rather than only a fixed set of readings. The
+# transcript goes to LIVE_OUT. The USB watchdog in the init resets a boot it
+# has seen configured after CONFIGURED_HOLD_S (bootlog.py), so a file that
+# needs longer starts with 'touch /pmhold'. LIVE_STEP bounds each command.
+run_live() {
+	out=${LIVE_OUT:-$ROOT/out/live.txt}
+	say "running $LIVE in the live shell"
+	python3 "$ROOT/scripts/tsh.py" -t "${LIVE_STEP:-120}" -f "$LIVE" \
+		> "$out" 2>&1 < /dev/null
+	echo "   tsh exited $? - the transcript is $out"
+	tail -15 "$out"
+}
 
 harvest_cmds() {
 	printf '%s\n' \

@@ -1,59 +1,103 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
-Date: Thu, 8 Oct 2026 15:14:11 -0300
+Date: Thu, 8 Oct 2026 15:32:01 -0300
 Subject: [PATCH] WIP: arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246:
- Bluetooth is a WCN3991
+ Enable the touchscreen
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-Stock's qcom,wcn3990 is the compatible Qualcomm's btpower gives every
-WCN39xx, so it does not name the chip. hci_qca under qcom,wcn3990-bt
-read a 15-byte version reply where a WCN3990's is 14 bytes. Of the
-WCN39xx chips hci_qca knows, btqca expects 15 bytes only from the
-WCN3991.
+A FocalTech FT3519T at 0x38 on I2C9, with its interrupt on GPIO 13 and
+its reset on GPIO 12. Its analog supply is switched by GPIO 103; the
+stock driver only ever drives that line and never enables the LDO its
+device tree also names, so the LDO is left out here.
 
-hci_qca sets loads on the radio's rails but no voltage, so they ran at
-the bottom of their windows: vddrf at 1.15 V and vddxo at 1.62 V. The
-stock Bluetooth and WLAN drivers ask for 1.304 V and 1.7 to 1.9 V, and
-both rails feed only the WCN3991. Raise the floors to 1.304 V and
-1.8 V.
+Round 36 probed it, and the controller answered.
 
-To be folded into the SM6450 DT / board DT once it has probed on the device.
+To be folded into the board DT once it has run with the interconnect
+votes.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts    | 6 +++---
- 1 file changed, 3 insertions(+), 3 deletions(-)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 47 +++++++++++++++++++
+ 1 file changed, 47 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 178c169ee..a8105d55d 100644
+index 0fb71cc73..98aa44c61 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -131,7 +131,7 @@ pm6450_l13: ldo13 {
+@@ -43,6 +43,13 @@ key-volume-down {
+ 			wakeup-source;
  		};
+ 	};
++
++	ts_avdd: regulator-ts-avdd {
++		compatible = "regulator-fixed";
++		regulator-name = "ts_avdd";
++		gpio = <&tlmm 103 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++	};
+ };
  
- 		pm6450_l14: ldo14 {
--			regulator-min-microvolt = <1150000>;
-+			regulator-min-microvolt = <1304000>;
- 			regulator-max-microvolt = <1304000>;
- 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
- 		};
-@@ -217,7 +217,7 @@ pm6150l_s8: smps8 {
- 		};
+ &apps_rsc {
+@@ -273,6 +280,26 @@ pm6150l_bob: bob {
+ 	};
+ };
  
- 		pm6150l_l1: ldo1 {
--			regulator-min-microvolt = <1620000>;
-+			regulator-min-microvolt = <1800000>;
- 			regulator-max-microvolt = <1980000>;
- 		};
- 
-@@ -336,7 +336,7 @@ &uart11 {
++&i2c9 {
++	status = "okay";
++
++	touchscreen@38 {
++		compatible = "focaltech,ft3519", "focaltech,ft3518";
++		reg = <0x38>;
++
++		interrupts-extended = <&tlmm 13 IRQ_TYPE_EDGE_FALLING>;
++		reset-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>;
++
++		vcc-supply = <&ts_avdd>;
++
++		pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
++		pinctrl-names = "default";
++
++		touchscreen-size-x = <1080>;
++		touchscreen-size-y = <2520>;
++	};
++};
++
+ &pm6450_gpios {
+ 	vol_down_n: vol-down-n-state {
+ 		pins = "gpio1";
+@@ -297,6 +324,10 @@ &qupv3_id_0 {
  	status = "okay";
+ };
  
- 	bluetooth {
--		compatible = "qcom,wcn3990-bt";
-+		compatible = "qcom,wcn3991-bt";
++&qupv3_id_1 {
++	status = "okay";
++};
++
+ &remoteproc_adsp {
+ 	firmware-name = "qcom/sm6450/Sony/columbia/adsp.mbn";
  
- 		vddio-supply = <&pm6450_l22>;
- 		vddxo-supply = <&pm6150l_l1>;
+@@ -351,6 +382,22 @@ &sdhc_2 {
+ 	status = "okay";
+ };
+ 
++&tlmm {
++	ts_int_default: ts-int-default-state {
++		pins = "gpio13";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-up;
++	};
++
++	ts_reset_default: ts-reset-default-state {
++		pins = "gpio12";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-up;
++	};
++};
++
+ &uart3 {
+ 	status = "okay";
+ };

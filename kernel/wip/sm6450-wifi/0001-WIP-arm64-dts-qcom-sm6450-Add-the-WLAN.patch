@@ -1,0 +1,63 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 12:23:36 -0300
+Subject: [PATCH] WIP: arm64: dts: qcom: sm6450: Add the WLAN
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SM6450's WLAN is the WCN3990-class core that ath10k drives over SNOC. Its
+firmware runs on the WPSS, where SDM845's ran on the modem, but the host
+side talks to it over QMI and does not see the difference. The register
+block, the twelve CE interrupts, the SMMU stream, the MSA region and the
+smp2p state are the downstream node's. Like its SM6350, SM6375 and SM6115
+siblings, it takes qcom,msa-fixed-perm.
+
+To be folded into the SM6450 DT once it has probed on the device.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 30 ++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+index 395b503cc..95c32cea7 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+@@ -1556,6 +1556,36 @@ gem_noc: interconnect@19100000 {
+ 			qcom,bcm-voters = <&apps_bcm_voter>;
+ 		};
+ 
++		wifi: wifi@22800000 {
++			compatible = "qcom,wcn3990-wifi";
++			reg = <0x0 0x22800000 0x0 0x800000>;
++			reg-names = "membase";
++
++			interrupts = <GIC_SPI 389 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 413 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 416 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 417 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 434 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 435 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 438 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 439 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 440 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 451 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 453 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 454 IRQ_TYPE_LEVEL_HIGH>;
++
++			iommus = <&apps_smmu 0x4c0 0x1>;
++
++			memory-region = <&pil_wlan_mem>;
++
++			qcom,smem-states = <&wlan_smp2p_out 0>;
++			qcom,smem-state-names = "wlan-smp2p-out";
++
++			qcom,msa-fixed-perm;
++
++			status = "disabled";
++		};
++
+ 		nsp_noc: interconnect@320c0000 {
+ 			compatible = "qcom,sm6450-nsp-noc";
+ 			reg = <0x0 0x320c0000 0x0 0x10000>;

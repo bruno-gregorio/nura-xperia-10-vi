@@ -1,6 +1,0 @@
-branch: sm6450-vreg
-series: sm6450-fold
-tip:    9081f18eba2cbf974d21d660229fc0755ac727a3
-base:   7ab775973813a9f80101629e7af5e34b029b00ee drm/msm/dpu: Add SM6450 support
-        (git describe: v6.18.55-36-g7ab775973)
-patches: 1

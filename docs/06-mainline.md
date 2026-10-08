@@ -534,8 +534,8 @@ upstream - so the converter grew a `--block disp_cc` mode and a second
 self-test pair rather than a hand transcription. The binding,
 `qcom,sm6450-dispcc.h` and `dispcc-sm6450.c` are in the series, and the
 driver has been in the kernel package since pkgrel 12. The node for
-`sm6450.dtsi` is WIP on branch `sm6450-display` in `out/linux`, and has run
-under the display since round 32.
+`sm6450.dtsi` ran under the display from round 32 on, and is in the series
+as of pkgrel 16.
 
 - **Parrot's controller is ravelin's plus DisplayPort.** Of the vendor's 74
   clocks, 30 are ravelin's under the same names and the other 44 are four DP
@@ -646,10 +646,11 @@ sent.
 Past the clock controller, the display needs the MDSS wrapper, the DPU, the
 DSI controller with its PHY, and a panel driver. The first three are
 SM8450's with a smaller catalog, and the fourth was already written upstream
-for the Xperia 10 V. The driver half is in the series as of pkgrel 13
-(patches 0028 to 0035) and binds to nothing without a node. The nodes are
-WIP commits on branch `sm6450-display` in `out/linux`, built into
-`out/milestone/display.dtb`. None of it has run.
+for the Xperia 10 V. The driver half has been in the series since
+pkgrel 13. The nodes were WIP on branch
+`sm6450-display` in `out/linux` until rounds 32 to 51 ran them, and they
+are in the series as of pkgrel 16. The panel lights: on 2026-10-08 the
+owner saw the debug shell's terminal and keyboard on it.
 
 - **The DPU is 8.3, of the SM8450 family.** The vendor's `sde_hw_catalog.h`
   defines `SDE_HW_VER_830` as parrot, between waipio (8.1, SM8450) and
@@ -758,7 +759,7 @@ core (see "Board-level facts"), so its node is `qcom,wcn3990-wifi` for
 stream `0x4c0`, the MSA region and the `wlan-smp2p-out` state are the
 stock node's. `qcom,msa-fixed-perm` is set, as on all four WCN3990
 siblings. The board's five supplies are the stock node's rails. The WIP
-commits are on branch `sm6450-wifi`, above pkgrel 15's series.
+commits are on branch `sm6450-wifi`, above pkgrel 16's series.
 `CHECK_DTBS=y` is clean, and `check-dt.py` finds the interrupts equal to
 stock's, value for value. `ath10k_snoc` is already a module in the package.
 It waits for the firmware's QMI service, which only a running WPSS
@@ -785,7 +786,8 @@ Mainline's `hci_qca` takes the chip type from the compatible, and the
 firmware names and the shape of the version reply follow from it. Round 35
 reads the chip's own version lines to settle it. It pushes linux-firmware's
 rampatch and NVM files for every WCN39xx, so setup can also run to the end.
-The two WIP commits are on branch `sm6450-bt`, from `sm6450`.
+It was a WCN3991, so the board names `qcom,wcn3991-bt`. Rounds 44 and 53
+completed the setup, and the nodes are in the series as of pkgrel 16.
 `CHECK_DTBS=y` is clean, and `check-dt.py` finds the UART's interrupt equal
 to stock's.
 
@@ -810,8 +812,8 @@ the LDO, because that line is commented out, and drives the GPIO in its
 place. The board therefore has a `regulator-fixed`, `ts_avdd`, switched by
 GPIO 103, as the touchscreen's `vcc-supply`, and no L28. The 6.18 base
 predates the three upstream commits, so the aport carries them as
-backports. The WIP DT commits are on branch `sm6450-next`, with UFS's,
-and `sm6450-bt` sits above them.
+backports. Rounds 36 and 49 probed the controller, and the nodes are in
+the series as of pkgrel 16.
 
 ### USB3: SM8350's PHY with receiver tuning of its own
 
@@ -865,6 +867,33 @@ test it, because its port is wired for USB 2.0 only: stock links at
 doc). So the binding, the driver entry and the disabled SoC node are for
 the series, and the board commit is not.
 
+### The charger and the Type-C port belong to the ADSP
+
+The charger and the Type-C controller are a PM7250B, with an SMB1394
+beside it, on an SPMI bus the ADSP owns. So mainline's register-level
+drivers for them cannot be used here, and the way in is the one stock
+uses: `pmic_glink`. Stock's node talks on the `PMIC_RTR_ADSP_APPS`
+channel and watches the `msm/adsp/charger_pd` protection domain through
+`tms/servreg`. Its children are the battery charger, UCSI, with one
+connector that is the role switch for dwc3, and altmode. Stock's dwc3 is
+`otg` with `usb-role-switch`.
+
+Upstream needs almost nothing new for it:
+- `pmic_glink.c` matches the generic `qcom,pmic-glink`, so the binding
+  gains `qcom,sm6450-pmic-glink` in front of it and the driver no
+  entry;
+- `ucsi_glink` keys its quirks on SoC compatibles, and SM6450 needs none
+  that are known;
+- `qcom_battmgr` falls back to its SM8350 variant;
+- the pd-mapper's SM6450 entry already serves `adsp_charger_pd`.
+
+The board describes one connector, wired for USB 2.0 only. Its
+high-speed port links to dwc3's, and the controller becomes a role switch
+in place of `dr_mode = "peripheral"`. Branch `sm6450-glink` has the
+binding and two WIP commits, and pkgrel 16 builds the modules. Rounds 37
+and 52 booted the ADSP without any of it, and both lost the USB link
+0.7 s after the ADSP came up.
+
 ### What is deliberately not written yet
 
 **The UFS PHY, which was on disk after all.** This paragraph used to say the
@@ -895,8 +924,8 @@ values and SM8350's tables otherwise; scored the same way, it agrees on all
 125 registers it writes. It also has the binding lines for the PHY, the
 controller and the Inline Crypto Engine, all in the kernel package since
 pkgrel 15. The three nodes, whose every clock decodes through the vendor
-GCC header to the clock we picked, are WIP on branch `sm6450-next`, now
-with their interconnect paths. Rounds 28 and 29
+GCC header to the clock we picked, are in the series as of pkgrel 16, with
+their interconnect paths, after rounds 39 and 49 ran them. Rounds 28 and 29
 run the tree first on pkgrel 11, which has no SM6450 match in the PHY
 driver, with SM8450's PHY configuration (`out/milestone/ufs8450.dtb`). The
 register dump in `out/try-kernel/cmds-r27.sh` - the PHY as the bootloader

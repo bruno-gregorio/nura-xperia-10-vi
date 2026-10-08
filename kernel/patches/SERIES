@@ -22,6 +22,7 @@ dt-bindings: mmc: sdhci-msm: Add SM6450
 dt-bindings: phy: qcom,usb-snps-femto-v2: Add SM6450
 dt-bindings: usb: qcom,dwc3: Add SM6450
 dt-bindings: arm: qcom: Document SM6450 and Sony Xperia 10 VI
+dt-bindings: firmware: qcom,scm: Document SM6450 SCM
 arm64: dts: qcom: pmr735a: Allow the SID to be overridden
 arm64: dts: qcom: Add SM6450 SoC device tree
 arm64: dts: qcom: Add PM6450 PMIC device tree

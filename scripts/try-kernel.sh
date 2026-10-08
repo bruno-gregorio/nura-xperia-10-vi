@@ -270,7 +270,7 @@ build_vendor_boot() {
 		# MARKS="4 8". One round is enough:
 		#   bootlog.py markdecode <total> <base> <scale> marks-table.txt
 		# panic-scale*k goes into kernel.panic for a boot that dies
-		# instead; that needs hardlockup_panic=1 softlockup_panic=1 on
+		# instead; that needs nmi_watchdog=panic softlockup_panic=1 on
 		# CMDLINE_ADD for a hang to count, and two rounds at different
 		# panic scales to decode, see bootlog.py marks. The step table
 		# lands next to the image.

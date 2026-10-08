@@ -1389,7 +1389,7 @@ def marks(src, dst, table, base, scale, pscale=1):
 
     /proc/sys/kernel/panic gets pscale * k, the same instrument as the
     kernel's pmos.milestone, for a kernel that dies instead. With
-    hardlockup_panic=1 softlockup_panic=1 on the command line a lockup
+    nmi_watchdog=panic softlockup_panic=1 on the command line a lockup
     becomes a panic, and the timeout says which step was running. A lockup
     panic comes some unknown time after the hang, and that offset lands in
     every attempt, so this channel takes two rounds at two panic scales; it

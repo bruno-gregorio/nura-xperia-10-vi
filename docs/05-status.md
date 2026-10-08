@@ -2267,8 +2267,15 @@ as what it would have fixed.
   - **A guess:** that probing with no firmware is harmless. Probe attaches
     the power domains without voting and requests interrupts; the firmware
     request fails and each processor stays offline.
-  - **Not collected:** the firmware. The board names
+  - **Not collected yet:** the firmware. The board names
     `qcom/sm6450/Sony/columbia/{adsp,cdsp,modem,wpss}.mbn`.
+    `scripts/collect-firmware.sh` reads the stock slot's `modem` partition
+    from recovery with `dd`, one partition and read-only, never `modemst*`,
+    `fsg` or `persist`. It then extracts the FAT image into
+    `out/firmware/`, which git ignores. Plan n runs it whenever `--log` has
+    left the phone in recovery. The downstream tree names the WPSS image
+    `adrastea/wpss.mdt`; the others are expected under `image/`, split into
+    `.mdt` and `.bNN`, which upstream wants squashed into one `.mbn`.
 
   Plan n runs after plan m: round 34 boots `out/milestone/remoteproc.dtb`
   (`regs.dtb` plus the four nodes) on pkgrel 13. `cmds-r34.sh` pushes r13's

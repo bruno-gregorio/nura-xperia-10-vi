@@ -3069,18 +3069,60 @@ as what it would have fixed.
     writes. The dump after the rebind came before the gadget bound, with
     no pull-up on D+, so it says nothing about a working link. They look
     like status that follows the lines, not settings left behind.
-- **Round 61: a runtime cycle of the controller** — Planned. Plan y
-  boots `out/milestone/hsref-r16.dtb` again. `out/tools/phy-watch.sh`
-  dumps the PHY's whole block, 0x11c bytes as stock's `reg` gives it,
-  and QSCRATCH, before the ADSP and once the link has gone. It also reads
-  UTMI_CTRL0, UTMI_CTRL1, CFG0, 0x20 and 0x30 with every poll. Then it
-  unbinds the gadget, allows the controller's runtime PM, and binds the
-  gadget again once the controller has suspended. dwc3 forbids runtime PM
-  at probe, which is why round 59's phase 1 never suspended. In device
-  mode, the controller's runtime suspend runs the PHY's exit and its
-  resume runs the PHY's init. That would be a recovery inside the driver
-  model, which a fix can use, and a re-probe is not. If it fails, round
-  59's driver unbind and bind follows, inside the lease's 90 s.
+- **Round 61: the charger firmware leaves the PHY non-driving** —
+  Verified 2026-10-08, 17:56 to 18:06. Plan y booted
+  `out/milestone/hsref-r16.dtb` again with `out/tools/phy-watch.sh`.
+  The transcript is `out/try-kernel/live-r61.txt`, and
+  `out/try-kernel/bootlog-card-20261008-180543.txt` is the card dump.
+  - **Verified:** the ADSP read `running` at 125.48 s, and the link was
+    already in Suspend at that poll. The PHY's settings had not changed
+    yet. At 126.18 s they had: UTMI_CTRL0 read 0x09, not 0x01, which is
+    SLEEPM plus OPMODE non-driving. CFG0 read 0x01, the DATAPATH override
+    on. HS_PHY_CTRL2 read 0x0e, not 0x06, with SUSPEND_N_SEL set. The
+    PHY's reference gate was off in hardware while the clock framework
+    still counted it on. The UDC fell to `default` at the same poll.
+  - **Verified against downstream:** that is exactly what
+    `msm_hsphy_put_phy_in_non_driving_mode()` in the vendor's
+    `phy-msm-snps-hs.c` writes, the same three registers with the same
+    bits. Downstream calls it from its `dpdm` regulator, "for PMIC
+    charger detection". The stock tree has no `dpdm` consumer, so on this
+    board the charger firmware on the ADSP does it itself, for its BC1.2
+    detection, and never takes the PHY back out of it.
+  - **Verified:** the runtime suspend worked, and its resume ran the
+    PHY's init. The controller read `suspended` after six seconds, and
+    after it UTMI_CTRL0 read 0x01 and CFG0 0x00 again. But the host did
+    not come back. The controller logged `failed to enable ep0out` at
+    137.95, 147.80 and 157.55 s, and the link read Disconnected.
+  - **Verified:** QSCRATCH did not survive the runtime suspend.
+    GENERAL_CFG read 0x0d before the ADSP, after the link went and after
+    the rebind, and 0x04 after the runtime cycle. That 0x04 has lost
+    PIPE_UTMI_CLK_SEL and PIPE3_PHYSTATUS_SW, which dwc3-qcom sets only at
+    probe, for `qcom,select-utmi-as-pipe-clk`. The word at 0x24 went from
+    0x1000 to 0 at the same time.
+  - **Reasoned:** the USB GDSC collapsed. `gcc-sm6450` gives it
+    `PWRSTS_OFF_ON`, so runtime PM really switches it off, and QSCRATCH
+    sits inside it. SC7280, SM6350, SM8650 and others use
+    `PWRSTS_RET_ON`, which leaves the GDSC on, for the same reason.
+  - **Verified:** round 59's driver unbind and bind brought the host
+    back once more. The driver bound at 165.7 s and the gadget was
+    configured by 169.9 s, with the ADSP running.
+- **Round 62: the PHY's init after each device role report** — Running.
+  pkgrel 17 carries two fixes, one for each of round 61's findings:
+  - `bringup-dwc3-qcom-phy-reinit.patch` is bring-up only. 1.5 s after
+    each device role report, dwc3-qcom takes the gadget off the bus, runs
+    the PHY's exit and init and puts the gadget back on. It also logs
+    every role report.
+  - "clk: qcom: gcc-sm6450: Use retention for USB power domain" is meant
+    for upstream.
+  The 1.5 s comes from the timing. UCSI registered 0.46 s after the ADSP
+  came up in round 57, and the firmware's settings appeared 0.7 s after
+  it in round 61. Plan z boots `out/milestone/glinkref-r17.dtb`, which is
+  round 57's glink tree, where UCSI makes the role reports, plus round
+  60's reference gate. `out/tools/usbfix-watch.sh` loads pmic_glink,
+  UCSI and the battery manager and boots the ADSP. It then asks two
+  things: whether the link comes back by itself, and, with the link up,
+  whether a runtime suspend and resume now keeps QSCRATCH. If the host is
+  gone at the end, round 59's rebind follows.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -3857,9 +3899,13 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   something: unbinding and binding the controller's driver, which takes
   the PHY through its reset and init again, brought the host back with
   the ADSP running. That is a recovery, not a fix. Round 60 showed that
-  the PHY's reference gate goes only after the link has. Round 61 dumps
-  the whole PHY, and tries a runtime suspend and resume of the
-  controller, which runs the PHY's exit and init inside the driver model.
+  the PHY's reference gate goes only after the link has. Round 61 found
+  the cause: the charger firmware's BC1.2 detection puts the PHY in UTMI
+  non-driving mode and leaves it there. The vendor kernel recovers
+  because it initialises the PHY each time it starts the peripheral.
+  Round 61 also found that a runtime suspend collapses the USB GDSC and
+  loses QSCRATCH. pkgrel 17 has a bring-up fix for the first and an
+  upstream one for the second, and round 62 tries both.
 
 ## Next steps, in order
 
@@ -3969,8 +4015,9 @@ port boots" above. What is left starts from there.
    the charger and the Type-C port read correctly. So the peer was not
    what the link was missing. Round 59 found a recovery: a re-probe of
    the controller and its PHY after the ADSP is up brings the host back,
-   so a round can now boot the ADSP and keep its shell. Rounds 60 and 61
-   look for the fix. Charging, audio, the modem and Wi-Fi all start here.
+   so a round can now boot the ADSP and keep its shell. Round 61 found
+   the cause, the charger firmware leaving the PHY non-driving, and
+   round 62 tries pkgrel 17's fix. Charging, audio, the modem and Wi-Fi all start here.
 7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and

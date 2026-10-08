@@ -18,18 +18,30 @@ and is not an error in itself, so a file can end with a deliberate reset.
 The exit status is the last command's, 124 if one ran past its timeout, and
 1 if the shell could not be reached or went away.
 
+A file can also carry a file to the phone. A line
+
+    @push out/tools/regdump /regdump
+
+sends the local file, a path relative to the project unless absolute, in
+base64 chunks through the same shell, decodes it there with busybox base64
+and makes it executable. The shell has no other way in: no scp before
+switch_root, and nothing listening on the host for wget to fetch from.
+
 This is the same channel as scripts/ssh.py, one stage earlier: the telnetd
 that pmos.debug-shell starts on 172.16.42.1:23, before switch_root.
 """
 
 import argparse
+import base64
 import os
 import re
 import socket
 import sys
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
 from telnet import strip_iac  # noqa: E402
 
 # Printed by printf from octal escapes, so the shell's echo of the command
@@ -61,6 +73,40 @@ def read_until_mark(sock, buf, timeout):
         if not data:
             raise Gone(buf)
         buf += strip_iac(data, sock)
+
+
+def run(sock, buf, command, timeout):
+    sock.sendall(command.encode() + b"\n" + MARK_CMD.encode() + b"\n")
+    return read_until_mark(sock, buf, timeout)
+
+
+# Well under the 4095 characters a terminal line can hold.
+PUSH_CHUNK = 1024
+
+
+def push(sock, buf, local, remote, timeout):
+    """Write local to remote on the phone; return (summary, status, buf)."""
+    path = local if os.path.isabs(local) else os.path.join(ROOT, local)
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        return f"tsh: {e}", 1, buf
+    text = base64.b64encode(data).decode()
+    tmp = remote + ".b64"
+    steps = [f": > '{tmp}'"]
+    steps += [f"printf %s '{text[i:i + PUSH_CHUNK]}' >> '{tmp}'"
+              for i in range(0, len(text), PUSH_CHUNK)]
+    steps.append(f"base64 -d '{tmp}' > '{remote}' && rm '{tmp}'"
+                 f" && chmod 755 '{remote}' && wc -c < '{remote}'")
+    for step in steps:
+        out, status, buf = run(sock, buf, step, timeout)
+        if status:
+            return clean(out), status, buf
+    got = clean(out).strip()
+    if got != str(len(data)):
+        return f"{remote} is {got or '?'} bytes, not {len(data)}", 1, buf
+    return f"{local} -> {remote}, {len(data)} bytes", 0, buf
 
 
 # Terminal control sequences: busybox ls colours its output on a pty, and
@@ -125,9 +171,16 @@ def main():
     for command in commands:
         if many:
             print(f"$ {command}", flush=True)
-        sock.sendall(command.encode() + b"\n" + MARK_CMD.encode() + b"\n")
+        words = command.split()
         try:
-            out, status, buf = read_until_mark(sock, buf, args.timeout)
+            if words[0] == "@push" and len(words) == 3:
+                text, status, buf = push(sock, buf, words[1], words[2],
+                                         args.timeout)
+                print(text, flush=True)
+                if status:
+                    print(f"[exit {status}]", flush=True)
+                continue
+            out, status, buf = run(sock, buf, command, args.timeout)
         except TimeoutError as e:
             print(clean(e.args[0]), flush=True)
             print(f"tsh: still running after {args.timeout:.0f} s; giving up",
@@ -137,6 +190,9 @@ def main():
             print(clean(e.args[0]), flush=True)
             print("tsh: the connection closed - the phone reset or the shell"
                   " exited", file=sys.stderr)
+            return 1
+        except OSError as e:
+            print(f"tsh: {e}", file=sys.stderr)
             return 1
         text = clean(out)
         if text:

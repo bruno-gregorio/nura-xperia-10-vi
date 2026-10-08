@@ -2024,6 +2024,25 @@ as what it would have fixed.
 - **pkgrel 10 is installed** — Verified 2026-10-08, 08:51: `apk list -I`
   says `-r10`, and the DTB in the fresh `vendor_boot.img` is byte-identical
   to `regs.dtb`.
+- **cpuidle is probably what stops the Gunyah watchdog biting** —
+  Reasoned, from the open Gunyah source, which may not be what this
+  phone's hypervisor runs. Gunyah freezes a VM's watchdog when the whole VM
+  suspends, and freezes it with a reset, giving the VM "the full bark
+  period when it wakes up" (`hyp/misc/watchdog/src/watchdog.c`). The VM
+  counts as suspended as soon as its last VCPU enters a PSCI CPU_SUSPEND
+  (`hyp/vm/psci_osi/src/psci_osi.c`). Our tree has PSCI cpuidle with
+  OS-initiated domain states. The probe starves the watchdog with a shell
+  asleep, so every CPU suspends, and the count starts over at each wakeup.
+  It never reaches 32 seconds. With `cpuidle.off=1` the idle loop is a
+  plain WFI. For a VM that drives PSCI itself, a trapped WFI only blocks
+  the VCPU, so the count should run on. If the probe still finds no bite,
+  the cause is the bite itself. Gunyah resets the board only for a
+  watchdog marked critical or fatal. Any other watchdog gets a virtual
+  interrupt for some VM to handle.
+- **The queue after round 23** — Done 2026-10-08, 09:02.
+  `out/try-kernel/plan-20261008h.sh` starts by itself when queue g ends.
+  It runs one watchdog probe, wdtprobe5, on `regs.dtb` with
+  `cpuidle.off=1`.
 
 ## The boot images
 

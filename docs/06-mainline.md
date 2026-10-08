@@ -832,6 +832,11 @@ Each phase gates the next; the ordering is the whole point.
    wedges before `/init` still cannot say so, and 05-status.md's "Every output
    channel but one is closed" works through why RAM, the UART and the
    bootloader's framebuffer are all unavailable here.
+
+   Since round 22 on 2026-10-08 the mainline kernel has a log of its own: the
+   SD card, which it brings up itself, holds a raw region the initramfs
+   writes every few seconds. From `/init` onwards, then, phase 0 is done for
+   mainline too. Before `/init` it is still not.
 1. **SoC base.** `sm6450.dtsi` plus dt-bindings; `gcc-sm6450.c` and
    `pinctrl-sm6450.c` transformed from the parrot sources against the
    ravelin/sm4450 template; RPMh (RSC, regulators, `pm6450.dtsi`); SMEM, SMP2P,
@@ -858,6 +863,11 @@ Each phase gates the next; the ordering is the whole point.
 2. **Storage and a shell.** SMMU, UFS plus phy, dwc3 plus the HS/SS phys. At
    this point there is a networked shell and the project has a real feedback
    loop.
+
+   The shell came first. Round 23, on 2026-10-08, reached the pmOS debug
+   shell over the USB network gadget, with the SMMU, the SD card and dwc3 on
+   the high-speed PHY. UFS and the SuperSpeed PHY are what is left of this
+   phase.
 3. **Board dts.** Done out of order, because a dtsi does not build without a
    board to include it: `sm6450-sony-xperia-columbia-pdx246.dts`, following
    pdx225's naming. It will grow as phases 1 and 2 land; right now it is a

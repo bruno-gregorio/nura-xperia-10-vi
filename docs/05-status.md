@@ -2043,6 +2043,25 @@ as what it would have fixed.
   `out/try-kernel/plan-20261008h.sh` starts by itself when queue g ends.
   It runs one watchdog probe, wdtprobe5, on `regs.dtb` with
   `cpuidle.off=1`.
+- **wdtprobe4: forcing the registration changes nothing** — Verified
+  2026-10-08, 09:05. It fell back after 1168 seconds, "nobite", the same
+  as wdtprobe3. That was expected: pkgrel 9's UUID query already
+  registers the watchdog, so forcing it has nothing to add.
+- **Round 23: USB is up on the mainline kernel** — Verified 2026-10-08,
+  09:06. pkgrel 10 on `regs.dtb`. The gadget appeared 18 seconds after
+  the reboot, and the harvest reached the pmOS debug shell over telnet.
+  `a600000.usb` is the UDC and `devices_deferred` is empty. The only
+  failure in dmesg is the PMK8350 ADC with no channels, which upstream
+  boards tolerate too. All 38 regulators set their ranges. The SMMU
+  probed and the card came up at SDR104, all inside the first second.
+  The debug shell started at 4.97 seconds of uptime. The harvest is
+  `out/try-kernel/harvest-r23.txt`.
+- **The loop around it works** — Verified, the same round. The queue
+  reset each of the seven attempts over telnet as soon as it answered,
+  between 3 and 18 seconds of uptime. Stock was back three minutes after
+  the first attempt. Every attempt left its records on the card. The USB
+  watchdog's log says "armed", and its `sleep 150` is in the process
+  list, so it now outlives its own start.
 
 ## The boot images
 
@@ -2784,11 +2803,11 @@ port boots" above. What is left starts from there.
    Gunyah watchdog probe showed our tree has no SCM node, which on its own
    keeps the SMMU, and so the dwc3 core and the SD card, from ever probing.
    Round 22, on the tree with SCM, had the SMMU and the card working, and
-   USB waiting on a regulator block the board described wrongly. Round 23
-   runs the real init on the corrected tree, unattended under
-   `scripts/queue.sh`, and the log hook now resets any boot the USB
-   watchdog does not. "The real init on mainline" has the rounds. What
-   follows is the history of getting this far.
+   USB waiting on a regulator block the board described wrongly. Round 23,
+   on 2026-10-08, ran the real init on the corrected tree, unattended under
+   `scripts/queue.sh`, and reached the pmOS debug shell over the USB network
+   gadget. This item is done. "The real init on mainline" has the rounds.
+   What follows is the history of getting this far.
 
    The boot itself was the open question for a while: it has happened twice. The first flash on 2026-10-06 was
    refused by ABL outright, and the second - after the dtbo and the board-id

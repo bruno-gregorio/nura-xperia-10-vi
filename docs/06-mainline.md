@@ -746,6 +746,19 @@ and pass `dt_binding_check`. The two WIP DT commits sit on
 against the stock nodes by name instead. None of it has run;
 `out/milestone/remoteproc.dtb` is the round that does.
 
+The WLAN comes next, because it runs on the WPSS. It is the WCN3990-class
+core (see "Board-level facts"), so its node is `qcom,wcn3990-wifi` for
+`ath10k_snoc`. The register block, the twelve CE interrupts, the SMMU
+stream `0x4c0`, the MSA region and the `wlan-smp2p-out` state are the
+stock node's. `qcom,msa-fixed-perm` is set, as on all four WCN3990
+siblings. The board's five supplies are the stock node's rails. The two WIP
+commits are on branch `sm6450-wifi`, above `sm6450-remoteproc-dt`.
+`CHECK_DTBS=y` is clean, and `check-dt.py` finds the interrupts equal to
+stock's, value for value. `ath10k_snoc` is already a module in the package.
+It waits for the firmware's QMI service, which only a running WPSS
+provides, so the node is not worth a round before the firmware is
+collected.
+
 ### What is deliberately not written yet
 
 **The UFS PHY, which was on disk after all.** This paragraph used to say the

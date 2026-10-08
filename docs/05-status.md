@@ -2284,6 +2284,12 @@ as what it would have fixed.
   deferred devices and dmesg. `qrtr` goes first because sysmon opens a QRTR
   socket at probe and defers without one. "The remote processors" in
   [06-mainline.md](06-mainline.md) has the mapping.
+- **The WLAN** — Written 2026-10-08, not yet run, and not queued. It is
+  the WCN3990-class core on `ath10k_snoc`, with its firmware on the WPSS.
+  06-mainline had called it WCN6750, which the live node's `qcom,icnss`
+  compatible rules out. The WIP node is on branch `sm6450-wifi` in
+  `out/linux`; `CHECK_DTBS=y` is clean and its interrupts equal stock's.
+  It needs the WPSS running its firmware first.
 
 ## The boot images
 

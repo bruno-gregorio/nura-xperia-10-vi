@@ -2078,8 +2078,8 @@ as what it would have fixed.
   writing and samples `timeleft`, which is the hypervisor's count since the
   last ping. It does that first with cpuidle as configured, then with every
   idle state but WFI disabled.
-- **USB on the flattened dwc3 binding** — Done 2026-10-08, not yet run on
-  the device. New SoCs upstream are expected to use the single-node
+- **USB on the flattened dwc3 binding** — Done 2026-10-08, and round 25
+  passed with it (see "Round 25: the flattened dwc3 binding works"). New SoCs upstream are expected to use the single-node
   `qcom,snps-dwc3` binding. Ours used the legacy one, with the glue at
   `0xa6f8800` and the core as a child. `out/milestone/usbflat.dtb` has one
   node at `0xa600000` that covers both. Its core interrupt is named
@@ -2089,7 +2089,7 @@ as what it would have fixed.
   mode. The DTB passes `CHECK_DTBS=y`, the binding passes
   `dt_binding_check`, and decompiled it differs from `regs.dtb` in the USB
   node alone. Round 25, the second round of plan i, boots it. The change
-  waits on branch `sm6450-usbflat` in `out/linux` until that round passes.
+  waited on branch `sm6450-usbflat` in `out/linux` until that round passed.
 - **wdtprobe5: with cpuidle off, the phone did not come back** — Verified
   2026-10-08, 09:41. pkgrel 10 on `regs.dtb`, with `cpuidle.off=1` and
   `gunyah_wdt.start_at_boot=1`. Nothing answered in 1800 seconds: no
@@ -2145,7 +2145,9 @@ as what it would have fixed.
     the controller's SuperSpeed wiring, while the board keeps high speed. The
     board commit then enables the PHY on stock's L16 and L7 with GPIO 100 as
     port select. `CHECK_DTBS=y` is clean and `check-dt.py` passes. The DTB
-    is `out/milestone/usb3.dtb`.
+    is `out/milestone/usb3.dtb`. Since round 25 the branch sits on
+    `sm6450-fold`, so the controller it wires is the flattened node; both
+    round 38 DTBs were rebuilt from it, and checked again the same way.
   - **Round 38** - Reasoned, queued as plan o after plan n. Pkgrel 13 has
     no SM6450 entry, so the round runs `usb3-8350.dtb`, the same tree
     naming SM8350's compatible. The shell rides on this controller, so a
@@ -2407,6 +2409,38 @@ as what it would have fixed.
   other compiler, or from `out/kbuild`'s defconfig build, would fail its
   first indirect call. Each build signs with its own key. Signatures are
   not enforced and lockdown is off, so the module loads with a taint.
+- **Round 24: the first round with commands of its own** — Verified
+  2026-10-08, 14:06. pkgrel 10 on `regs.dtb`. The gadget appeared 16
+  seconds after the reboot, and `tsh.py` ran all of `cmds-r24.sh` in the
+  shell: 562 lines in `out/try-kernel/live-r24.txt`. The clock, regulator,
+  power-domain, GPIO and interrupt state it reads is the baseline later
+  rounds are compared against.
+  - The CPUs reach their deepest idle states. cpu0 entered `cpu-sleep-0-1`
+    249 times and cpu4 `cpu-sleep-1-1` 50 times, and the cluster domain
+    entered its deeper state 38 times, with 231 refusals. So the CPUs do
+    suspend through PSCI whenever the shell sleeps, which is what the
+    cpuidle bullet above rests on.
+  - cpufreq has both policies, `policy0` and `policy4`.
+  - `/sys/class/watchdog/watchdog0` has none of the usual attributes,
+    because `CONFIG_WATCHDOG_SYSFS` is off. That says nothing about the
+    driver.
+- **Round 25: the flattened dwc3 binding works** — Verified 2026-10-08,
+  14:10. pkgrel 10 on `usbflat.dtb`. The gadget appeared 16 seconds after
+  the reboot, as on `regs.dtb`. `a600000.usb` is bound to `dwc3-qcom` by
+  its `qcom,sm6450-dwc3` compatible and is the UDC, and `devices_deferred`
+  is empty. The transcript is `out/try-kernel/live-r25.txt`.
+- **The flattened node is folded into the series, on a staging branch** —
+  Done 2026-10-08. Branch `sm6450-fold` in `out/linux` is the series with
+  round 25's change folded in. The binding commit now documents SM6450 in
+  `qcom,snps-dwc3.yaml`, and the SoC and board commits carry the single
+  node. The board DTB it builds is byte-identical to `usbflat.dtb`, and
+  `CHECK_DTBS=y` and the binding check are clean. `sm6450`, and with it
+  pkgrel 14, is unchanged. A package carries the fold from the next
+  pkgrel, together with whatever else has passed by then, so the queued
+  rounds keep the packages they were planned with.
+  `scripts/export-wip.sh` exports the fold whole, 35 patches from
+  v6.18.55, into `kernel/wip/sm6450-fold/`. A branch cut from it, such as
+  `sm6450-usb3`, is exported against it.
 
 ## The boot images
 

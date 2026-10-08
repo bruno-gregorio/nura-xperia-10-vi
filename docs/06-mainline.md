@@ -438,6 +438,9 @@ check:
   whole peripheral as one region from `0xa600000` for a megabyte. The script
   reports that as `WITHIN` rather than folding it into the exact hits, because
   being inside a large region is weaker evidence than matching an address.
+  The flattened controller node on `sm6450-fold` (see "USB3: SM8350's PHY
+  with receiver tuning of its own") starts at `0xa600000`, as stock's does,
+  so with it that address is an exact hit too.
 - **Every interrupt matches.** 14 of the 15 nodes the two trees agree on the
   address of carry exactly the stock numbers. The one difference is the
   watchdog, which takes only the bark interrupt, because that is what the
@@ -824,12 +827,15 @@ tuning:
   0xd0 and 0x07. With those two, the PCS table is value for value upstream's
   `qdu1000_usb3_uniphy_pcs_tbl`, a V4 PCS table in `phy-qcom-qmp-usb.c`.
 
-Branch `sm6450-usb3` in `out/linux`, from `sm6450`, adds
+Branch `sm6450-usb3` in `out/linux` adds
 `qcom,sm6450-qmp-usb3-dp-phy` with an RX and a PCS table carrying those
 values and SM8350's configuration otherwise. Scored the same way, it agrees
 on all 152. The DisplayPort half is SM8350's too: stock's `qcom,dp-display`
 gives the PHY version 0x420 and a "5nm-v1" PLL, and its ten AUX settings
-are the ones `qmp_v4_dp_aux_init()` writes. The branch has four commits:
+are the ones `qmp_v4_dp_aux_init()` writes. The branch sits on
+`sm6450-fold`, the series with round 25's single flattened controller node
+folded in, because upstream expects that binding for a new SoC and the PHY
+wires into the controller. It has four commits:
 
 - **The binding and the driver** - the compatible in
   `qcom,sc8280xp-qmp-usb43dp-phy.yaml`, with no power domain, like SM8350,
@@ -840,8 +846,8 @@ are the ones `qmp_v4_dp_aux_init()` writes. The branch has four commits:
   `qcom,gcc-parrot.h` to the PHY's aux, com_aux and pipe clocks and, as
   `ref`, the USB3 CLKREF gate, which stock's node also takes. The board
   keeps the controller at high speed off the UTMI clock, so this commit
-  alone changes nothing that runs: the DTB differs from `regs.dtb` by the
-  disabled PHY, GCC's input and the ports.
+  alone changes nothing that runs: the DTB differs from `usbflat.dtb`, the
+  fold's, by the disabled PHY, GCC's input and the ports.
 - **The board** - stock's supplies, L16 as `vdda-phy` and L7 as
   `vdda-pll`, and GPIO 100 muxed to the PHY's port select, as stock muxes
   it. The DTB is `out/milestone/usb3.dtb`.

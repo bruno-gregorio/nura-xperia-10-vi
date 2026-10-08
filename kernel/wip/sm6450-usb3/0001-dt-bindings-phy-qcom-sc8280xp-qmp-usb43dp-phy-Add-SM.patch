@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 13:05:38 -0300
+Subject: [PATCH] dt-bindings: phy: qcom,sc8280xp-qmp-usb43dp-phy: Add SM6450
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Document the USB3 and DisplayPort combo PHY on SM6450. It is the
+SM8350 generation with receiver tuning of its own, so it takes its own
+compatible rather than SM8350's as a fallback. Like SM8350's, it has
+no power domain.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../devicetree/bindings/phy/qcom,sc8280xp-qmp-usb43dp-phy.yaml   | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/phy/qcom,sc8280xp-qmp-usb43dp-phy.yaml b/Documentation/devicetree/bindings/phy/qcom,sc8280xp-qmp-usb43dp-phy.yaml
+index c8bc512df..a2e2de506 100644
+--- a/Documentation/devicetree/bindings/phy/qcom,sc8280xp-qmp-usb43dp-phy.yaml
++++ b/Documentation/devicetree/bindings/phy/qcom,sc8280xp-qmp-usb43dp-phy.yaml
+@@ -23,6 +23,7 @@ properties:
+       - qcom,sc8280xp-qmp-usb43dp-phy
+       - qcom,sdm845-qmp-usb3-dp-phy
+       - qcom,sm6350-qmp-usb3-dp-phy
++      - qcom,sm6450-qmp-usb3-dp-phy
+       - qcom,sm8150-qmp-usb3-dp-phy
+       - qcom,sm8250-qmp-usb3-dp-phy
+       - qcom,sm8350-qmp-usb3-dp-phy

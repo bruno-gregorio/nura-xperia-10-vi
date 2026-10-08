@@ -1,0 +1,189 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 13:08:20 -0300
+Subject: [PATCH] WIP: arm64: dts: qcom: sm6450: Add the USB3/DP combo PHY
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Describe the USB3 and DisplayPort combo PHY at 0x88e8000, feed its pipe
+clock back to GCC, and give the DWC3 controller its SuperSpeed PHY and
+the graph ports the Type-C plumbing hangs off. The resets are the
+downstream node's, and its clocks decode through the vendor GCC header
+to these four: the PHY's aux, com_aux and pipe clocks, and as its
+reference the USB3 CLKREF gate, which the downstream node also takes,
+on top of the CXO it feeds from.
+
+The DisplayPort input port is left out until the SoC describes its DP
+controller.
+
+The board keeps the controller at high speed, off the UTMI clock, until
+it has the Type-C orientation the PHY needs, so its behaviour does not
+change.
+
+To be folded into the SM6450 DT / board DT once it has probed on the device.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 11 +++
+ arch/arm64/boot/dts/qcom/sm6450.dtsi          | 84 ++++++++++++++++---
+ 2 files changed, 83 insertions(+), 12 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index 1d1c9c5d7..ebd2fad54 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -331,12 +331,23 @@ &uart3 {
+ 	status = "okay";
+ };
+ 
++/*
++ * The USB3 + DP combo PHY is not enabled yet: without the Type-C
++ * orientation, which comes from pmic_glink on this phone, its lanes would
++ * only work with the cable one way round. Until then the controller runs
++ * at high speed, off the UTMI clock alone.
++ */
+ &usb_1 {
++	qcom,select-utmi-as-pipe-clk;
++
+ 	status = "okay";
+ };
+ 
+ &usb_1_dwc3 {
+ 	dr_mode = "otg";
++	maximum-speed = "high-speed";
++	phys = <&usb_1_hsphy>;
++	phy-names = "usb2-phy";
+ 	usb-role-switch;
+ };
+ 
+diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+index c770a0099..8811adaaa 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+@@ -7,6 +7,7 @@
+ #include <dt-bindings/clock/qcom,sm6450-gcc.h>
+ #include <dt-bindings/interrupt-controller/arm-gic.h>
+ #include <dt-bindings/mailbox/qcom-ipcc.h>
++#include <dt-bindings/phy/phy-qcom-qmp.h>
+ #include <dt-bindings/power/qcom-rpmpd.h>
+ #include <dt-bindings/soc/qcom,rpmh-rsc.h>
+ 
+@@ -713,7 +714,7 @@ gcc: clock-controller@100000 {
+ 				 <0>,
+ 				 <0>,
+ 				 <0>,
+-				 <0>;
++				 <&usb_1_qmpphy QMP_USB43DP_USB3_PIPE_CLK>;
+ 		};
+ 
+ 		qupv3_id_0: geniqup@9c0000 {
+@@ -810,6 +811,52 @@ usb_1_hsphy: phy@88e3000 {
+ 			status = "disabled";
+ 		};
+ 
++		usb_1_qmpphy: phy@88e8000 {
++			compatible = "qcom,sm6450-qmp-usb3-dp-phy";
++			reg = <0x0 0x088e8000 0x0 0x3000>;
++
++			clocks = <&gcc GCC_USB3_PRIM_PHY_AUX_CLK>,
++				 <&gcc GCC_USB3_0_CLKREF_EN>,
++				 <&gcc GCC_USB3_PRIM_PHY_COM_AUX_CLK>,
++				 <&gcc GCC_USB3_PRIM_PHY_PIPE_CLK>;
++			clock-names = "aux",
++				      "ref",
++				      "com_aux",
++				      "usb3_pipe";
++
++			resets = <&gcc GCC_USB3_DP_PHY_PRIM_BCR>,
++				 <&gcc GCC_USB3_PHY_PRIM_BCR>;
++			reset-names = "phy",
++				      "common";
++
++			#clock-cells = <1>;
++			#phy-cells = <1>;
++
++			orientation-switch;
++
++			status = "disabled";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@0 {
++					reg = <0>;
++
++					usb_1_qmpphy_out: endpoint {
++					};
++				};
++
++				port@1 {
++					reg = <1>;
++
++					usb_1_qmpphy_usb_ss_in: endpoint {
++						remote-endpoint = <&usb_1_dwc3_ss>;
++					};
++				};
++			};
++		};
++
+ 		usb_1: usb@a6f8800 {
+ 			compatible = "qcom,sm6450-dwc3", "qcom,dwc3";
+ 			reg = <0x0 0x0a6f8800 0x0 0x400>;
+@@ -851,14 +898,6 @@ usb_1: usb@a6f8800 {
+ 
+ 			resets = <&gcc GCC_USB30_PRIM_BCR>;
+ 
+-			/*
+-			 * There is a USB3 + DP combo PHY at 0x88e8000, but
+-			 * which upstream QMP generation it is has not been
+-			 * established yet. Until it has, the controller runs
+-			 * at high speed off the UTMI clock alone.
+-			 */
+-			qcom,select-utmi-as-pipe-clk;
+-
+ 			#address-cells = <2>;
+ 			#size-cells = <2>;
+ 			ranges;
+@@ -870,9 +909,10 @@ usb_1_dwc3: usb@a600000 {
+ 				reg = <0x0 0x0a600000 0x0 0xcd00>;
+ 				interrupts = <GIC_SPI 133 IRQ_TYPE_LEVEL_HIGH>;
+ 				iommus = <&apps_smmu 0x80 0x0>;
+-				phys = <&usb_1_hsphy>;
+-				phy-names = "usb2-phy";
+-				maximum-speed = "high-speed";
++				phys = <&usb_1_hsphy>,
++				       <&usb_1_qmpphy QMP_USB43DP_USB3_PHY>;
++				phy-names = "usb2-phy",
++					    "usb3-phy";
+ 
+ 				snps,dis-u1-entry-quirk;
+ 				snps,dis-u2-entry-quirk;
+@@ -884,6 +924,26 @@ usb_1_dwc3: usb@a600000 {
+ 				snps,usb2-gadget-lpm-disable;
+ 				snps,usb2-lpm-disable;
+ 				tx-fifo-resize;
++
++				ports {
++					#address-cells = <1>;
++					#size-cells = <0>;
++
++					port@0 {
++						reg = <0>;
++
++						usb_1_dwc3_hs: endpoint {
++						};
++					};
++
++					port@1 {
++						reg = <1>;
++
++						usb_1_dwc3_ss: endpoint {
++							remote-endpoint = <&usb_1_qmpphy_usb_ss_in>;
++						};
++					};
++				};
+ 			};
+ 		};
+ 

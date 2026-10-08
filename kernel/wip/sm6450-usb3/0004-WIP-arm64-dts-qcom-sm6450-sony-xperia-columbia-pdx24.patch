@@ -1,0 +1,85 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 8 Oct 2026 13:10:11 -0300
+Subject: [PATCH] WIP: arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246:
+ Enable the USB3 PHY
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Enable the USB3/DP combo PHY and let the controller run at SuperSpeed.
+The supplies are the downstream node's: L16, its 1.2 V core supply, as
+vdda-phy, and L7, its 0.912 V vdd, as vdda-pll. GPIO 100 carries the
+PHY's port select, muxed as downstream muxes it.
+
+There is no pmic_glink yet to report the cable's orientation, so the
+PHY assumes the normal one.
+
+To be folded into the SM6450 DT / board DT once it has probed on the device.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 36 +++++++++++++------
+ 1 file changed, 25 insertions(+), 11 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index ebd2fad54..523bd1ce4 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -327,27 +327,25 @@ &sdhc_2 {
+ 	status = "okay";
+ };
+ 
++&tlmm {
++	usb_phy_ps_default: usb-phy-ps-default-state {
++		pins = "gpio100";
++		function = "usb0_phy_ps";
++		drive-strength = <2>;
++		bias-disable;
++	};
++};
++
+ &uart3 {
+ 	status = "okay";
+ };
+ 
+-/*
+- * The USB3 + DP combo PHY is not enabled yet: without the Type-C
+- * orientation, which comes from pmic_glink on this phone, its lanes would
+- * only work with the cable one way round. Until then the controller runs
+- * at high speed, off the UTMI clock alone.
+- */
+ &usb_1 {
+-	qcom,select-utmi-as-pipe-clk;
+-
+ 	status = "okay";
+ };
+ 
+ &usb_1_dwc3 {
+ 	dr_mode = "otg";
+-	maximum-speed = "high-speed";
+-	phys = <&usb_1_hsphy>;
+-	phy-names = "usb2-phy";
+ 	usb-role-switch;
+ };
+ 
+@@ -372,3 +370,19 @@ &usb_1_hsphy {
+ 
+ 	status = "okay";
+ };
++
++/*
++ * Without pmic_glink there is nothing yet to report the Type-C
++ * orientation, so the PHY assumes the cable's normal orientation and
++ * SuperSpeed only works with it that way round. Flipped, the link should
++ * fail to train and the host fall back to high speed.
++ */
++&usb_1_qmpphy {
++	vdda-phy-supply = <&pm6450_l16>;
++	vdda-pll-supply = <&pm6450_l7>;
++
++	pinctrl-0 = <&usb_phy_ps_default>;
++	pinctrl-names = "default";
++
++	status = "okay";
++};

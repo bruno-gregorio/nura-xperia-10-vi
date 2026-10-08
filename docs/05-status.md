@@ -2135,9 +2135,27 @@ as what it would have fixed.
 - **The USB3 PHY is SM8350's** — Verified against sources 2026-10-08. The
   stock init sequence writes exactly the registers upstream's
   `sm8350_usb3dpphy_cfg` does and agrees on 144 of 152 values. The eight
-  that differ are RX and PCS tuning. See "What is deliberately not written
-  yet" in [06-mainline.md](06-mainline.md); `scripts/qmp-score.py` is the
-  scorer.
+  that differ are RX and PCS tuning. See "USB3: SM8350's PHY with receiver
+  tuning of its own" in [06-mainline.md](06-mainline.md);
+  `scripts/qmp-score.py` is the scorer.
+  - **Written** - Done 2026-10-08, not yet run on the device. Branch
+    `sm6450-usb3` in `out/linux` adds `qcom,sm6450-qmp-usb3-dp-phy` with
+    the eight values, and the tables it writes agree with stock on all 152
+    registers. The SoC commit adds the PHY node, GCC's pipe-clock input and
+    the controller's SuperSpeed wiring, while the board keeps high speed. The
+    board commit then enables the PHY on stock's L16 and L7 with GPIO 100 as
+    port select. `CHECK_DTBS=y` is clean and `check-dt.py` passes. The DTB
+    is `out/milestone/usb3.dtb`.
+  - **Round 38** - Reasoned, queued as plan o after plan n. Pkgrel 13 has
+    no SM6450 entry, so the round runs `usb3-8350.dtb`, the same tree
+    naming SM8350's compatible. The shell rides on this controller, so a
+    PHY that fails costs the shell but not the boot log, and the USB
+    watchdog still resets an unconfigured gadget. `cmds-r38.sh` reads the
+    UDC's `current_speed`.
+  - **Guess** - With no `pmic_glink` to report the orientation, the PHY
+    assumes the normal one. A flipped cable should leave the link at high
+    speed rather than lose it, so a high-speed result in round 38 does not
+    by itself say the PHY is wrong.
 - **A register dump from the live shell** — Done 2026-10-08, tested off the
   device. `scripts/regdump.c` reads physical registers through `/dev/mem`,
   read-only, and builds against the kernel's nolibc to 4.9 KB.
@@ -3095,7 +3113,8 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   was: UFS and USB3, both blocked on the same thing - upstream wants a
   per-SoC PHY register table and Qualcomm did not release the PHY driver for
   this chip. (Wrong for UFS, as it turned out on 2026-10-08: see "The UFS PHY
-  driver was in the tarball all along".) Neither blocks a shell, because the rootfs is on the SD card and
+  driver was in the tarball all along", and for USB3, whose init sequence
+  the stock tree carries: see "The USB3 PHY is SM8350's".) Neither blocks a shell, because the rootfs is on the SD card and
   a USB network gadget only needs high speed.
   [06-mainline.md](06-mainline.md) has the method and the proofs.
 - **The live device tree is a per-board ground truth, and it is already in

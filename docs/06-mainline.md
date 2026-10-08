@@ -807,6 +807,52 @@ predates the three upstream commits, so the aport carries them as
 backports. The two WIP DT commits are on branch `sm6450-touch`, above
 `sm6450-bt`.
 
+### USB3: SM8350's PHY with receiver tuning of its own
+
+The stock tree carries this PHY's init sequence, as `qcom,qmp-phy-init-seq`
+on `ssphy@88e8000`: 152 offset-value pairs, all in the USB half of the PHY,
+`0x1010` to `0x1f44`. `scripts/qmp-score.py` places every configuration in
+upstream's `phy-qcom-qmp-combo.c` over it, each table at its
+configuration's offsets. `sm8350_usb3dpphy_cfg` writes exactly the same 152
+registers, none missing and none extra, and agrees on 144 of the values;
+the runner-up, SC8180X, agrees on 82. The eight that differ are receiver
+tuning:
+
+- **RX, on both lanes** - `UCDR_FO_GAIN` 0x09 where SM8350 has 0x0a,
+  `UCDR_SO_GAIN` 0x04 for 0x05, and `SIGDET_CNTRL` 0x34 for 0x04.
+- **PCS** - `LOCK_DETECT_CONFIG1` and `2` are 0xc4 and 0x89 where SM8350 has
+  0xd0 and 0x07. With those two, the PCS table is value for value upstream's
+  `qdu1000_usb3_uniphy_pcs_tbl`, a V4 PCS table in `phy-qcom-qmp-usb.c`.
+
+Branch `sm6450-usb3` in `out/linux`, from `sm6450`, adds
+`qcom,sm6450-qmp-usb3-dp-phy` with an RX and a PCS table carrying those
+values and SM8350's configuration otherwise. Scored the same way, it agrees
+on all 152. The DisplayPort half is SM8350's too: stock's `qcom,dp-display`
+gives the PHY version 0x420 and a "5nm-v1" PLL, and its ten AUX settings
+are the ones `qmp_v4_dp_aux_init()` writes. The branch has four commits:
+
+- **The binding and the driver** - the compatible in
+  `qcom,sc8280xp-qmp-usb43dp-phy.yaml`, with no power domain, like SM8350,
+  and the tables, configuration and match entry.
+- **The SoC node** - the PHY at `0x88e8000`, its pipe clock fed back to GCC
+  as GCC's seventh input, and the DWC3 controller's SuperSpeed PHY and
+  graph ports. The resets are stock's. Its clocks decode through
+  `qcom,gcc-parrot.h` to the PHY's aux, com_aux and pipe clocks and, as
+  `ref`, the USB3 CLKREF gate, which stock's node also takes. The board
+  keeps the controller at high speed off the UTMI clock, so this commit
+  alone changes nothing that runs: the DTB differs from `regs.dtb` by the
+  disabled PHY, GCC's input and the ports.
+- **The board** - stock's supplies, L16 as `vdda-phy` and L7 as
+  `vdda-pll`, and GPIO 100 muxed to the PHY's port select, as stock muxes
+  it. The DTB is `out/milestone/usb3.dtb`.
+
+`CHECK_DTBS=y` is clean and `check-dt.py` passes. One thing still stands
+between the PHY and SuperSpeed both ways round: the Type-C orientation,
+which on this phone comes from `pmic_glink`. Until then the PHY assumes
+the normal orientation. Round 38 runs the board commit on pkgrel 13, whose
+driver has no SM6450 entry, as `out/milestone/usb3-8350.dtb`: the same
+tree naming SM8350's compatible, which is off by the eight receiver values.
+
 ### What is deliberately not written yet
 
 **The UFS PHY, which was on disk after all.** This paragraph used to say the
@@ -843,32 +889,6 @@ driver, with SM8450's PHY configuration (`out/milestone/ufs8450.dtb`). The
 register dump in `out/try-kernel/cmds-r27.sh` - the PHY as the bootloader
 left it, read through `/dev/mem` with `scripts/regdump.c` - is now a check on
 what the bootloader programs rather than the only source.
-
-**The USB3 + DP combo PHY**, though it is no longer for the same reason.
-Unlike UFS, the stock tree carries this PHY's init sequence, as
-`qcom,qmp-phy-init-seq` on `ssphy@88e8000`: 152 offset-value pairs, not the
-400 entries this paragraph used to say, all in the USB half of the PHY,
-`0x1010` to `0x1f44`. `scripts/qmp-score.py` places every configuration in
-upstream's `phy-qcom-qmp-combo.c` over it, each table at its configuration's
-offsets, and the answer is not close. `sm8350_usb3dpphy_cfg` writes exactly
-the same 152 registers, none missing and none extra, and agrees on 144 of the
-values; the runner-up, SC8180X, agrees on 82. Verified against sources on
-2026-10-08. The eight that differ are receiver tuning:
-
-- **RX, on both lanes** - `UCDR_FO_GAIN` 0x09 where SM8350 has 0x0a,
-  `UCDR_SO_GAIN` 0x04 for 0x05, and `SIGDET_CNTRL` 0x34 for 0x04.
-- **PCS** - `LOCK_DETECT_CONFIG1` and `2` are 0xc4 and 0x89 where SM8350 has
-  0xd0 and 0x07. With those two, the PCS table is value for value upstream's
-  `qdu1000_usb3_uniphy_pcs_tbl`, a V4 PCS table in `phy-qcom-qmp-usb.c`.
-
-So this is SM8350's PHY generation and layout: SM8150's serdes table,
-SM8350's TX and PCS-USB tables, and an RX and a PCS table of its own.
-Upstream support is a configuration and a compatible in the combo driver, not
-a new PHY. Two things still stand between it and SuperSpeed: the DT node with
-its clocks, resets and the pipe clock GCC takes back from it, and the Type-C
-orientation, which on this phone comes from `pmic_glink` and without which
-the lanes only work with the cable one way round. Until then the controller
-runs at high speed, which is all a console needs.
 
 ### Four upstream inconsistencies found on the way
 

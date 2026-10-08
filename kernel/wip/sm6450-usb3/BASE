@@ -1,0 +1,5 @@
+branch: sm6450-usb3
+tip:    e04eb6073e7259b4087bac1efca11298bed1dd61
+base:   c4d873dbca9934f0a01853654d392b22aeade81a drm/msm/dpu: Add SM6450 support
+        (git describe: v6.18.55-35-gc4d873dbc)
+patches: 4

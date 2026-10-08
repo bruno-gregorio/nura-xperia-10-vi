@@ -1,6 +1,6 @@
 branch: sm6450-fold
 series: a rewrite of sm6450; apply onto the base in place of kernel/patches
-tip:    8094513c90253441e60cfa5cce09d09ae811d8b8
+tip:    d9ab9e0cf1127799bed46c0e2e51315b7b9153bb
 base:   725bd2f3c81d54edccb66fead01d4c0c222e2231 Linux 6.18.55
         (git describe: v6.18.55)
-patches: 35
+patches: 36

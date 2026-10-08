@@ -14,7 +14,12 @@ clock and power domain controllers, the EPSS CPU frequency controller,
 the QUPv3 wrapper holding the debug UART, the SPMI arbiter with both
 its buses, the AOSS side channel and its sleep stats, SMEM with the
 four SMP2P edges that ride on it, the apps SMMU, the SD card
-controller, and USB with its high-speed PHY.
+controller, USB with its high-speed PHY, and the two TSENS controllers
+with the thermal zones they feed.
+
+TSENS0 has two sensors on each Cortex-A78 core and TSENS1 one on each
+Cortex-A55 core. The CPU zones throttle through cpufreq at 110 C, and
+every zone is critical at 115 C.
 
 The USB3 + DP combo PHY at 0x88e8000 is left out: which upstream QMP
 generation it is has not been established. Until it has, the controller
@@ -29,16 +34,16 @@ MMIO watchdog is described.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- arch/arm64/boot/dts/qcom/sm6450.dtsi | 1315 ++++++++++++++++++++++++++
- 1 file changed, 1315 insertions(+)
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 1964 ++++++++++++++++++++++++++
+ 1 file changed, 1964 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450.dtsi
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..34f0c93a3
+index 000000000..ee1b15de1
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,1315 @@
+@@ -0,0 +1,1964 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -50,6 +55,7 @@ index 000000000..34f0c93a3
 +#include <dt-bindings/mailbox/qcom-ipcc.h>
 +#include <dt-bindings/power/qcom-rpmpd.h>
 +#include <dt-bindings/soc/qcom,rpmh-rsc.h>
++#include <dt-bindings/thermal/thermal.h>
 +
 +/ {
 +	interrupt-parent = <&intc>;
@@ -934,6 +940,28 @@ index 000000000..34f0c93a3
 +			interrupt-controller;
 +		};
 +
++		tsens0: thermal-sensor@c263000 {
++			compatible = "qcom,sm6450-tsens", "qcom,tsens-v2";
++			reg = <0x0 0x0c263000 0x0 0x1000>, /* TM */
++			      <0x0 0x0c222000 0x0 0x1000>; /* SROT */
++			#qcom,sensors = <16>;
++			interrupts = <GIC_SPI 506 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 508 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "uplow", "critical";
++			#thermal-sensor-cells = <1>;
++		};
++
++		tsens1: thermal-sensor@c265000 {
++			compatible = "qcom,sm6450-tsens", "qcom,tsens-v2";
++			reg = <0x0 0x0c265000 0x0 0x1000>, /* TM */
++			      <0x0 0x0c223000 0x0 0x1000>; /* SROT */
++			#qcom,sensors = <16>;
++			interrupts = <GIC_SPI 507 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 509 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "uplow", "critical";
++			#thermal-sensor-cells = <1>;
++		};
++
 +		aoss_qmp: power-management@c300000 {
 +			compatible = "qcom,sm6450-aoss-qmp", "qcom,aoss-qmp";
 +			reg = <0x0 0x0c300000 0x0 0x400>;
@@ -1343,6 +1371,632 @@ index 000000000..34f0c93a3
 +			interrupt-names = "dcvsh-irq-0", "dcvsh-irq-1";
 +			#freq-domain-cells = <1>;
 +			#clock-cells = <1>;
++		};
++	};
++
++	thermal-zones {
++		aoss0-thermal {
++			thermal-sensors = <&tsens0 0>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				aoss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		cpuss0-thermal {
++			thermal-sensors = <&tsens0 1>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				cpuss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		cpuss1-thermal {
++			thermal-sensors = <&tsens0 2>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				cpuss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		cpu4-0-thermal {
++			thermal-sensors = <&tsens0 3>;
++
++			trips {
++				cpu4_0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu4-0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu4_0_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu4-1-thermal {
++			thermal-sensors = <&tsens0 4>;
++
++			trips {
++				cpu4_1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu4-1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu4_1_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu5-0-thermal {
++			thermal-sensors = <&tsens0 5>;
++
++			trips {
++				cpu5_0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu5-0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu5_0_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu5-1-thermal {
++			thermal-sensors = <&tsens0 6>;
++
++			trips {
++				cpu5_1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu5-1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu5_1_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu6-0-thermal {
++			thermal-sensors = <&tsens0 7>;
++
++			trips {
++				cpu6_0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu6-0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu6_0_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu6-1-thermal {
++			thermal-sensors = <&tsens0 8>;
++
++			trips {
++				cpu6_1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu6-1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu6_1_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu7-0-thermal {
++			thermal-sensors = <&tsens0 9>;
++
++			trips {
++				cpu7_0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu7-0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu7_0_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu7-1-thermal {
++			thermal-sensors = <&tsens0 10>;
++
++			trips {
++				cpu7_1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu7-1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu7_1_alert0>;
++					cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		gpuss0-thermal {
++			thermal-sensors = <&tsens0 11>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				gpuss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		gpuss1-thermal {
++			thermal-sensors = <&tsens0 12>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				gpuss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		camera0-thermal {
++			thermal-sensors = <&tsens0 13>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				camera0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		aoss1-thermal {
++			thermal-sensors = <&tsens1 0>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				aoss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		cpu0-thermal {
++			thermal-sensors = <&tsens1 1>;
++
++			trips {
++				cpu0_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu0_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu1-thermal {
++			thermal-sensors = <&tsens1 2>;
++
++			trips {
++				cpu1_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu1_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu2-thermal {
++			thermal-sensors = <&tsens1 3>;
++
++			trips {
++				cpu2_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu2-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu2_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		cpu3-thermal {
++			thermal-sensors = <&tsens1 4>;
++
++			trips {
++				cpu3_alert0: trip-point0 {
++					temperature = <110000>;
++					hysteresis = <10000>;
++					type = "passive";
++				};
++
++				cpu3-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++
++			cooling-maps {
++				map0 {
++					trip = <&cpu3_alert0>;
++					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
++							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
++				};
++			};
++		};
++
++		nspss0-thermal {
++			thermal-sensors = <&tsens1 5>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				nspss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		nspss1-thermal {
++			thermal-sensors = <&tsens1 6>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				nspss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		nspss2-thermal {
++			thermal-sensors = <&tsens1 7>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				nspss2-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		video-thermal {
++			thermal-sensors = <&tsens1 8>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				video-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		ddr-thermal {
++			thermal-sensors = <&tsens1 9>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				ddr-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		mdmss0-thermal {
++			thermal-sensors = <&tsens1 10>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				mdmss0-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		mdmss1-thermal {
++			thermal-sensors = <&tsens1 11>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				mdmss1-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		mdmss2-thermal {
++			thermal-sensors = <&tsens1 12>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				mdmss2-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
++		};
++
++		mdmss3-thermal {
++			thermal-sensors = <&tsens1 13>;
++
++			trips {
++				trip-point0 {
++					temperature = <110000>;
++					hysteresis = <1000>;
++					type = "hot";
++				};
++
++				mdmss3-critical {
++					temperature = <115000>;
++					hysteresis = <0>;
++					type = "critical";
++				};
++			};
 +		};
 +	};
 +

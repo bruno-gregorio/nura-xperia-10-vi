@@ -2119,9 +2119,10 @@ as what it would have fixed.
   become a panic instead, and `panic=60` resets: the soft-lockup panic was
   always on, and the hard-lockup one is from round 24 on (see the correction
   under "The marks feed a second channel").
-- **TSENS and 28 thermal zones** — Done 2026-10-08, not yet run on the
-  device. Two TSENS v2 controllers at `0xc263000` and `0xc265000`, with
-  the stock tree's interrupts, and every zone the stock tree reads from
+- **TSENS and 28 thermal zones** — Done 2026-10-08, and round 26 passed
+  with it (see "Round 26: every zone reads, and each CPU zone follows its
+  core"). Two TSENS v2 controllers at `0xc263000` and `0xc265000`, with
+  the stock tree's uplow and critical interrupts, and every zone the stock tree reads from
   them under its stock sensor: tsens0 has two sensors per gold core,
   tsens1 one per silver core. CPU zones throttle through cpufreq at 110 C,
   the stock emergency point, and every zone is critical at 115 C, where the
@@ -2433,14 +2434,36 @@ as what it would have fixed.
   Done 2026-10-08. Branch `sm6450-fold` in `out/linux` is the series with
   round 25's change folded in. The binding commit now documents SM6450 in
   `qcom,snps-dwc3.yaml`, and the SoC and board commits carry the single
-  node. The board DTB it builds is byte-identical to `usbflat.dtb`, and
-  `CHECK_DTBS=y` and the binding check are clean. `sm6450`, and with it
+  node. The board DTB it built then was byte-identical to `usbflat.dtb`,
+  and `CHECK_DTBS=y` and the binding check were clean. `sm6450`, and with it
   pkgrel 14, is unchanged. A package carries the fold from the next
   pkgrel, together with whatever else has passed by then, so the queued
   rounds keep the packages they were planned with.
-  `scripts/export-wip.sh` exports the fold whole, 35 patches from
-  v6.18.55, into `kernel/wip/sm6450-fold/`. A branch cut from it, such as
-  `sm6450-usb3`, is exported against it.
+  `scripts/export-wip.sh` exports the fold whole, from v6.18.55, into
+  `kernel/wip/sm6450-fold/`. A branch cut from it, such as `sm6450-usb3`,
+  is exported against it.
+- **Round 26: every zone reads, and each CPU zone follows its core** —
+  Verified 2026-10-08, 14:19. pkgrel 10 on `thermal.dtb`. Both TSENS
+  controllers are bound, `devices_deferred` is empty, and all 28 TSENS
+  zones read between 40 and 44 C at idle, beside the two PMIC zones.
+  Both cpufreq policies are cooling devices. `cmds-r26.sh` loaded one core
+  at a time for 30 seconds through a cgroup cpuset, and the zones that
+  rose most are the ones the stock tree puts on that core:
+  - cpu4: `cpu4-1` +24.7 C and `cpu4-0` +23.0 C, then `cpu0` +16.0 C.
+  - cpu7: `cpu7-1` +19.3 C and `cpu7-0` +15.2 C.
+  - cpu0, a Cortex-A55: `cpu0` +3.0 C, every other zone less.
+
+  The transcript is `out/try-kernel/live-r26.txt`. Stock gives each
+  controller a third, edge-triggered interrupt (SPI 500 and 501) that the
+  upstream binding has no name for and the driver does not use, so it
+  stays out.
+- **The thermal zones are folded too** — Done 2026-10-08. On
+  `sm6450-fold`, the TSENS binding sits with the other bindings, and the
+  nodes are in the SoC commit, whose message now names them. The change
+  to `sm6450.dtsi` is line for line round 26's. `CHECK_DTBS=y`, the
+  binding check and `check-dt.py` are clean. Branches `sm6450-usbflat`
+  and `sm6450-thermal` are retired, with their exports; their tips were
+  `9bc6530ee` and `648d82e5b`. `sm6450-usb3` is rebased onto the new fold.
 
 ## The boot images
 

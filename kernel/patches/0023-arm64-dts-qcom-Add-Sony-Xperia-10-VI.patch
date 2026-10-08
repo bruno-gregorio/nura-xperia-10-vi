@@ -8,16 +8,22 @@ Content-Transfer-Encoding: 8bit
 
 Add the Sony Xperia 10 VI (pdx246, codenamed columbia), the one device
 shipping SM6450. Described so far: the debug UART, the PMIC complement
-(PM6450, PM6150L, PMK8350 and PMR735A), the 45 RPMh-managed regulators
-with the windows the board's own firmware uses, the power and volume
-keys, the SD card slot with its card detect, and USB in OTG mode with
-the high-speed PHY tuned the way the board's own firmware tunes it.
+(PM6450, PM6150L and PMK8350), the 38 RPMh-managed regulators with the
+windows the board's own firmware uses, the power and volume keys, the SD
+card slot with its card detect, and USB in OTG mode with the high-speed
+PHY tuned the way the board's own firmware tunes it.
+
+The PMR735A that SM6450 designs can carry is not fitted on this board:
+nothing answers at its SID, and command DB has none of its regulators.
+PM6450's LDO8 and LDO17 are left out for the same reason; command DB
+does not know them either, and a block naming a resource it lacks fails
+to probe as a whole.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  arch/arm64/boot/dts/qcom/Makefile             |   1 +
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 412 ++++++++++++++++++
- 2 files changed, 413 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 363 ++++++++++++++++++
+ 2 files changed, 364 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 
 diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
@@ -34,10 +40,10 @@ index dffdb219f..8b5b821a9 100644
  dtb-$(CONFIG_ARCH_QCOM)	+= sm7225-fairphone-fp4.dtb
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 new file mode 100644
-index 000000000..9378a669c
+index 000000000..1d1c9c5d7
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -0,0 +1,412 @@
+@@ -0,0 +1,363 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -50,13 +56,11 @@ index 000000000..9378a669c
 +#include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 +
 +#define PMK8350_SID 0
-+#define PMR735A_SID 6
 +
 +#include "sm6450.dtsi"
 +#include "pm6450.dtsi"
 +#include "pm6150l.dtsi"
 +#include "pmk8350.dtsi"
-+#include "pmr735a.dtsi"
 +
 +/ {
 +	model = "Sony Xperia 10 VI";
@@ -148,12 +152,6 @@ index 000000000..9378a669c
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
-+		pm6450_l8: ldo8 {
-+			regulator-min-microvolt = <870000>;
-+			regulator-max-microvolt = <970000>;
-+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
-+		};
-+
 +		pm6450_l10: ldo10 {
 +			regulator-min-microvolt = <824000>;
 +			regulator-max-microvolt = <950000>;
@@ -186,12 +184,6 @@ index 000000000..9378a669c
 +		pm6450_l16: ldo16 {
 +			regulator-min-microvolt = <1140000>;
 +			regulator-max-microvolt = <1260000>;
-+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
-+		};
-+
-+		pm6450_l17: ldo17 {
-+			regulator-min-microvolt = <1200000>;
-+			regulator-max-microvolt = <1200000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
 +
@@ -323,41 +315,6 @@ index 000000000..9378a669c
 +			regulator-min-microvolt = <3008000>;
 +			regulator-max-microvolt = <3960000>;
 +			regulator-initial-mode = <RPMH_REGULATOR_MODE_AUTO>;
-+		};
-+	};
-+
-+	regulators-2 {
-+		compatible = "qcom,pmr735a-rpmh-regulators";
-+		qcom,pmic-id = "g";
-+
-+		pmr735a_l2: ldo2 {
-+			regulator-min-microvolt = <1140000>;
-+			regulator-max-microvolt = <1236000>;
-+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
-+		};
-+
-+		pmr735a_l3: ldo3 {
-+			regulator-min-microvolt = <866000>;
-+			regulator-max-microvolt = <939000>;
-+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
-+		};
-+
-+		pmr735a_l4: ldo4 {
-+			regulator-min-microvolt = <1710000>;
-+			regulator-max-microvolt = <1854000>;
-+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
-+		};
-+
-+		pmr735a_l5: ldo5 {
-+			regulator-min-microvolt = <760000>;
-+			regulator-max-microvolt = <824000>;
-+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
-+		};
-+
-+		pmr735a_l6: ldo6 {
-+			regulator-min-microvolt = <588000>;
-+			regulator-max-microvolt = <800000>;
-+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 +		};
 +	};
 +};

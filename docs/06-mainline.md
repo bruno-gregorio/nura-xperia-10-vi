@@ -321,12 +321,11 @@ Then the PMIC side, which is one driver table and three device trees:
   **`regulator: qcom-rpmh: Add support for PM6450`** — 25 rails. The other
   eight the PMIC has are either ARC resources that `rpmhpd` already describes
   or are not named by any RPMh resource at all.
-- **`arm64: dts: qcom: pmr735a: Allow the SID to be overridden`** — this
-  phone puts PMR735A at SID 6, not the 4 the shared dtsi hardcodes, so it
-  gets the same `PMR735A_SID` escape hatch `pmk8350.dtsi` already has.
-
-The other three PMICs needed no new code at all: `pm6150l.dtsi` matches our
+The other two PMICs needed no new code at all: `pm6150l.dtsi` matches our
 SIDs 4 and 5 as shipped, and `pmk8350.dtsi` was already parameterised.
+Stock's tree also describes a PMR735A at SID 6, and the series used to carry
+a patch making `pmr735a.dtsi`'s SID overridable for it. Round 22 showed the
+PMR735A is not fitted, so that patch is gone; see `05-status.md`.
 
 Then the device trees, and the binding lines they need to validate:
 
@@ -341,11 +340,11 @@ Then the device trees, and the binding lines they need to validate:
   under it, EPSS cpufreq, the SPMI arbiter with both its buses, the AOSS side
   channel and its sleep stats, SMEM with the four SMP2P edges that ride on
   it, the apps SMMU, the SD card controller, and USB with its high-speed PHY.
-- **`arm64: dts: qcom: Add Sony Xperia 10 VI`** — 412 lines: the four PMICs,
-  all 45 RPMh regulators with the windows the board's own firmware uses, the
-  power and volume keys, the SD card slot with its card detect, USB in OTG
-  mode with the high-speed PHY tuned the way the board's own firmware tunes
-  it, and the UART as `serial0`.
+- **`arm64: dts: qcom: Add Sony Xperia 10 VI`** — 363 lines: the three PMICs,
+  the 38 RPMh regulators command DB knows, with the windows the board's own
+  firmware uses, the power and volume keys, the SD card slot with its card
+  detect, USB in OTG mode with the high-speed PHY tuned the way the board's
+  own firmware tunes it, and the UART as `serial0`.
 - **Four more binding lines**, one SoC name each — `dt-bindings: iommu:
   arm,smmu`, `dt-bindings: mmc: sdhci-msm`, `dt-bindings: phy:
   qcom,usb-snps-femto-v2` and `dt-bindings: usb: qcom,dwc3`.
@@ -447,8 +446,9 @@ inference is worth stating plainly.
 - **The rule.** Board window max at or below 1304000 means `pmic5_nldo`;
   anything higher is one of the pldo tables; the SMPS table follows from the
   step alignment of the stock init voltage.
-- **Its score.** Two of this phone's PMICs, PM6150L and PMR735A, already have
-  upstream answers, which makes them a test set. The rule puts **16 of 16**
+- **Its score.** Two PMICs in stock's tree, PM6150L and PMR735A, already
+  have upstream answers, which makes them a test set. The PMR735A turned out
+  not to be fitted, but its windows still test the rule. The rule puts **16 of 16**
   used rails in the right family.
 - **The one distinction it cannot make** is `pmic5_pldo` against
   `pmic5_pldo_lv`, and upstream makes that one inconsistently from the same
@@ -469,9 +469,6 @@ vendor `spmi-pmic-arb.c` reads `qcom,bus-id` only inside
 `if (hw_ver >= PMIC_ARB_VERSION_V7_MIN)`, and the stock tree sets it on both
 arbiter nodes — and the register layout then turns out to match upstream
 `sar2130p.dtsi` exactly, which is where the compatible fallback comes from.
-And the `pmr735a.dtsi` change is a no-op for everyone else: the DTBs of all
-eleven boards that include that file are byte-identical before and after,
-checked by md5 across a `git stash` of just that one file.
 
 Everything compiles for arm64 at `W=1` with no warnings, the device trees
 build with `CHECK_DTBS=y` clean, all seventeen touched bindings pass
@@ -842,8 +839,8 @@ Each phase gates the next; the ordering is the whole point.
    `dt_binding_check`-verifiable without hardware; only the boot is not.
 
    Written so far: both drivers, the RPMh clock and power-domain tables,
-   `sm6450.dtsi` with the RSC, PDC, IPCC, SPMI and GENI UART in it, all four
-   PMICs, all 45 regulators, the SMEM, SMP2P and AOSS glink nodes, and - from
+   `sm6450.dtsi` with the RSC, PDC, IPCC, SPMI and GENI UART in it, the three
+   PMICs, the 38 regulators, the SMEM, SMP2P and AOSS glink nodes, and - from
    phase 2, taken early because it is what a shell needs - the apps SMMU, the
    SD card controller and USB at high speed. Phase 1 is done, and so is the
    part of phase 2 that does not wait on a PHY table.

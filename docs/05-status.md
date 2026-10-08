@@ -2213,7 +2213,8 @@ as what it would have fixed.
   unknown. On `display.dtb` the MDSS consumes it.
   "The display clock controller" in [06-mainline.md](06-mainline.md) has the
   rules it applies.
-- **The interconnect** — Done 2026-10-08, not yet run on the device.
+- **The interconnect** — Done 2026-10-08, and rounds 30 and 31 passed
+  with it (see "Rounds 30 and 31: the interconnect works").
   `scripts/icc-to-mainline.py` turns the vendor's `parrot.c` into an
   upstream driver in Milos's style, with its binding header and YAML: 136
   nodes, 17 BCMs and 33 QoS boxes over twelve NoCs, after dropping the
@@ -2512,6 +2513,16 @@ as what it would have fixed.
 
   The fix in the series is a board change, the floors raised in the
   source. It waits until a round has run on it.
+- **Rounds 30 and 31: the interconnect works** — Verified 2026-10-08,
+  14:31 and 14:36. pkgrel 12, on `icc-noqos.dtb` and then on `icc.dtb`,
+  the tree as it will be submitted. In both, all ten NoC providers
+  registered beside the two virtual ones and `devices_deferred` was empty.
+  The UART, the SD card and USB each vote their paths: USB 240000/700000
+  kBps on the DDR path, the SD card at SDR104 at 202 MHz, the gadget
+  configured. Round 30's tree has no `reg` on the NoCs, so each printed an
+  "invalid resource" error and skipped QoS, as intended. Round 31 wrote
+  the QoS registers and printed nothing. The transcripts are
+  `out/try-kernel/live-r30.txt` and `live-r31.txt`.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

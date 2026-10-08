@@ -57,7 +57,7 @@ def phdrs(mdt):
 def squash(mdt_path, mbn_path):
     with open(mdt_path, "rb") as f:
         mdt = f.read()
-    base = mdt_path[:-4] if mdt_path.endswith(".mdt") else mdt_path
+    base = mdt_path[:-4] if mdt_path.lower().endswith(".mdt") else mdt_path
     ph = phdrs(mdt)
     if len(ph) < 2 or ph[0][0] == 1:  # PT_LOAD
         raise ValueError("segment 0 is not the headers")
@@ -68,7 +68,9 @@ def squash(mdt_path, mbn_path):
     for i, (_, offset, filesz, _) in enumerate(ph):
         if not filesz or i == 0:
             continue
-        seg = "%s.b%02d" % (base, i)
+        # A FAT image read without its long names spells them in capitals.
+        seg = next((c for c in ("%s.b%02d" % (base, i), "%s.B%02d" % (base, i))
+                    if os.path.exists(c)), "%s.b%02d" % (base, i))
         if os.path.exists(seg):
             with open(seg, "rb") as f:
                 data = f.read()

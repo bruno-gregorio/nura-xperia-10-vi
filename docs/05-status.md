@@ -3106,23 +3106,44 @@ as what it would have fixed.
   - **Verified:** round 59's driver unbind and bind brought the host
     back once more. The driver bound at 165.7 s and the gadget was
     configured by 169.9 s, with the ADSP running.
-- **Round 62: the PHY's init after each device role report** — Running.
-  pkgrel 17 carries two fixes, one for each of round 61's findings:
-  - `bringup-dwc3-qcom-phy-reinit.patch` is bring-up only. 1.5 s after
-    each device role report, dwc3-qcom takes the gadget off the bus, runs
-    the PHY's exit and init and puts the gadget back on. It also logs
-    every role report.
-  - "clk: qcom: gcc-sm6450: Use retention for USB power domain" is meant
-    for upstream.
-  The 1.5 s comes from the timing. UCSI registered 0.46 s after the ADSP
-  came up in round 57, and the firmware's settings appeared 0.7 s after
-  it in round 61. Plan z boots `out/milestone/glinkref-r17.dtb`, which is
-  round 57's glink tree, where UCSI makes the role reports, plus round
-  60's reference gate. `out/tools/usbfix-watch.sh` loads pmic_glink,
-  UCSI and the battery manager and boots the ADSP. It then asks two
-  things: whether the link comes back by itself, and, with the link up,
-  whether a runtime suspend and resume now keeps QSCRATCH. If the host is
-  gone at the end, round 59's rebind follows.
+- **Round 62: USB survives the ADSP** — Verified 2026-10-08, 18:32 to
+  18:42, the first round started from fastboot with the phone already
+  there. Plan z put pkgrel 17 in the rootfs and booted
+  `out/milestone/glinkref-r17.dtb`, which is round 57's glink tree plus
+  round 60's PHY reference gate, with `out/tools/usbfix-watch.sh`. The
+  transcript is `out/try-kernel/live-r62.txt`, and
+  `out/try-kernel/bootlog-card-20261008-184143.txt` is the card dump.
+  - **Verified:** the ADSP came up at 126.94 s. The link was in Suspend
+    by 127.06 s, with the PHY's settings unchanged. UCSI made three role
+    reports: device to none at 127.61 s, none to none at 127.64 s, and
+    none to device at 127.73 s. The firmware's override was already in
+    place at 127.69 s, before the device report: UTMI_CTRL0 0x09, CFG0
+    0x01, HS_PHY_CTRL2 0x0e and the reference gate off, as in round 61.
+    The UDC read `not attached`.
+  - **Verified:** the bring-up re-init ran at 129.26 s, 1.53 s after the
+    device report, and logged "gadget reconnected". By 129.37 s the PHY
+    read UTMI_CTRL0 0x01, CFG0 0x00, HS_PHY_CTRL2 0x06 and the gate on.
+    The link was On at 129.68 s and the gadget configured at 130.34 s.
+    It stayed configured, with the ADSP running, until the round ended.
+    The live shell came back without a re-probe, and no lease lapsed.
+  - **Verified:** `qcom_battmgr` and UCSI worked as in round 57. The USB
+    input was online at 5.11 V, detected as SDP, and port 0 was a device
+    and a sink with one partner.
+  - **Verified:** the USB GDSC change holds. With the link up, the
+    watcher unbound the gadget and allowed runtime PM. The controller
+    read `suspended` after six seconds, with the gate off. The gadget
+    bind resumed it, and the host had it configured within a second.
+    GENERAL_CFG read 0x0d afterwards, where round 61 read 0x04, and there
+    was no `failed to enable ep0out`. The only complaint was dwc3-qcom's
+    usual `HS-PHY not in L2` on the way into suspend.
+  - **Not captured:** the host's kernel log. The plan's `journalctl -k`
+    found nothing after the host's own reboot earlier that evening.
+  - **Reasoned:** the device report comes after the firmware's writes,
+    not before. The firmware reports the data role once its BC1.2
+    detection knows the port type, and it leaves the PHY non-driving
+    when it does. So a re-init on the transition into device, with no
+    delay, would likely be enough. One round is a thin margin for that,
+    40 ms, so pkgrel 17 keeps the 1.5 s.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -3905,7 +3926,12 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   because it initialises the PHY each time it starts the peripheral.
   Round 61 also found that a runtime suspend collapses the USB GDSC and
   loses QSCRATCH. pkgrel 17 has a bring-up fix for the first and an
-  upstream one for the second, and round 62 tries both.
+  upstream one for the second, and round 62 showed both working: the
+  host has the gadget back 3.4 s after the ADSP comes up. What is still
+  open is the upstream form of the first. Mainline dwc3 maps a `none`
+  report to its default role, so none to device is not a mode change and
+  nothing re-initialises the PHY. A form upstream could take is still
+  to be found.
 
 ## Next steps, in order
 
@@ -4016,8 +4042,8 @@ port boots" above. What is left starts from there.
    what the link was missing. Round 59 found a recovery: a re-probe of
    the controller and its PHY after the ADSP is up brings the host back,
    so a round can now boot the ADSP and keep its shell. Round 61 found
-   the cause, the charger firmware leaving the PHY non-driving, and
-   round 62 tries pkgrel 17's fix. Charging, audio, the modem and Wi-Fi all start here.
+   the cause, the charger firmware leaving the PHY non-driving, and in
+   round 62 pkgrel 17's bring-up fix brought the host back by itself. Charging, audio, the modem and Wi-Fi all start here.
 7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and

@@ -33,14 +33,15 @@ Base: v6.18.55
      .../bindings/remoteproc/qcom,sm6350-pas.yaml       |   23 +-
      .../bindings/remoteproc/qcom,sm8350-pas.yaml       |   13 +-
      .../bindings/soc/qcom/qcom,aoss-qmp.yaml           |    1 +
+     .../bindings/soc/qcom/qcom,pmic-glink.yaml         |    1 +
      .../bindings/spmi/qcom,x1e80100-spmi-pmic-arb.yaml |    4 +-
      .../devicetree/bindings/thermal/qcom-tsens.yaml    |    1 +
      .../devicetree/bindings/ufs/qcom,sc7180-ufshc.yaml |    2 +
      .../devicetree/bindings/usb/qcom,snps-dwc3.yaml    |    3 +
      arch/arm64/boot/dts/qcom/Makefile                  |    1 +
      arch/arm64/boot/dts/qcom/pm6450.dtsi               |   63 +
-     .../qcom/sm6450-sony-xperia-columbia-pdx246.dts    |  564 ++++
-     arch/arm64/boot/dts/qcom/sm6450.dtsi               | 2644 +++++++++++++++++++
+     .../qcom/sm6450-sony-xperia-columbia-pdx246.dts    |  598 +++++
+     arch/arm64/boot/dts/qcom/sm6450.dtsi               | 2662 +++++++++++++++++++
      drivers/clk/qcom/Kconfig                           |   29 +
      drivers/clk/qcom/Makefile                          |    3 +
      drivers/clk/qcom/clk-rpmh.c                        |   22 +
@@ -68,7 +69,7 @@ Base: v6.18.55
      include/dt-bindings/clock/qcom,sm6450-gcc.h        |  185 ++
      include/dt-bindings/clock/qcom,sm6450-gpucc.h      |   53 +
      .../dt-bindings/interconnect/qcom,sm6450-rpmh.h    |  158 ++
-     62 files changed, 13290 insertions(+), 24 deletions(-)
+     63 files changed, 13343 insertions(+), 24 deletions(-)
 
 diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
 index 18b5ed044..1500a8fdf 100644
@@ -1188,6 +1189,18 @@ index 851a1260f..d807caf0a 100644
            - qcom,sm7150-aoss-qmp
            - qcom,sm8150-aoss-qmp
            - qcom,sm8250-aoss-qmp
+diff --git a/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml b/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
+index 7085bf88a..8ed9cb3c1 100644
+--- a/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
++++ b/Documentation/devicetree/bindings/soc/qcom/qcom,pmic-glink.yaml
+@@ -26,6 +26,7 @@ properties:
+               - qcom,qcm6490-pmic-glink
+               - qcom,sc8180x-pmic-glink
+               - qcom,sc8280xp-pmic-glink
++              - qcom,sm6450-pmic-glink
+               - qcom,sm8350-pmic-glink
+               - qcom,sm8450-pmic-glink
+               - qcom,sm8550-pmic-glink
 diff --git a/Documentation/devicetree/bindings/spmi/qcom,x1e80100-spmi-pmic-arb.yaml b/Documentation/devicetree/bindings/spmi/qcom,x1e80100-spmi-pmic-arb.yaml
 index 7c3cc20a8..8f0c0a66d 100644
 --- a/Documentation/devicetree/bindings/spmi/qcom,x1e80100-spmi-pmic-arb.yaml
@@ -1346,10 +1359,10 @@ index 000000000..2e4253896
 +};
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 new file mode 100644
-index 000000000..ed5dee79f
+index 000000000..42293d5de
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -0,0 +1,564 @@
+@@ -0,0 +1,598 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -1395,6 +1408,38 @@ index 000000000..ed5dee79f
 +			gpios = <&pm6450_gpios 1 GPIO_ACTIVE_LOW>;
 +			debounce-interval = <15>;
 +			wakeup-source;
++		};
++	};
++
++	/*
++	 * The charger and the Type-C port controller, a PM7250B, sit on an
++	 * SPMI bus the ADSP owns, so the port is reached through it. The
++	 * port is wired for USB 2.0 only.
++	 */
++	pmic-glink {
++		compatible = "qcom,sm6450-pmic-glink", "qcom,pmic-glink";
++
++		#address-cells = <1>;
++		#size-cells = <0>;
++
++		connector@0 {
++			compatible = "usb-c-connector";
++			reg = <0>;
++			power-role = "dual";
++			data-role = "dual";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@0 {
++					reg = <0>;
++
++					pmic_glink_hs_in: endpoint {
++						remote-endpoint = <&usb_1_dwc3_hs>;
++					};
++				};
++			};
 +		};
 +	};
 +
@@ -1888,9 +1933,11 @@ index 000000000..ed5dee79f
 +};
 +
 +&usb_1 {
-+	dr_mode = "peripheral";
-+
 +	status = "okay";
++};
++
++&usb_1_dwc3_hs {
++	remote-endpoint = <&pmic_glink_hs_in>;
 +};
 +
 +/*
@@ -1916,10 +1963,10 @@ index 000000000..ed5dee79f
 +};
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..dfb5d5241
+index 000000000..3b92b1532
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,2644 @@
+@@ -0,0 +1,2662 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -2661,6 +2708,8 @@ index 000000000..dfb5d5241
 +			clocks = <&gcc GCC_QUPV3_WRAP_0_M_AHB_CLK>,
 +				 <&gcc GCC_QUPV3_WRAP_0_S_AHB_CLK>;
 +			clock-names = "m-ahb", "s-ahb";
++			iommus = <&apps_smmu 0x163 0x0>;
++			dma-coherent;
 +			interconnects = <&clk_virt MASTER_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS
 +					 &clk_virt SLAVE_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS>;
 +			interconnect-names = "qup-core";
@@ -2693,6 +2742,7 @@ index 000000000..dfb5d5241
 +				 <&gcc GCC_QUPV3_WRAP_1_S_AHB_CLK>;
 +			clock-names = "m-ahb", "s-ahb";
 +			iommus = <&apps_smmu 0x403 0x0>;
++			dma-coherent;
 +			interconnects = <&clk_virt MASTER_QUP_CORE_1 QCOM_ICC_TAG_ALWAYS
 +					 &clk_virt SLAVE_QUP_CORE_1 QCOM_ICC_TAG_ALWAYS>;
 +			interconnect-names = "qup-core";
@@ -3042,7 +3092,7 @@ index 000000000..dfb5d5241
 +				     "qcom,usb-snps-hs-7nm-phy";
 +			reg = <0x0 0x088e3000 0x0 0x400>;
 +
-+			clocks = <&rpmhcc RPMH_CXO_CLK>;
++			clocks = <&gcc GCC_EUSB3_0_CLKREF_EN>;
 +			clock-names = "ref";
 +			resets = <&gcc GCC_QUSB2PHY_PRIM_BCR>;
 +
@@ -3143,6 +3193,7 @@ index 000000000..dfb5d5241
 +			resets = <&gcc GCC_USB30_PRIM_BCR>;
 +
 +			iommus = <&apps_smmu 0x80 0x0>;
++			dma-coherent;
 +
 +			phys = <&usb_1_hsphy>;
 +			phy-names = "usb2-phy";
@@ -3167,7 +3218,21 @@ index 000000000..dfb5d5241
 +			snps,usb2-lpm-disable;
 +			tx-fifo-resize;
 +
++			usb-role-switch;
++
 +			status = "disabled";
++
++			ports {
++				#address-cells = <1>;
++				#size-cells = <0>;
++
++				port@0 {
++					reg = <0>;
++
++					usb_1_dwc3_hs: endpoint {
++					};
++				};
++			};
 +		};
 +
 +		mdss: display-subsystem@ae00000 {

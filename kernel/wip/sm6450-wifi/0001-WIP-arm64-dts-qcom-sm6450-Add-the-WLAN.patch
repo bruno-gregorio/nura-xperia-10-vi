@@ -21,10 +21,10 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 30 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-index dfb5d5241..03a4364a1 100644
+index 3b92b1532..445535247 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -1960,6 +1960,36 @@ gem_noc: interconnect@19100000 {
+@@ -1978,6 +1978,36 @@ gem_noc: interconnect@19100000 {
  			qcom,bcm-voters = <&apps_bcm_voter>;
  		};
  

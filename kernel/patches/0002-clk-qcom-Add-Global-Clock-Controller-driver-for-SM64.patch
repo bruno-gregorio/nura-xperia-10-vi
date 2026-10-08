@@ -52,7 +52,7 @@ index 8051d481c..429f9720a 100644
  obj-$(CONFIG_SM_GCC_8250) += gcc-sm8250.o
 diff --git a/drivers/clk/qcom/gcc-sm6450.c b/drivers/clk/qcom/gcc-sm6450.c
 new file mode 100644
-index 000000000..fe41abb57
+index 000000000..4b78b03eb
 --- /dev/null
 +++ b/drivers/clk/qcom/gcc-sm6450.c
 @@ -0,0 +1,2775 @@
@@ -2562,7 +2562,7 @@ index 000000000..fe41abb57
 +	.pd = {
 +		.name = "gcc_usb30_prim_gdsc",
 +	},
-+	.pwrsts = PWRSTS_OFF_ON,
++	.pwrsts = PWRSTS_RET_ON,
 +	.flags = POLL_CFG_GDSCR | RETAIN_FF_ENABLE,
 +};
 +

@@ -1,6 +1,0 @@
-branch: sm6450-hsref
-series: sm6450
-tip:    11413e0eac5afce36854cd58389dfbffea495903
-base:   a3876429880fb5e9ee70ebac05f55c7c8deedbf6 arm64: dts: qcom: Add Sony Xperia 10 VI
-        (git describe: v6.18.55-46-ga38764298)
-patches: 1

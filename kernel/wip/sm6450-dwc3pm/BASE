@@ -1,6 +1,6 @@
 branch: sm6450-dwc3pm
 series: sm6450
-tip:    0027acdd8a41deea6d2a28d568096ab838fe4a02
-base:   91292cc136e364a3f97a97f6b4b53f18d7c298d3 clk: qcom: gcc-sm6450: Use retention for USB power domain
-        (git describe: v6.18.55-47-g91292cc13)
+tip:    9761513afa5e209548232f35412126e7d64d3603
+base:   e85580ab0eddf11c787ff9c5b191fe13b9bdd15f arm64: dts: qcom: Add Sony Xperia 10 VI
+        (git describe: v6.18.55-47-ge85580ab0)
 patches: 1

@@ -36,6 +36,7 @@ dt-bindings: remoteproc: qcom,sm8350-pas: Add SM6450 ADSP and MPSS
 dt-bindings: remoteproc: qcom,sm6350-pas: Add SM6450 CDSP
 dt-bindings: remoteproc: qcom,sc7180-pas: Add SM6450 WPSS
 soc: qcom: pd-mapper: Add SM6450 support
+dt-bindings: soc: qcom: qcom,pmic-glink: Add SM6450
 dt-bindings: clock: qcom: Add SM6450 graphics clock controller
 clk: qcom: Add Graphics Clock Controller driver for SM6450
 dt-bindings: display/msm: dsi-phy-7nm: Add SM6450
@@ -49,4 +50,3 @@ drm/msm/dpu: Add SM6450 support
 arm64: dts: qcom: Add SM6450 SoC device tree
 arm64: dts: qcom: Add PM6450 PMIC device tree
 arm64: dts: qcom: Add Sony Xperia 10 VI
-clk: qcom: gcc-sm6450: Use retention for USB power domain

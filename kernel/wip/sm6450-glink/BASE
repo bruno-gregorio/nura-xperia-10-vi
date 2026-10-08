@@ -1,6 +1,0 @@
-branch: sm6450-glink
-series: sm6450
-tip:    695c17fcc33c0d12ee608b7bb4c0524bb60c9976
-base:   a3876429880fb5e9ee70ebac05f55c7c8deedbf6 arm64: dts: qcom: Add Sony Xperia 10 VI
-        (git describe: v6.18.55-46-ga38764298)
-patches: 3

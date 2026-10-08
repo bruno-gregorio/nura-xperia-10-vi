@@ -130,16 +130,24 @@ the same thing as in [05-status.md](05-status.md).
   referenced in the QRD tree. Upstream, `pm7250b.dtsi` **is** there (the
   sm6350/sm6375 Sony devices use it) while `pm6450.dtsi` is **not** — new, but
   PMIC dtsi files are small and declarative.
-- **Wi-Fi/BT is WCN6750, not WCN3990** — Verified on the device 2026-10-05,
-  and this reverses what this file said before. The live hardware has
-  `22800000.qcom,icnss` bound to `icnss2`, a dedicated WPSS remote processor at
-  `0x8a00000` on `qcom_q6v5_pas`, and `qcom,smp2p-wpss` beside it. WCN3990 has
-  no WPSS at all: it runs on SNOC under plain `icnss`. The earlier reading came
-  from Qualcomm's QRD board files, which describe reference boards and not
-  Sony's, and Sony's own board tree turns out not to be in the device tree
-  release. Upstream it is still good news, just a different driver:
-  `qcom,wcn6750-wifi` is in `ath11k` as `ATH11K_HW_WCN6750_HW10`, AHB and WPSS
-  based, and documented in `qcom,ath11k.yaml`. Bluetooth is still `hci_qca`.
+- **Wi-Fi is the WCN3990-class Adrastea core, run from the WPSS** — Verified
+  on the device. This corrects an entry here, dated 2026-10-05, that read
+  `icnss2` and the WPSS as WCN6750. The live tree's WLAN node is
+  `qcom,icnss@22800000`, compatible `qcom,icnss`. Qualcomm's icnss binding
+  gives that compatible to the ADRASTEA architecture and `qcom,wcn6750` to
+  iWCN. `icnss2` binds both, so the driver name never told the two apart.
+  The node has WCN3990's shape:
+  - a `membase` of `0x800000` bytes;
+  - twelve CE interrupts;
+  - a `wlan-smp2p-out` smem state.
+
+  Bluetooth beside it is `qcom,wcn3990`. What is new on SM6450 is where the
+  WLAN firmware runs: on the WPSS at `0x8a00000`, from `adrastea/wpss.mdt`,
+  where SDM845's ran on the modem. Mainline's driver is `ath10k_snoc`, as
+  `qcom,wcn3990-wifi`, and its binding already has the smp2p state. It
+  talks to the firmware over QMI on QRTR and does not care which remote
+  processor hosts it. Bluetooth is `hci_qca`. 05-status's "WCN3990, ath10k
+  and `hci_qca`" stands.
 - **GPU is Adreno 710 (a7xx Gen1)** — Verified: Sony specs and
   `parrot-gpu.dtsi`. Upstream, Mesa's `freedreno_devices.py` has `FD710` at
   chip_id `0x07010000`, "A7XX Gen1 derived from A730", with both KGSL and

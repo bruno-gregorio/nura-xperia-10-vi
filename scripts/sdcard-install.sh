@@ -166,7 +166,12 @@ ip -o addr show | grep -q " $HOST_IP/" \
 # come off again or the phone stops being hands-free, so the trap goes in at
 # the same moment as the file.
 HELD=0
+RENEWER=
 cleanup() {
+	if [ -n "$RENEWER" ]; then
+		kill "$RENEWER" 2>/dev/null
+		wait "$RENEWER" 2>/dev/null
+	fi
 	if [ "$HELD" = 1 ]; then
 		remote 'rm -f /pmhold' >/dev/null 2>&1
 		echo "==> released /pmhold; the phone's reset timer is live again"
@@ -223,6 +228,16 @@ trap cleanup EXIT INT TERM
 say "holding off the phone's reset timer"
 remote 'touch /pmhold' >/dev/null 2>&1 || true
 HELD=1
+# On the phone the hold is a lease (scripts/bootlog.py, HOLD_SH) that lapses
+# unless it is touched again within fifteen minutes, and the push below is
+# one long stream with no shell in it. So it is renewed from here every two
+# minutes for as long as this runs. Only an existing hold is renewed, so a
+# renewal that lands after cleanup has released it cannot bring it back.
+( while :; do
+	sleep 120
+	remote '[ ! -e /pmhold ] || touch /pmhold' >/dev/null 2>&1
+done ) &
+RENEWER=$!
 
 if [ "$WHOLE_DISK" != 1 ]; then
 	say "writing a GPT with one partition"

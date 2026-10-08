@@ -54,6 +54,15 @@ class Gone(Exception):
     pass
 
 
+# A file that holds the phone starts with 'touch /pmhold', and on the phone
+# that hold is a lease (scripts/bootlog.py, HOLD_SH): it lapses unless it is
+# touched again within HOLD_LEASE_S. So it is renewed before every command,
+# and every RENEW_CHUNKS chunks of a push. A session that is still talking
+# keeps the phone; one that has gone quiet lets it reset itself.
+RENEW = "[ ! -e /pmhold ] || touch /pmhold"
+RENEW_CHUNKS = 256
+
+
 def read_until_mark(sock, buf, timeout):
     deadline = time.time() + timeout
     while True:
@@ -99,7 +108,9 @@ def push(sock, buf, local, remote, timeout):
               for i in range(0, len(text), PUSH_CHUNK)]
     steps.append(f"base64 -d '{tmp}' > '{remote}' && rm '{tmp}'"
                  f" && chmod 755 '{remote}' && wc -c < '{remote}'")
-    for step in steps:
+    for i, step in enumerate(steps):
+        if i and i % RENEW_CHUNKS == 0:
+            _, _, buf = run(sock, buf, RENEW, timeout)
         out, status, buf = run(sock, buf, step, timeout)
         if status:
             return clean(out), status, buf
@@ -173,6 +184,7 @@ def main():
             print(f"$ {command}", flush=True)
         words = command.split()
         try:
+            _, _, buf = run(sock, buf, RENEW, args.timeout)
             if words[0] == "@push" and len(words) == 3:
                 text, status, buf = push(sock, buf, words[1], words[2],
                                          args.timeout)

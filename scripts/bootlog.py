@@ -58,6 +58,7 @@ import os
 import re
 import struct
 import sys
+import textwrap
 
 # Where the log goes, and the two numbers that prove we found the right place.
 # Both come from this device's GPT, which has 4096-byte logical sectors:
@@ -95,6 +96,52 @@ CONFIGURED_HOLD_S = 600
 # apart. A gadget a host has configured adds CONFIGURED_HOLD_S, as it does
 # for the watchdog.
 BACKUP_S = 500
+# /pmhold is a lease, not a switch: see HOLD_SH.
+HOLD_LOST_S = 90
+HOLD_LEASE_S = 900
+
+# A live shell stops every reset in here by creating /pmhold, and until
+# round 37 nothing but that shell could take it away again. Round 37's
+# commands held the phone, booting the ADSP then took the USB link with it,
+# and the hold kept a phone nobody could reach until someone pressed the
+# buttons. Someone in the shell can only be there over the gadget, so the
+# hold now stands only while a host has the gadget configured, give or take
+# HOLD_LOST_S, and for HOLD_LEASE_S after the file was last touched, which
+# scripts/tsh.py does before every command. A lapsed hold is removed, so
+# every other wait on it ends too, and /pmwd.log, which each record
+# carries, says why.
+HOLD_SH = """
+pmhold_held() {
+	# _hseen is per hold: each one gets its own HOLD_LOST_S of grace.
+	if [ ! -e /pmhold ]; then
+		_hseen=""
+		return 1
+	fi
+	_hn=""
+	read -r _hn _hx < /proc/uptime
+	_hn=${_hn%.*}
+	[ -n "${_hseen:-}" ] || _hseen=$_hn
+	for _hu in /sys/class/udc/*; do
+		case "${_hu##*/}" in
+		dummy_udc*|'*') continue ;;
+		esac
+		_hs=""
+		read -r _hs < "$_hu/state" 2>/dev/null
+		case "$_hs" in
+		configured|suspended) _hseen=$_hn ;;
+		esac
+	done
+	_hm=$(/bin/busybox stat -c %Y /pmhold 2>/dev/null) || { _hseen=""; return 1; }
+	_ha=$(( $(/bin/busybox date +%s) - _hm ))
+	if [ $((_hn - _hseen)) -lt @LOST@ ] && [ "$_ha" -lt @LEASE@ ]; then
+		return 0
+	fi
+	echo "hold lapsed at $_hn: gadget last configured at $_hseen, /pmhold touched $_ha s ago" >> /pmwd.log
+	/bin/busybox rm -f /pmhold
+	_hseen=""
+	return 1
+}
+""".replace("@LOST@", str(HOLD_LOST_S)).replace("@LEASE@", str(HOLD_LEASE_S))
 
 
 # The shell half. Sourced by the initramfs init, which is a busybox ash script,
@@ -284,6 +331,7 @@ pmbootlog_record() {
 	fi
 }
 
+@HOLD_FN@
 pmbootlog_start() {
 	(
 		# The card comes up early on mainline, where sdhci-msm is
@@ -332,18 +380,18 @@ pmbootlog_start() {
 			# together after them, then sysrq b. Up here, before
 			# the record, so that a card that has gone missing,
 			# which skips the write, does not skip this too.
-			# /pmhold stops it as it stops the watchdog.
+			# A standing hold stops it as it stops the watchdog.
 			if [ -z "$bw" ]; then
 				_up=""
 				read -r _up _x < /proc/uptime 2>/dev/null
 				_lim=@BACKUP_S@
 				[ -e /pmwd.hold ] && _lim=$((_lim + @HOLD_S@))
-				if [ -n "$_up" ] && [ "${_up%.*}" -ge "$_lim" ] && [ ! -e /pmhold ]; then
+				if [ -n "$_up" ] && [ "${_up%.*}" -ge "$_lim" ] && ! pmhold_held; then
 					echo "backup: no reset by uptime $_up, the log hook resets after record $((n + 1))" >> /pmwd.log
 					[ -w /proc/sysrq-trigger ] && echo w > /proc/sysrq-trigger
 					bw=$n
 				fi
-			elif [ ! -e /pmhold ]; then
+			elif ! pmhold_held; then
 				[ -w /proc/sysrq-trigger ] && echo b > /proc/sysrq-trigger
 				/bin/busybox reboot -f -n
 			fi
@@ -393,7 +441,8 @@ pmbootlog_start
     "@CARD_HALF_BLOCKS@", str(CARD_HALF_BLOCKS)).replace(
     "@CARD_REGION_BLOCKS@", str(CARD_REGION_BLOCKS)).replace(
     "@BACKUP_S@", str(BACKUP_S)).replace(
-    "@HOLD_S@", str(CONFIGURED_HOLD_S))
+    "@HOLD_S@", str(CONFIGURED_HOLD_S)).replace(
+    "@HOLD_FN@", HOLD_SH.strip("\n"))
 
 
 # ---------------------------------------------------------------- cpio newc
@@ -799,13 +848,16 @@ STAGE_INIT = r"""#!/bin/busybox ash
 B=/bin/busybox
 $B echo 0 > /pmstage
 
+@HOLD_FN@
+
 pmstage_reset() {
 	# A live shell can stop the clock. Every reset in here is on a timer
 	# measured in minutes, which is right for a boot nobody is watching and
 	# wrong for one where something is mid-operation - writing a rootfs to
 	# the SD card takes longer than the probe's own patience. Nothing
-	# creates /pmhold on its own, so an unattended boot still resets.
-	while [ -e /pmhold ]; do $B sleep 5; done
+	# creates /pmhold on its own, so an unattended boot still resets, and
+	# a hold lapses once nobody can be holding it (HOLD_SH).
+	while pmhold_held; do $B sleep 5; done
 	# sysrq-b is emergency_restart(), which skips the orderly shutdown a
 	# wedged driver can block, so prefer it - but it needs /proc, which may
 	# be exactly what did not happen yet.
@@ -1223,8 +1275,10 @@ USB_WATCHDOG = """
 	case "$_m" in ''|*[!0-9]*) _m=0 ;; esac
 	read -r _up _x < /proc/uptime
 	echo "rung $_u, mark $_m, at $_up" >> /pmwd.log
-	# Same hold file as the staged probe: a shell that got in can stop this.
-	while [ -e /pmhold ]; do /bin/busybox sleep 5; done
+	# Same hold as the staged probe: a shell that got in can stop this,
+	# for as long as it is still there (HOLD_SH).
+@HOLD_FN@
+	while pmhold_held; do /bin/busybox sleep 5; done
 	# On the way out, put the kernel stack of every blocked task into the
 	# ring buffer, and give the log hook time to write two more records -
 	# the second is the first one certain to have been put together after
@@ -1343,7 +1397,8 @@ def usbquirk(src, dst):
                 sys.exit("error: could not find 'set -a' in init")
             text = text.replace(wd, wd + USB_WATCHDOG.lstrip("\n").replace(
                 "@WAIT@", str(WATCHDOG_S)).replace(
-                "@HOLD@", str(CONFIGURED_HOLD_S)), 1)
+                "@HOLD@", str(CONFIGURED_HOLD_S)).replace(
+                "@HOLD_FN@", textwrap.indent(HOLD_SH.strip("\n"), "\t")), 1)
         e[2] = text.encode()
         patched.append(name)
 
@@ -1540,7 +1595,8 @@ def stage(src, dst, skip=""):
     defer = " ".join(STAGE_DEFER.split())
     skip = " ".join(skip.split())
     init[2] = (STAGE_INIT.replace("@DEFER@", defer)
-                         .replace("@SKIP@", skip)).encode()
+                         .replace("@SKIP@", skip)
+                         .replace("@HOLD_FN@", HOLD_SH.strip("\n"))).encode()
 
     # The staged init sources /bootlog.sh itself, once the storage chain is
     # about to be loaded, so the file still has to be there.

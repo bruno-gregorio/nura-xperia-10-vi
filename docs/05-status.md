@@ -3481,6 +3481,30 @@ as what it would have fixed.
   - **Verified:** the link dropped as the ADSP came up and the bring-up
     re-init brought it back at 98.84 s, 1.5 s after the device report,
     as in round 68.
+- **Round 69: the GPU binds on stream 0, and its first resume faults** —
+  Verified 2026-10-11, 18:58 to 19:07. Plan 20261011g booted
+  `out/milestone/gpu-r20b.dtb`, round 67's tree with the GPU on stream 0
+  alone, and ran round 67's steps on it. The transcript is
+  `out/try-kernel/live-r69.txt`, and
+  `out/try-kernel/bootlog-card-20261011-190738.txt` is the card dump.
+  - **Verified:** all three steps survived. The clock controller, the
+    GPU SMMU and the GPU probed one after the other, with no abort, and
+    drm/msm registered the GPU as minor 1.
+  - **Verified:** the first open of the render node loaded `a710_sqe.fw`
+    and `gmu_gen70000.bin`, and then `msm-submit` took a kernel fault
+    in `a6xx_gmu_resume()`, a level 2 translation fault at address
+    0xce. The second `msm-submit` blocked behind it until the command's
+    240 s ran out.
+  - **Verified from the source:** on A7xx the GMU's resume reads
+    `CX_MISC_TCM_RET_CNTL`, register 0x39, through the GPU's `cx_mem`
+    mapping. drm/msm 6.18 replaces that mapping with `ERR_PTR(-EINVAL)`
+    when the SoC has no LLCC slices for the GPU, and this SoC has no
+    LLCC node, in our tree or in stock's. -22 plus 0x39 times 4 is 0xce.
+  - **Verified:** the fix has been posted upstream by Alexander
+    Koskovich, for Milos, which has no LLCC either: "drm/msm/adreno: set
+    cx_misc_mmio regardless of if platform has LLCC", v7 of 2026-05-28,
+    with two Reviewed-by tags. Pkgrel 21 carries it as backport-0008,
+    renamed back to 6.18's `llc_mmio`.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

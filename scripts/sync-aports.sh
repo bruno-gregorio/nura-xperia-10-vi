@@ -23,7 +23,12 @@ else
 	a="$SRC"; b="$DST"; dir="->"
 fi
 
-find "$SRC" -mindepth 3 -maxdepth 3 -type d | while read -r pkgdir; do
+# Device packages are three levels down (device/testing/<pkg>), forks of
+# Alpine packages in temp/ two (temp/<pkg>), as in pmaports.
+{
+	find "$SRC/device" -mindepth 2 -maxdepth 2 -type d
+	[ ! -d "$SRC/temp" ] || find "$SRC/temp" -mindepth 1 -maxdepth 1 -type d
+} | while read -r pkgdir; do
 	rel=${pkgdir#"$SRC"/}
 	[ -d "$a/$rel" ] || continue
 	rm -rf "$b/$rel"

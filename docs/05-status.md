@@ -3505,6 +3505,38 @@ as what it would have fixed.
     cx_misc_mmio regardless of if platform has LLCC", v7 of 2026-05-28,
     with two Reviewed-by tags. Pkgrel 21 carries it as backport-0008,
     renamed back to 6.18's `llc_mmio`.
+- **Round 71: the shell came too late for the GPU; the DSPs run again** —
+  Verified 2026-10-11, 19:09 to 19:18. Plan 20261011h put pkgrel 21 in the
+  rootfs and booted the package's own tree, which now has the WLAN, GPU
+  and FastRPC nodes folded in. The transcript is
+  `out/try-kernel/live-r71.txt`, and
+  `out/try-kernel/bootlog-card-20261011-191842.txt` is the card dump.
+  - **Verified:** the GPU never bound, so backport-0008 went untested. At
+    15.48 s, long before the shell loaded the clock controller at 97 s,
+    the kernel logged "arm-smmu 3da0000.iommu: deferred probe timeout,
+    ignoring dependency" and then the SMMU's probe failed with -110. The
+    GPU logged the same timeout and "failed to load adreno gpu". Loading
+    the clock controller afterwards bound only the clock controller.
+  - **Verified from the source:** this is the driver core's deferred-probe
+    timeout. `deferred_probe_initcall()` schedules it
+    `driver_deferred_probe_timeout` seconds after late_initcall, 10 by
+    default, and once it has run, `driver_deferred_probe_check_state()`
+    returns -ETIMEDOUT instead of -EPROBE_DEFER. genpd's attach returns
+    that when the power domain's provider is missing, which is the
+    graphics clock controller's GDSC here, so the failure is final.
+    Round 69 got its shell before the timeout, by luck of timing.
+  - **What it means for a real boot:** with the clock controller a
+    module, the GPU only works if the module loads within about ten
+    seconds of late_initcall. drm/msm is built in. So the clock controller
+    has to load from the initramfs, or be built in. The device package's
+    `modules-initfs.mainline` is the place, as Fairphone 4 does with
+    `msm`.
+  - **Verified:** the DSPs gave round 70's results on the folded tree:
+    both up within 0.25 s, all three FastRPC devices, both capability
+    queries and both root attaches. The link dropped and came back at
+    190.66 s.
+  - Round 72 boots the same kernel with `deferred_probe_timeout=600`, so
+    the SMMU keeps waiting for the module, as in round 69.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

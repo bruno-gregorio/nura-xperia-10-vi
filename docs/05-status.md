@@ -3455,6 +3455,32 @@ as what it would have fixed.
     providers synced their state, the CDSP could not reach DDR. Branch
     `sm6450-fastrpc` now names the path, and round 70 repeats round 68
     on `out/milestone/fastrpc-r20b.dtb`.
+- **Round 70: both DSPs run and answer FastRPC** — Verified 2026-10-11,
+  18:50 to 18:58. Plan 20261011g booted `out/milestone/fastrpc-r20b.dtb`,
+  which is round 68's tree with the CDSP's path to DDR named, and ran
+  round 68's commands on it. The transcript is
+  `out/try-kernel/live-r70.txt`, and
+  `out/try-kernel/bootlog-card-20261011-185806.txt` is the card dump.
+  - **Verified:** the CDSP was up 0.12 s after `qcom_q6v5_pas` loaded,
+    and the ADSP 0.16 s after that. `/dev/fastrpc-cdsp`,
+    `/dev/fastrpc-cdsp-secure` and `/dev/fastrpc-adsp` all appeared. The
+    CDSP's twelve compute banks went into IOMMU groups 6 to 17, the
+    ADSP's three into 18 to 20. No context fault was logged.
+  - **Verified:** the CDSP answers FastRPC. The capability query
+    returned attributes 1, 3, 4, 5, 6, 9 and 10 as 0x1, 0x2, 0x200000,
+    0x1, 0x4a73, 0x1 and 0x3, and attaching to its root domain
+    succeeded. The ADSP gave round 68's answers again.
+  - **Verified:** the NSP NoC's two CDSP nodes read 0 in the
+    interconnect summary both before the start and after it. That fits
+    a proxy vote held only until the handover.
+  - **Reasoned:** the missing vote was round 68's timeout, since the
+    path to DDR is the only change between the two trees. It is not
+    known whether the CDSP needs a vote of its own after the handover
+    for heavier work. Stock's second path, `crypto_ddr`, is still not
+    in our node.
+  - **Verified:** the link dropped as the ADSP came up and the bring-up
+    re-init brought it back at 98.84 s, 1.5 s after the device report,
+    as in round 68.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

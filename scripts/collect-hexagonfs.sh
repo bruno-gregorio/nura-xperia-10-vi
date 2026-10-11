@@ -21,15 +21,20 @@
 #   read-only, so the ADSP cannot build its registry from the JSON configs
 #   the way it does on stock and has to be handed the one stock already
 #   built. Persist also holds this phone's calibration and identity, so the
-#   image is read to out/, only sensors/registry/registry is extracted from
-#   it, and the image is deleted again. Nothing from persist goes into git.
+#   image is read to out/, only its sensors directory is extracted from it,
+#   and the image is deleted again. Nothing from persist goes into git.
+#   Round 72 showed the ADSP asking for sensors/registry/sns_reg_version,
+#   the file beside the registry directory, and, finding none, trying to
+#   write it and a temp.json there. So that file is staged as well.
 # - Six files of the stock kernel's /sys/devices/soc0: the ones stock's
 #   sns_reg_config names. Never serial_number.
 #
 # Like collect-firmware.sh this needs recovery, where adb is root, and writes
 # nothing on the phone.
 #
-# Out: out/hexagonfs/stage/sensors/registry/ and out/hexagonfs/stage/socinfo/.
+# Out: out/hexagonfs/stage/sensors/registry/, .../sensors/sns_reg_version,
+# out/hexagonfs/stage/socinfo/, and persist's whole sensors directory in
+# out/hexagonfs/persist-sensors/ for reference.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -81,16 +86,28 @@ done
 
 # debugfs opens the image read-only unless told -w. rdump recreates the
 # directory under the destination by its own name, so it lands in
-# $TMP/out/registry.
+# $TMP/out/sensors.
 mkdir -p "$TMP/out"
 (cd "$ROOT" && distrobox enter pmport -- sh -c \
-	'debugfs -R "ls -l /sensors/registry/registry" "$1" && debugfs -R "rdump /sensors/registry/registry $2" "$1"' \
+	'debugfs -R "ls -l /sensors/registry" "$1" && debugfs -R "rdump /sensors $2" "$1"' \
 	sh "$img" "$TMP/out" < /dev/null) \
-	|| die "could not read sensors/registry/registry from persist"
-[ -d "$TMP/out/registry" ] || die "persist has no sensors/registry/registry"
-n=$(find "$TMP/out/registry" -type f | wc -l)
+	|| die "could not read sensors from persist"
+[ -d "$TMP/out/sensors/registry/registry" ] \
+	|| die "persist has no sensors/registry/registry"
+n=$(find "$TMP/out/sensors/registry/registry" -type f | wc -l)
 [ "$n" -gt 0 ] || die "persist's sensors registry is empty"
+ps="$ROOT/out/hexagonfs/persist-sensors"
+rm -rf "${ps:?}"
+mv -- "$TMP/out/sensors" "$ps"
 rm -rf "${reg:?}"
 mkdir -p "$STAGE/sensors"
-mv -- "$TMP/out/registry" "$reg"
+cp -R -- "$ps/registry/registry" "$reg"
 say "registry: $n files in $reg"
+if [ -f "$ps/registry/sns_reg_version" ]; then
+	cp -- "$ps/registry/sns_reg_version" "$STAGE/sensors/sns_reg_version"
+	say "sns_reg_version: $(wc -c < "$STAGE/sensors/sns_reg_version") bytes"
+else
+	rm -f -- "$STAGE/sensors/sns_reg_version"
+	say "persist has no sensors/registry/sns_reg_version"
+fi
+say "persist's sensors directory: $(find "$ps" -type f | wc -l) files in $ps"

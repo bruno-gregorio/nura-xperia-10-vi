@@ -17,7 +17,10 @@
 # - out/hexagonfs/stage/: what hexagonrpcd serves the ADSP's sensors
 #   process, packed into hexagonfs.tar in the layout its README gives:
 #   sensors/config, sensors/registry, sensors/sns_reg.conf and socinfo.
-#   scripts/collect-hexagonfs.sh reads the last two from the phone.
+#   scripts/collect-hexagonfs.sh reads the registry and socinfo from the
+#   phone, and also persist's sensors/registry/sns_reg_version, which goes
+#   in as sensors/sns_reg_version when there is one. Stock hexagonrpcd does
+#   not serve that file; ours is patched to.
 #
 # The tar is deterministic, so its checksum only changes when its contents
 # do. It is also what a round pushes to try hexagonrpcd from the initramfs
@@ -54,6 +57,9 @@ mkdir -p "$tree/sensors"
 cp -R -- "$HFS/stage/sensors/config" "$HFS/stage/sensors/registry" \
 	"$tree/sensors/"
 cp -- "$HFS/stage/sensors/sns_reg_config" "$tree/sensors/sns_reg.conf"
+if [ -f "$HFS/stage/sensors/sns_reg_version" ]; then
+	cp -- "$HFS/stage/sensors/sns_reg_version" "$tree/sensors/"
+fi
 cp -R -- "$HFS/stage/socinfo" "$tree/"
 find "$tree" -type d -exec chmod 0755 {} +
 find "$tree" -type f -exec chmod 0644 {} +

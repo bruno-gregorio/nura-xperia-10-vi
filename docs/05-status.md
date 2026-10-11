@@ -3421,6 +3421,40 @@ as what it would have fixed.
   - `out/milestone/gpu-r20b.dtb` is `gpu-r19.dtb` with the GPU on stream
     0 alone, a fixup on branch `sm6450-gpu`. Round 69 repeats round 67
     on it.
+- **Round 68: FastRPC on the ADSP answers; the CDSP does not come up** —
+  Verified 2026-10-11, 18:42 to 18:50. Plan 20261011e booted
+  `out/milestone/fastrpc-r20.dtb`, branch `sm6450-fastrpc` on pkgrel 20:
+  the package's own tree plus a `fastrpc` node under each DSP's glink edge,
+  with stock's context banks. `out/tools/dsp-watch.sh` loaded round 64's
+  modules, FastRPC and the remoteproc modules, with stock's ADSP and CDSP
+  images in place. Then `scripts/fastrpc-probe.c` made the smallest calls
+  on each device. The transcript is `out/try-kernel/live-r68.txt`.
+  - **Verified:** the ADSP was up at 130.53 s and FastRPC bound its
+    channel 0.01 s later, with `/dev/fastrpc-adsp` and the three compute
+    banks in IOMMU groups 6 to 8. The charger domain announced itself
+    over PDR. UCSI's role reports and the bring-up re-init brought the
+    link back 1.5 s after the device report, as in round 64.
+  - **Verified:** the ADSP answers FastRPC. The capability query, a call
+    into the DSP's utilities handle, returned, with attribute 6 at
+    0xc766 and attribute 10 at 1, and attaching to the root domain
+    succeeded. No context fault was logged.
+  - **Reasoned:** attribute 6 is the architecture version in the
+    userspace FastRPC library's numbering, which would make the ADSP a
+    Hexagon v66. The numbering is from memory, not checked against a
+    source.
+  - **Verified:** the CDSP took its 3.7 MB image, and 5 s later
+    `qcom_q6v5_pas` gave up: "start timed out", -110. So there was no
+    `/dev/fastrpc-cdsp`.
+  - **Verified from stock's tree:** stock's CDSP votes two interconnect
+    paths, `rproc_ddr` from the NSP NoC's CDSP master to DDR and
+    `crypto_ddr`; our node had none. The NSP NoC's only BCM, CO0, is not
+    kept alive by our interconnect driver. The common Q6V5 code already
+    makes a proxy vote, from the node's first interconnect path, from
+    the start until the handover, and SM8550's CDSP names that path.
+  - **Reasoned:** with nothing voting CO0 once the interconnect
+    providers synced their state, the CDSP could not reach DDR. Branch
+    `sm6450-fastrpc` now names the path, and round 70 repeats round 68
+    on `out/milestone/fastrpc-r20b.dtb`.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

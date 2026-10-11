@@ -3605,6 +3605,83 @@ as what it would have fixed.
     read-only copy from the ramdisk.
   - Round 73 runs our hexagonrpcd, built with verbose logging, and serves
     the version file.
+- **Round 73: hexagonrpcd serves the sensors domain everything it opens** —
+  Verified 2026-10-11, 19:34 to 19:44. Plan 20261011j booted round 72's
+  kernel, tree and command line and ran round 72's DSP steps. It left the
+  GPU alone. Then it ran our own build of hexagonrpcd 0.4.0, static,
+  verbose and patched to serve `sns_reg_version`, on the new
+  `hexagonfs.tar`. The transcript is `out/try-kernel/live-r73.txt`.
+  - **Verified:** the DSPs came up as in rounds 70 to 72, with both probes
+    passing. QRTR listed the same 14 services, service 400 among them.
+  - **Verified:** in order, the domain opened:
+    - `/vendor/etc/sensors/sns_reg_config`;
+    - the six `/sys/devices/soc0` files;
+    - `sns_reg_version`, which opened this time;
+    - every file in the registry directory;
+    - every JSON file in `/vendor/etc/sensors/config`.
+
+    It also called stat on `sensors_registry`, which is in the registry
+    directory, without opening it.
+  - **Verified:** the error log held nothing but 1320 refused opens of
+    `../temp.json` for writing. hexagonrpcd logs a failed read open there
+    too, as round 72 showed, so no read open failed. The count was the
+    same 20 s later, and hexagonrpcd was still running.
+  - **Reasoned:** that is 132 writes at ten tries each. Round 72 also
+    showed ten tries per file. The 124 registry files the recovery boot
+    rewrote with identical contents are all groups from the JSON configs.
+    The 49 it left alone are `sns_reg_config`, `sensors_registry` and the
+    runtime calibration (`sns_gyro_cal_persist_s0*`,
+    `sns_gyro_cal_table_s0*`, `sns_mag_cal_persist_s0c0*`). So the domain
+    seems to rewrite every config-derived group at each boot, and the
+    refused writes would only have rewritten what the registry already
+    holds. Calibration that changes at run time cannot be saved this way.
+    Round 74 suggests that the refusals cost more than this; see there.
+  - Round 74 asks for data with libssc's `ssccli`.
+- **Round 74: the sensor core answers and publishes no physical sensor** —
+  Verified 2026-10-11, 19:44 to 19:55. Plan 20261011k ran round 73's
+  steps. Then it ran Alpine's `ssccli` (libssc 0.4.4) from its own
+  directory with Alpine's libraries, for 8 to 10 s per sensor. The
+  transcript is `out/try-kernel/live-r74.txt`.
+  - **Verified:** `ssccli` found the sensor core on QRTR node 5 and got
+    client ID 1. Its lookup of the registry sensor succeeded.
+  - **Verified:** the lookup of the `accel` data type came back within
+    4 ms with "No 'accel' sensor available", and `ssccli` stopped with
+    "Unable to initialize accelerometer sensor: UNKNOWN". Proximity,
+    light, magnetometer, gyroscope and compass failed the same way. There
+    were no measurements. In libssc 0.4.4's `libssc-sensor.c`, that
+    message means the core answered the lookup with no sensor UIDs.
+  - **Verified:** hexagonrpcd saw no new file access while `ssccli` ran.
+    It had 1130 lines and 1320 errors both before and after.
+  - **Verified:** stock's registry configures four physical sensors, all
+    on the sensor core's own I2C:
+    - bmi26x, accelerometer and gyroscope, bus instance 1, address 0x68,
+      interrupt on chip pin 66;
+    - stk3a5x, proximity and light, instance 2, address 0x46, chip pin 63;
+    - mmc56x3x, magnetometer, instance 2, address 0x30;
+    - af6133e, magnetometer, instance 2, address 0x0c.
+
+    Their power rails are named `/pmic/client/sensor_vdd` and
+    `sensor_vddio`. The configs apply to `hw_platform` QRD and `soc_id`
+    537, which is what our soc0 files serve.
+  - **Verified:** stock's `remoteproc-adsp@03000000` node declares only
+    the cx and mx supplies.
+  - **Reasoned:** the SM8450 port in aaronsb/sm-x800-linux PR 37 had to
+    declare its two sensor rails always-on, because stock's SLPI node held
+    them. Here stock's Linux holds no sensor rail, so the DSP probably
+    votes for them itself. This is not certain.
+  - **Reasoned:** the refused writes are the main lead. Other ports
+    report the same refusals of `temp.json` and `sns_reg_version`, and a
+    sensor core that stalls or crashes until those writes succeed:
+    - SM8450 in aaronsb/sm-x800-linux PR 37;
+    - X1E80100, where the first refusal made the firmware assert, in
+      linux-msm/hexagonrpc PR 27;
+    - SM8650 and SM7635, in hexagonrpc PR 21 and issue 19.
+
+    Upstream hexagonrpc has no write support yet. PR 21 (stubs) is open
+    and its design is still under discussion. PRs 26 and 27 (real writes)
+    were closed by their author without review.
+  - Round 75 runs upstream main 598b591 with PR 27's five commits, on a
+    copy of the registry in the initramfs.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

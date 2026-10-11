@@ -47,6 +47,9 @@ soc: qcom: ubwc: Add SM6450 config
 drm/msm/dsi: Add support for the SM6450 DSI PHY
 drm/msm: mdss: Add SM6450 support
 drm/msm/dpu: Add SM6450 support
+dt-bindings: arm-smmu: Document SM6450 GPU SMMU
+dt-bindings: display/msm/gmu: Document Adreno 710 GMU
+drm/msm/adreno: Add A710 support
 arm64: dts: qcom: Add SM6450 SoC device tree
 arm64: dts: qcom: Add PM6450 PMIC device tree
 arm64: dts: qcom: Add Sony Xperia 10 VI

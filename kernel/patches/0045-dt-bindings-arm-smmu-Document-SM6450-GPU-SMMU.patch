@@ -1,0 +1,40 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Sun, 11 Oct 2026 17:43:26 -0300
+Subject: [PATCH] dt-bindings: arm-smmu: Document SM6450 GPU SMMU
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The SM6450's GPU SMMU is an Adreno SMMU-500 like the SM8450's, and it
+takes the same six clocks. Add it to the Adreno list and to the SM8450
+clock constraints.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ Documentation/devicetree/bindings/iommu/arm,smmu.yaml | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/Documentation/devicetree/bindings/iommu/arm,smmu.yaml b/Documentation/devicetree/bindings/iommu/arm,smmu.yaml
+index 94d6537de..8d4381714 100644
+--- a/Documentation/devicetree/bindings/iommu/arm,smmu.yaml
++++ b/Documentation/devicetree/bindings/iommu/arm,smmu.yaml
+@@ -102,6 +102,7 @@ properties:
+               - qcom,sc8280xp-smmu-500
+               - qcom,sm6115-smmu-500
+               - qcom,sm6125-smmu-500
++              - qcom,sm6450-smmu-500
+               - qcom,sm8150-smmu-500
+               - qcom,sm8250-smmu-500
+               - qcom,sm8350-smmu-500
+@@ -503,7 +504,9 @@ allOf:
+       properties:
+         compatible:
+           items:
+-            - const: qcom,sm8450-smmu-500
++            - enum:
++                - qcom,sm6450-smmu-500
++                - qcom,sm8450-smmu-500
+             - const: qcom,adreno-smmu
+             - const: qcom,smmu-500
+             - const: arm,mmu-500

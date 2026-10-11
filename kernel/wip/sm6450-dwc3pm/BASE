@@ -1,6 +1,6 @@
 branch: sm6450-dwc3pm
 series: sm6450
-tip:    9761513afa5e209548232f35412126e7d64d3603
-base:   e85580ab0eddf11c787ff9c5b191fe13b9bdd15f arm64: dts: qcom: Add Sony Xperia 10 VI
-        (git describe: v6.18.55-47-ge85580ab0)
+tip:    32dfb86816ce968f5a087a495db138b9dc8491e5
+base:   df7191807f0fe316a8969c264547832d9cdc575c arm64: dts: qcom: Add Sony Xperia 10 VI
+        (git describe: v6.18.55-50-gdf7191807)
 patches: 1

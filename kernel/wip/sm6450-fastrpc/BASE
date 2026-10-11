@@ -1,0 +1,6 @@
+branch: sm6450-fastrpc
+series: sm6450
+tip:    80a8eea021acab17d046b285a49d38813c886a4a
+base:   df7191807f0fe316a8969c264547832d9cdc575c arm64: dts: qcom: Add Sony Xperia 10 VI
+        (git describe: v6.18.55-50-gdf7191807)
+patches: 2

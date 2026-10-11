@@ -1,6 +1,0 @@
-branch: sm6450-gpu
-series: sm6450
-tip:    10194f433c5e2b0670f346fd44a70cbc341086e4
-base:   df7191807f0fe316a8969c264547832d9cdc575c arm64: dts: qcom: Add Sony Xperia 10 VI
-        (git describe: v6.18.55-50-gdf7191807)
-patches: 4

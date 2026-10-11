@@ -28,10 +28,10 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  2 files changed, 70 insertions(+), 12 deletions(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 42293d5de..1f6cb0621 100644
+index 45d513710..a1d7dc7bb 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -567,7 +567,17 @@ &ufs_mem_phy {
+@@ -580,7 +580,17 @@ &ufs_mem_phy {
  	status = "okay";
  };
  
@@ -50,10 +50,10 @@ index 42293d5de..1f6cb0621 100644
  };
  
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-index 3b92b1532..66ef18908 100644
+index b38f70be9..247218468 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -10,6 +10,7 @@
+@@ -11,6 +11,7 @@
  #include <dt-bindings/interconnect/qcom,sm6450-rpmh.h>
  #include <dt-bindings/interrupt-controller/arm-gic.h>
  #include <dt-bindings/mailbox/qcom-ipcc.h>
@@ -61,7 +61,7 @@ index 3b92b1532..66ef18908 100644
  #include <dt-bindings/power/qcom-rpmpd.h>
  #include <dt-bindings/soc/qcom,rpmh-rsc.h>
  #include <dt-bindings/thermal/thermal.h>
-@@ -729,7 +730,7 @@ gcc: clock-controller@100000 {
+@@ -730,7 +731,7 @@ gcc: clock-controller@100000 {
  				 <&ufs_mem_phy 0>,
  				 <&ufs_mem_phy 1>,
  				 <&ufs_mem_phy 2>,
@@ -70,7 +70,7 @@ index 3b92b1532..66ef18908 100644
  		};
  
  		qupv3_id_0: geniqup@9c0000 {
-@@ -1132,6 +1133,52 @@ usb_1_hsphy: phy@88e3000 {
+@@ -1328,6 +1329,52 @@ usb_1_hsphy: phy@88e3000 {
  			status = "disabled";
  		};
  
@@ -123,7 +123,7 @@ index 3b92b1532..66ef18908 100644
  		remoteproc_wpss: remoteproc@8a00000 {
  			compatible = "qcom,sm6450-wpss-pas", "qcom,sc7280-wpss-pas";
  			reg = <0x0 0x08a00000 0x0 0x10000>;
-@@ -1226,17 +1273,10 @@ &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+@@ -1422,17 +1469,10 @@ &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
  			iommus = <&apps_smmu 0x80 0x0>;
  			dma-coherent;
  
@@ -145,7 +145,7 @@ index 3b92b1532..66ef18908 100644
  
  			snps,dis-u1-entry-quirk;
  			snps,dis-u2-entry-quirk;
-@@ -1263,6 +1303,14 @@ port@0 {
+@@ -1459,6 +1499,14 @@ port@0 {
  					usb_1_dwc3_hs: endpoint {
  					};
  				};

@@ -1,6 +1,0 @@
-branch: sm6450-wifi
-series: sm6450
-tip:    671767ee9b3fc241cd2a2c885b5e8a37f08a1252
-base:   df7191807f0fe316a8969c264547832d9cdc575c arm64: dts: qcom: Add Sony Xperia 10 VI
-        (git describe: v6.18.55-50-gdf7191807)
-patches: 3

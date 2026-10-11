@@ -18,9 +18,11 @@ side channel and its sleep stats, SMEM with the four SMP2P edges that
 ride on it, the apps SMMU, the SD card controller, UFS with its QMP PHY
 and the Inline Crypto Engine, USB with its high-speed PHY, the display
 clock controller and the display subsystem with its DPU and its DSI
-controller and PHY, the two TSENS controllers with the thermal zones
-they feed, and the four remote processors the peripheral authentication
-service boots: the ADSP, the CDSP, the modem and the WPSS.
+controller and PHY, the graphics clock controller, the Adreno 710 with
+its GMU and its SMMU, the two TSENS controllers with the thermal zones
+they feed, the four remote processors the peripheral authentication
+service boots, the ADSP, the CDSP, the modem and the WPSS, the FastRPC
+channels of the ADSP and the CDSP, and the WLAN.
 
 Every DMA master votes its path to memory and the CPU's path to its
 registers. The SD card's votes are SM6350's, like the rest of its OPP
@@ -37,7 +39,28 @@ the rails its cx-supply and mx-supply name: LCX and LMX for the ADSP, CX
 and MSS for the modem, CX and MX for the CDSP and the WPSS. Downstream
 lists a shutdown-ack interrupt for all four, but the ADSP and CDSP
 bindings these fall back to allow five interrupts, so those two leave it
-out, as SM8450 does; sysmon treats it as optional.
+out, as SM8450 does; sysmon treats it as optional. The CDSP names its
+path to DDR, through the NSP NoC, for the proxy vote the common Q6V5
+code holds until the handover: nothing else keeps that NoC's only BCM
+up, and without the vote the CDSP never signals that it has started.
+
+The FastRPC context banks are the downstream tree's: the ADSP's at
+streams 0x1803 to 0x1805, and the CDSP's at 0x1401 to 0x140e with mask
+0x400, leaving out the secure bank at 0x1409 and the two numbers
+downstream does not use. Each bank's reg is its stream's low four bits.
+
+The GPU sits behind its own SMMU on stream 0 only. Downstream maps the
+GPU's secure context at stream 2 and its GMU at stream 5, and nothing at
+stream 1, and writing a valid stream match for stream 1 takes a
+synchronous external abort, most likely the hypervisor refusing it. The OPP table holds the four
+levels every speed bin shares, 295 to 600 MHz, so it needs no speed bin
+fuse yet, and each level's bandwidth is the downstream bus level it asks
+for on LPDDR4X.
+
+The WLAN is the WCN3990-class core ath10k drives over SNOC. Its firmware
+runs on the WPSS, where SDM845's ran on the modem, but the host talks to
+it over QMI and does not see the difference. Like its SM6350, SM6375 and
+SM6115 siblings it takes qcom,msa-fixed-perm.
 
 The USB3 + DP combo PHY at 0x88e8000 is left out: which upstream QMP
 generation it is has not been established. Until it has, the controller
@@ -52,16 +75,16 @@ MMIO watchdog is described.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- arch/arm64/boot/dts/qcom/sm6450.dtsi | 2662 ++++++++++++++++++++++++++
- 1 file changed, 2662 insertions(+)
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 2972 ++++++++++++++++++++++++++
+ 1 file changed, 2972 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450.dtsi
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 new file mode 100644
-index 000000000..3b92b1532
+index 000000000..b38f70be9
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-@@ -0,0 +1,2662 @@
+@@ -0,0 +1,2972 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -70,6 +93,7 @@ index 000000000..3b92b1532
 +#include <dt-bindings/clock/qcom,rpmh.h>
 +#include <dt-bindings/clock/qcom,sm6450-dispcc.h>
 +#include <dt-bindings/clock/qcom,sm6450-gcc.h>
++#include <dt-bindings/clock/qcom,sm6450-gpucc.h>
 +#include <dt-bindings/interconnect/qcom,icc.h>
 +#include <dt-bindings/interconnect/qcom,sm6450-rpmh.h>
 +#include <dt-bindings/interrupt-controller/arm-gic.h>
@@ -1069,6 +1093,33 @@ index 000000000..3b92b1532
 +
 +				label = "lpass";
 +				qcom,remote-pid = <2>;
++
++				fastrpc {
++					compatible = "qcom,fastrpc";
++					qcom,glink-channels = "fastrpcglink-apps-dsp";
++					label = "adsp";
++					qcom,non-secure-domain;
++					#address-cells = <1>;
++					#size-cells = <0>;
++
++					compute-cb@3 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <3>;
++						iommus = <&apps_smmu 0x1803 0x0>;
++					};
++
++					compute-cb@4 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <4>;
++						iommus = <&apps_smmu 0x1804 0x0>;
++					};
++
++					compute-cb@5 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <5>;
++						iommus = <&apps_smmu 0x1805 0x0>;
++					};
++				};
 +			};
 +		};
 +
@@ -1077,6 +1128,174 @@ index 000000000..3b92b1532
 +			reg = <0x0 0x03c40000 0x0 0x17200>;
 +			#interconnect-cells = <2>;
 +			qcom,bcm-voters = <&apps_bcm_voter>;
++		};
++
++		gpu: gpu@3d00000 {
++			compatible = "qcom,adreno-07010000", "qcom,adreno";
++			reg = <0x0 0x03d00000 0x0 0x40000>,
++			      <0x0 0x03d9e000 0x0 0x1000>,
++			      <0x0 0x03d61000 0x0 0x800>;
++			reg-names = "kgsl_3d0_reg_memory",
++				    "cx_mem",
++				    "cx_dbgc";
++
++			interrupts = <GIC_SPI 300 IRQ_TYPE_LEVEL_HIGH>;
++
++			iommus = <&adreno_smmu 0 0x400>;
++
++			interconnects = <&gem_noc MASTER_GFX3D QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
++			interconnect-names = "gfx-mem";
++
++			operating-points-v2 = <&gpu_opp_table>;
++
++			qcom,gmu = <&gmu>;
++			#cooling-cells = <2>;
++
++			status = "disabled";
++
++			gpu_zap_shader: zap-shader {
++				memory-region = <&pil_gpu_mem>;
++			};
++
++			gpu_opp_table: opp-table {
++				compatible = "operating-points-v2";
++
++				opp-600000000 {
++					opp-hz = /bits/ 64 <600000000>;
++					opp-level = <RPMH_REGULATOR_LEVEL_SVS_L1>;
++					opp-peak-kBps = <5285156>;
++				};
++
++				opp-500000000 {
++					opp-hz = /bits/ 64 <500000000>;
++					opp-level = <RPMH_REGULATOR_LEVEL_SVS>;
++					opp-peak-kBps = <3972656>;
++				};
++
++				opp-345000000 {
++					opp-hz = /bits/ 64 <345000000>;
++					opp-level = <RPMH_REGULATOR_LEVEL_LOW_SVS>;
++					opp-peak-kBps = <2136718>;
++				};
++
++				opp-295000000 {
++					opp-hz = /bits/ 64 <295000000>;
++					opp-level = <RPMH_REGULATOR_LEVEL_LOW_SVS_D1>;
++					opp-peak-kBps = <2136718>;
++				};
++			};
++		};
++
++		gmu: gmu@3d6a000 {
++			compatible = "qcom,adreno-gmu-710.0", "qcom,adreno-gmu";
++			reg = <0x0 0x03d6a000 0x0 0x35000>,
++			      <0x0 0x03d50000 0x0 0x10000>,
++			      <0x0 0x0b270000 0x0 0x10000>;
++			reg-names = "gmu", "rscc", "gmu_pdc";
++
++			interrupts = <GIC_SPI 304 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 305 IRQ_TYPE_LEVEL_HIGH>;
++			interrupt-names = "hfi", "gmu";
++
++			clocks = <&gpucc GPU_CC_AHB_CLK>,
++				 <&gpucc GPU_CC_CX_GMU_CLK>,
++				 <&gpucc GPU_CC_CXO_CLK>,
++				 <&gcc GCC_DDRSS_GPU_AXI_CLK>,
++				 <&gcc GCC_GPU_MEMNOC_GFX_CLK>,
++				 <&gpucc GPU_CC_HUB_CX_INT_CLK>,
++				 <&gpucc GPU_CC_DEMET_CLK>;
++			clock-names = "ahb",
++				      "gmu",
++				      "cxo",
++				      "axi",
++				      "memnoc",
++				      "hub",
++				      "demet";
++
++			power-domains = <&gpucc GPU_CC_CX_GDSC>,
++					<&gpucc GPU_CC_GX_GDSC>;
++			power-domain-names = "cx",
++					     "gx";
++
++			iommus = <&adreno_smmu 5 0x400>;
++
++			qcom,qmp = <&aoss_qmp>;
++
++			operating-points-v2 = <&gmu_opp_table>;
++
++			gmu_opp_table: opp-table {
++				compatible = "operating-points-v2";
++
++				opp-500000000 {
++					opp-hz = /bits/ 64 <500000000>;
++					opp-level = <RPMH_REGULATOR_LEVEL_SVS>;
++				};
++
++				opp-200000000 {
++					opp-hz = /bits/ 64 <200000000>;
++					opp-level = <RPMH_REGULATOR_LEVEL_LOW_SVS>;
++				};
++			};
++		};
++
++		gpucc: clock-controller@3d90000 {
++			compatible = "qcom,sm6450-gpucc";
++			reg = <0x0 0x03d90000 0x0 0xa000>;
++			clocks = <&rpmhcc RPMH_CXO_CLK>,
++				 <&gcc GCC_GPU_GPLL0_CLK_SRC>,
++				 <&gcc GCC_GPU_GPLL0_DIV_CLK_SRC>;
++			#clock-cells = <1>;
++			#reset-cells = <1>;
++			#power-domain-cells = <1>;
++		};
++
++		adreno_smmu: iommu@3da0000 {
++			compatible = "qcom,sm6450-smmu-500", "qcom,adreno-smmu",
++				     "qcom,smmu-500", "arm,mmu-500";
++			reg = <0x0 0x03da0000 0x0 0x40000>;
++			#iommu-cells = <2>;
++			#global-interrupts = <1>;
++			interrupts = <GIC_SPI 673 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 678 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 679 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 680 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 681 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 682 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 683 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 684 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 685 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 686 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 687 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 422 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 476 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 574 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 575 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 576 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 577 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 659 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 661 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 664 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 665 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 666 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 668 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 669 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 699 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 700 IRQ_TYPE_LEVEL_HIGH>;
++			clocks = <&gpucc GPU_CC_CX_GMU_CLK>,
++				 <&gpucc GPU_CC_HUB_CX_INT_CLK>,
++				 <&gpucc GPU_CC_HLOS1_VOTE_GPU_SMMU_CLK>,
++				 <&gcc GCC_GPU_MEMNOC_GFX_CLK>,
++				 <&gcc GCC_GPU_SNOC_DVM_GFX_CLK>,
++				 <&gpucc GPU_CC_AHB_CLK>;
++			clock-names = "gmu",
++				      "hub",
++				      "hlos",
++				      "bus",
++				      "iface",
++				      "ahb";
++			power-domains = <&gpucc GPU_CC_CX_GDSC>;
++			dma-coherent;
 +		};
 +
 +		remoteproc_mpss: remoteproc@4080000 {
@@ -2042,6 +2261,36 @@ index 000000000..3b92b1532
 +			qcom,bcm-voters = <&apps_bcm_voter>;
 +		};
 +
++		wifi: wifi@22800000 {
++			compatible = "qcom,wcn3990-wifi";
++			reg = <0x0 0x22800000 0x0 0x800000>;
++			reg-names = "membase";
++
++			interrupts = <GIC_SPI 389 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 413 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 416 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 417 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 434 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 435 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 438 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 439 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 440 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 451 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 453 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 454 IRQ_TYPE_LEVEL_HIGH>;
++
++			iommus = <&apps_smmu 0x4c0 0x1>;
++
++			memory-region = <&pil_wlan_mem>;
++
++			qcom,smem-states = <&wlan_smp2p_out 0>;
++			qcom,smem-state-names = "wlan-smp2p-out";
++
++			qcom,msa-fixed-perm;
++
++			status = "disabled";
++		};
++
 +		nsp_noc: interconnect@320c0000 {
 +			compatible = "qcom,sm6450-nsp-noc";
 +			reg = <0x0 0x320c0000 0x0 0x10000>;
@@ -2068,6 +2317,9 @@ index 000000000..3b92b1532
 +					<&rpmhpd RPMHPD_MX>;
 +			power-domain-names = "cx", "mx";
 +
++			interconnects = <&nsp_noc MASTER_CDSP_PROC QCOM_ICC_TAG_ALWAYS
++					 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
++
 +			memory-region = <&pil_cdsp_mem>;
 +
 +			qcom,qmp = <&aoss_qmp>;
@@ -2086,6 +2338,87 @@ index 000000000..3b92b1532
 +
 +				label = "cdsp";
 +				qcom,remote-pid = <5>;
++
++				fastrpc {
++					compatible = "qcom,fastrpc";
++					qcom,glink-channels = "fastrpcglink-apps-dsp";
++					label = "cdsp";
++					qcom,non-secure-domain;
++					#address-cells = <1>;
++					#size-cells = <0>;
++
++					compute-cb@1 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <1>;
++						iommus = <&apps_smmu 0x1401 0x400>;
++					};
++
++					compute-cb@2 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <2>;
++						iommus = <&apps_smmu 0x1402 0x400>;
++					};
++
++					compute-cb@3 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <3>;
++						iommus = <&apps_smmu 0x1403 0x400>;
++					};
++
++					compute-cb@4 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <4>;
++						iommus = <&apps_smmu 0x1404 0x400>;
++					};
++
++					compute-cb@5 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <5>;
++						iommus = <&apps_smmu 0x1405 0x400>;
++					};
++
++					compute-cb@6 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <6>;
++						iommus = <&apps_smmu 0x1406 0x400>;
++					};
++
++					compute-cb@7 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <7>;
++						iommus = <&apps_smmu 0x1407 0x400>;
++					};
++
++					compute-cb@8 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <8>;
++						iommus = <&apps_smmu 0x1408 0x400>;
++					};
++
++					compute-cb@11 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <11>;
++						iommus = <&apps_smmu 0x140b 0x400>;
++					};
++
++					compute-cb@12 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <12>;
++						iommus = <&apps_smmu 0x140c 0x400>;
++					};
++
++					compute-cb@13 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <13>;
++						iommus = <&apps_smmu 0x140d 0x400>;
++					};
++
++					compute-cb@14 {
++						compatible = "qcom,fastrpc-compute-cb";
++						reg = <14>;
++						iommus = <&apps_smmu 0x140e 0x400>;
++					};
++				};
 +			};
 +		};
 +	};

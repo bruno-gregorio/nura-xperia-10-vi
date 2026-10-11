@@ -1,6 +1,6 @@
 branch: sm6450-usb3
 series: sm6450
-tip:    68d6209c8f5581e09a7e902ef92e67bcb166b62e
-base:   df7191807f0fe316a8969c264547832d9cdc575c arm64: dts: qcom: Add Sony Xperia 10 VI
-        (git describe: v6.18.55-50-gdf7191807)
+tip:    e9901219cd61a156ca00fec9bdb08e142acbce9f
+base:   58b78d13493947510726a4e7177a29acc140356b arm64: dts: qcom: Add Sony Xperia 10 VI
+        (git describe: v6.18.55-50-g58b78d134)
 patches: 3

@@ -11,9 +11,9 @@ shipping SM6450. Described so far: the debug UART, the PMIC complement
 (PM6450, PM6150L and PMK8350), the 38 RPMh-managed regulators, the power
 and volume keys, the SD card slot with its card detect, UFS, USB as a
 peripheral with the high-speed PHY tuned the way the board's own
-firmware tunes it, the touchscreen, Bluetooth, the display, and the four
-remote processors, with their firmware under qcom/sm6450/Sony/columbia/
-as on the other Sony boards.
+firmware tunes it, the touchscreen, Bluetooth, the display, the GPU, the
+WLAN, and the four remote processors, with their firmware under
+qcom/sm6450/Sony/columbia/ as on the other Sony boards.
 
 The touchscreen is a FocalTech FT3519T at 0x38 on I2C9. Its analog
 supply is switched by GPIO 103; the stock driver only ever drives that
@@ -31,6 +31,13 @@ low: the stock tree flags the line active-low, and its regulator driver,
 unlike regulator-fixed, does not let enable-active-high override the
 flag. Driven high, the rail is off, and the panel takes writes but
 answers no read and sends no TE.
+
+The WLAN's supplies are the downstream node's: PM6450 L11 for CX and MX,
+PM6150L L1 for the XO, PM6450 L14 for RFA, and PM6150L L10 and L11 for
+the two 3.3 V chains. The SoC reserves 12 MiB for the WLAN's MSA region,
+what a WCN6750 needs; this board pairs the core with a WCN3990-class
+radio, and its own device tree shrinks the region to 3 MiB, which ath10k
+hands the firmware as the MSA size. Use the same.
 
 The regulator windows are the ones the board's own firmware uses, except
 for the floors. Few mainline consumers set a voltage: not ufshcd, not the
@@ -53,8 +60,8 @@ to probe as a whole.
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  arch/arm64/boot/dts/qcom/Makefile             |   1 +
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 598 ++++++++++++++++++
- 2 files changed, 599 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 621 ++++++++++++++++++
+ 2 files changed, 622 insertions(+)
  create mode 100644 arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 
 diff --git a/arch/arm64/boot/dts/qcom/Makefile b/arch/arm64/boot/dts/qcom/Makefile
@@ -71,10 +78,10 @@ index dffdb219f..8b5b821a9 100644
  dtb-$(CONFIG_ARCH_QCOM)	+= sm7225-fairphone-fp4.dtb
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 new file mode 100644
-index 000000000..42293d5de
+index 000000000..45d513710
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -0,0 +1,598 @@
+@@ -0,0 +1,621 @@
 +// SPDX-License-Identifier: BSD-3-Clause
 +/*
 + * Copyright (c) 2026, Bruno Gregório <accounts@bruno.pw>
@@ -411,6 +418,14 @@ index 000000000..42293d5de
 +	};
 +};
 +
++&gpu {
++	status = "okay";
++};
++
++&gpu_zap_shader {
++	firmware-name = "qcom/sm6450/Sony/columbia/a710_zap.mbn";
++};
++
 +&i2c9 {
 +	status = "okay";
 +
@@ -470,6 +485,11 @@ index 000000000..42293d5de
 +	vdds-supply = <&pm6450_l5>;
 +
 +	status = "okay";
++};
++
++&pil_wlan_mem {
++	/* The WCN3990's MSA; the SoC's map leaves room for a larger WLAN */
++	reg = <0x0 0x82a00000 0x0 0x300000>;
 +};
 +
 +&pm6150l_gpios {
@@ -670,6 +690,16 @@ index 000000000..42293d5de
 +	qcom,pre-emphasis-duration-bp = <20000>;
 +	qcom,pre-emphasis-amplitude-bp = <30000>;
 +	qcom,hs-output-impedance-micro-ohms = <2600000>;
++
++	status = "okay";
++};
++
++&wifi {
++	vdd-0.8-cx-mx-supply = <&pm6450_l11>;
++	vdd-1.8-xo-supply = <&pm6150l_l1>;
++	vdd-1.3-rfa-supply = <&pm6450_l14>;
++	vdd-3.3-ch0-supply = <&pm6150l_l10>;
++	vdd-3.3-ch1-supply = <&pm6150l_l11>;
 +
 +	status = "okay";
 +};

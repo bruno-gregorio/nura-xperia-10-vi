@@ -1,0 +1,103 @@
+# Firmware for the Sony Xperia 10 VI, from the phone itself.
+#
+# Unlike most firmware-* aports this downloads nothing: there is no public
+# copy of these files to point at, and they may not be redistributed. They
+# come off the phone - stock's modem and vendor partitions, and for the
+# sensors its persist partition and /sys/devices/soc0 - and
+# scripts/stage-firmware.sh copies them next to this APKBUILD, where the
+# aport's .gitignore keeps them out of git. Build this package only after
+# running it.
+#
+# The paths are the ones our kernel asks for. The remote processors' and the
+# zap shader's come from the board's firmware-name properties; the GPU's
+# SQE and GMU microcode from drm/msm's catalog entry for the Adreno 710; the
+# WLAN board data from ath10k's own naming. ath10k's firmware-5.bin and the
+# Bluetooth firmware are linux-firmware's, so they are not here; the device
+# package depends on linux-firmware-ath10k and linux-firmware-qca for them.
+#
+# board-2.bin is a plain file, so it takes precedence over the compressed
+# board-2.bin.zst linux-firmware-ath10k installs at the same path: the
+# firmware loader tries the uncompressed name first, and apk sees two
+# different files. linux-firmware has no board data for this phone.
+maintainer="Bruno Gregorio <accounts@bruno.pw>"
+pkgname=firmware-sony-pdx246
+pkgver=1
+pkgrel=0
+pkgdesc="Firmware for Sony Xperia 10 VI"
+url="https://postmarketos.org"
+arch="aarch64"
+license="proprietary"
+options="!check !strip !archcheck !tracedeps pmb:cross-native"
+subpackages="
+	$pkgname-adreno
+	$pkgname-adsp
+	$pkgname-cdsp
+	$pkgname-hexagonfs
+	$pkgname-wlan
+	"
+source="
+	a710_sqe.fw
+	a710_zap.mbn
+	adsp.mbn
+	board-2.bin
+	cdsp.mbn
+	gmu_gen70000.bin
+	hexagonfs.tar
+	wpss.mbn
+	"
+
+_fwdir="/usr/lib/firmware/qcom/sm6450/Sony/columbia"
+
+package() {
+	# The parent package is empty; the device package pulls the parts.
+	mkdir -p "$pkgdir"
+}
+
+adreno() {
+	pkgdesc="Sony Xperia 10 VI GPU firmware"
+
+	install -Dm644 "$srcdir"/a710_sqe.fw "$srcdir"/gmu_gen70000.bin \
+		-t "$subpkgdir"/usr/lib/firmware/qcom/
+	install -Dm644 "$srcdir"/a710_zap.mbn -t "$subpkgdir/$_fwdir"/
+}
+
+adsp() {
+	pkgdesc="Sony Xperia 10 VI ADSP firmware"
+
+	install -Dm644 "$srcdir"/adsp.mbn -t "$subpkgdir/$_fwdir"/
+}
+
+cdsp() {
+	pkgdesc="Sony Xperia 10 VI CDSP firmware"
+
+	install -Dm644 "$srcdir"/cdsp.mbn -t "$subpkgdir/$_fwdir"/
+}
+
+hexagonfs() {
+	pkgdesc="Sony Xperia 10 VI files hexagonrpcd serves the ADSP"
+
+	# abuild unpacks the tar into $srcdir: sensors/ and socinfo/.
+	mkdir -p "$subpkgdir"/usr/share/qcom/sm6450/Sony/columbia
+	cp -R "$srcdir"/sensors "$srcdir"/socinfo \
+		"$subpkgdir"/usr/share/qcom/sm6450/Sony/columbia/
+	find "$subpkgdir"/usr/share/qcom -type d -exec chmod 0755 {} +
+	find "$subpkgdir"/usr/share/qcom -type f -exec chmod 0644 {} +
+}
+
+wlan() {
+	pkgdesc="Sony Xperia 10 VI WLAN firmware"
+
+	install -Dm644 "$srcdir"/wpss.mbn -t "$subpkgdir/$_fwdir"/
+	install -Dm644 "$srcdir"/board-2.bin \
+		-t "$subpkgdir"/usr/lib/firmware/ath10k/WCN3990/hw1.0/
+}
+sha512sums="
+fa83104c7056e6fb127f49b692d82f161d13cd68ec2c105a0adbdd280a52ccfb56f4a01f4b73a514fb343773f7d57427f1912920cae29b43147a705a82d1479a  a710_sqe.fw
+44d655d24b96c32323d7dca00f3b41f1bfe6278fca36f0fa1d59045401a2ec70517ab9892c5d041f80ea3d7d702e18514dbaab605604d957cb4cccfbd4a9609f  a710_zap.mbn
+8c1f7ed2f1549165b4eb260df5a452198e374724295239d60a54d39f42804d6ead644e01f2a24612348a6568788d95c19eeb1c5979d97d3c3a5d51cbfc307213  adsp.mbn
+741b14e4fb2a336e99d1801bca064d4d0a13728c34dc735a16ffc53244adf054f42be43b6c6d359d64dda79e90fd7a2c9e24775db55763f926bdfd60e2e8f099  board-2.bin
+eca621a3310f51a31c85c83d9a0b23cf71624971507d3297104578b51ceafde6704be4b77cd16882ce7de570ea70fb92f3ae6b4922eb113b07075b4b13f38c11  cdsp.mbn
+aba0678425a75f124eead6f960b3703669719a7c95273d4938e32c98445d1c640bc9509298099ea203aefa052ebe3ceace340bc6532796591a5d48ae244cf665  gmu_gen70000.bin
+f6f9b53674c0cecabd1a73599edbaa5cc212c6a8ccb163d85deda1adfe2d51052dffefe2c3218ce8d7572eada27373b368d237ae7a3e47a2b2c705b9f39ca3ed  hexagonfs.tar
+1d4b7c7f9f3e2c2dfefd594c46fdff1478cc07d1f70eb5c071264b67a9c801b91d52e030e43fea608bbe570e868a6efc1444142042266e1eb2d1014af2380de5  wpss.mbn
+"

@@ -1,0 +1,5 @@
+# The blobs are the phone's own and not redistributable; scripts/stage-firmware.sh
+# copies them here from out/. Only the recipe is tracked.
+*
+!.gitignore
+!APKBUILD

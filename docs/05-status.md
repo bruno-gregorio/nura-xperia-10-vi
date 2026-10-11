@@ -3388,6 +3388,39 @@ as what it would have fixed.
   - Pkgrel 20 makes the clock controller a module again, so the same
     tree boots with all three waiting on it. Round 67 probes them one
     at a time from the shell.
+- **Round 67: the GPU SMMU's stream 1 is the abort** — Verified
+  2026-10-11, 18:32 to 18:41. Plan 20261011d put pkgrel 20 in the rootfs
+  and booted `out/milestone/gpu-r19.dtb` again. The shell turned the
+  platform bus's autoprobe off, loaded the clock controller, and probed
+  the clock controller, the GPU SMMU and the GPU one at a time through
+  `drivers_probe`, each from a child shell. The transcript is
+  `out/try-kernel/live-r67.txt`, and
+  `out/try-kernel/bootlog-card-20261011-184144.txt` is the card dump.
+  - **Verified:** the clock controller probes cleanly. Its clocks were
+    all off afterwards, and both GDSCs off.
+  - **Verified:** the GPU SMMU reports SMMUv2, stage 1 only, coherent
+    table walks, 24 stream match groups and 22 context banks. Its reset
+    went through. Then, probing the GPU as its client, it took a
+    synchronous external abort, ESR 0x96000010, writing offset 0x804,
+    which is SMR 1, with 0x84000001: stream 1, mask 0x400, valid. The
+    SMR for stream 0 had just gone in. The child shell died, and the
+    CX GDSC was left on.
+  - **Verified:** the GPU's probe then blocked in `of_iommu_configure`,
+    in D state, behind the dead probe. The command ran out its 240 s,
+    and the phone came back on stock's slot b.
+  - **Verified from stock's tree:** KGSL maps the GPU's user context at
+    stream 0 and its secure context at stream 2, both with mask 0x400,
+    and the GMU at stream 5. Nothing maps stream 1. Stock's driver also
+    skips the SMMU's global init and limits itself to six context banks
+    and six match groups.
+  - **Reasoned:** the round 66 panic was this abort, taken in PID 1
+    while the built-in clock controller let the SMMU probe at boot.
+    Something outside Linux refuses a valid SMR for stream 1, likely
+    the hypervisor, since the reset's writes of invalid SMRs to all 24
+    groups went through. Why stream 1 is refused is not known.
+  - `out/milestone/gpu-r20b.dtb` is `gpu-r19.dtb` with the GPU on stream
+    0 alone, a fixup on branch `sm6450-gpu`. Round 69 repeats round 67
+    on it.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

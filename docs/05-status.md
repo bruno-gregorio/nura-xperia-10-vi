@@ -2343,7 +2343,8 @@ as what it would have fixed.
   names. Sony's PAS driver marks the parrot images `uses_elf64`. That only
   sets the class of a crash dump, so mainline's ELF32-only `mdt_loader`
   is not a concern.
-- **The WLAN** — Written 2026-10-08, not yet run, and not queued. It is
+- **The WLAN** — Written 2026-10-08. Round 65 ran it on 2026-10-11 and
+  `wlan0` came up (see "Round 65: the WLAN comes up"). It is
   the WCN3990-class core on `ath10k_snoc`, with its firmware on the WPSS.
   06-mainline had called it WCN6750, which the live node's `qcom,icnss`
   compatible rules out. The WIP node is on branch `sm6450-wifi` in
@@ -2369,12 +2370,12 @@ as what it would have fixed.
       `modem_b` have nothing for the WPSS either, so it may not need a
       domain. That is a guess until a round shows the WLAN firmware's
       QMI service coming up.
-    - **Still to do:** squash `adrastea/wpss.mdt` into the board's
-      `wpss.mbn` with `pil-squash.py`, as round 37 did for the ADSP.
-      Then fetch linux-firmware's `ath10k/WCN3990/hw1.0/` files inside
-      `pmport` and push them into the shell, as Bluetooth's files are.
-      The round boots the `sm6450-wifi` tree on pkgrel 18, with round
-      62's modules for the ADSP and the WPSS.
+    - **Done 2026-10-11:** `adrastea/wpss.mdt` squashed into the
+      board's `wpss.mbn`, linux-firmware's `firmware-5.bin`, and a
+      `board-2.bin` that `scripts/ath10k-board2.py` packs from stock's
+      `bdwlan` files, because linux-firmware has no board data for this
+      phone. Round 65 pushed them and booted the `sm6450-wifi` tree on
+      pkgrel 18. The WPSS needed no protection domain.
 - **Bluetooth** — Written 2026-10-08. Round 35 ran it (see "Round 35:
   Bluetooth binds, and the version reply is a WCN3991's"). Bluetooth needs
   no remote processor. The controller is the
@@ -2447,6 +2448,64 @@ as what it would have fixed.
   and loads it. It then reads the client's `model` and `fw_version`, the
   input device and the interrupt count. Nobody touches the screen during
   the round.
+- **The GPU firmware is in `vendor_b`** — Collected 2026-10-11, after
+  round 64. drm/msm wants three files for the Adreno 710: the SQE
+  microcode, the GMU's firmware and the zap shader. Stock keeps them in
+  the `vendor` partition's `/firmware`, which is a logical partition in
+  `super`.
+  - **Verified:** recovery maps `vendor_b` at
+    `/dev/block/mapper/vendor_b`, 1249648640 bytes. `adb exec-out "dd
+    if=/dev/block/mapper/vendor_b bs=1048576"` read it into
+    `out/firmware/vendor_b.img` in 39 s. It is ext4, and `debugfs` inside
+    `pmport` listed its `/firmware` into
+    `out/firmware/vendor_b.firmware.listing`, 138 lines, and dumped the
+    GPU's files into `out/firmware/gpu/`. git ignores both. Nothing was
+    written to the phone, and `super` was only read.
+  - **Verified:** the files. `a710_sqe.fw`, 36308 bytes;
+    `gmu_gen70000.bin`, 57272 bytes; and the zap shader both split, as
+    `a710_zap.mdt` with `.b00` to `.b02`, and whole, as `a710_zap.mbn`,
+    12088 bytes. Stock's reserved region for the zap shader,
+    `pil_gpu_mem`, is 0x2000 bytes.
+- **The GPU** — Written 2026-10-11. Round 66 panicked at boot (see
+  "Round 66: the GPU at boot panics"), and round 67 goes step by step.
+  The Adreno 710 is
+  chip ID 0x07010000. Mesa's `freedreno_devices.py` knows it as a 7xx
+  gen 1 part derived from the A730, but 6.18's drm/msm has no entry for
+  it. Pkgrel 19 adds one, and the nodes are WIP on branch `sm6450-gpu`.
+  - **Verified against KGSL:** Qualcomm's downstream GPU driver calls it
+    `gen7_3_0`, in `adreno-gpulist.h`. It is a 7xx gen 1 part with no BV
+    pipe, 512 KiB of GMEM, hang detection 0xcfffff, QoS 0x3, a 16 MiB
+    UCHE GMEM base, and the A730's protect list. Its firmware names are
+    `a710_sqe.fw`, `gmu_gen70000.bin` and `a710_zap`. KGSL emits the BV
+    packets even on a part with no BV pipe, and its CP_ME_INIT matches
+    drm/msm's, so drm/msm's submit path is used unchanged.
+  - **Reasoned:** the highest bank bit is 14, as the display's is,
+    because the live tree's `qcom,ddr-type` is 7, LPDDR4X. One review
+    says LPDDR5, which would make it 15. Nothing reads the DDR type at
+    runtime yet, and the code says so.
+  - **Reasoned:** `MSM_PARAM_GMEM_BASE` returns 0 for the A710, as
+    upstream does for later 6xx and the 740 family. A March 2026 thread
+    on the list said the A730's 0x100000 was wrong.
+  - **Left for later:** preemption, IFPC and ACD, the speed bin and the
+    cooling maps.
+  - The nodes on `sm6450-gpu`: the graphics clock controller at
+    `3d90000`; the GPU at `3d00000` with four operating points from 295
+    to 600 MHz; its GMU at `3d6a000` with two; and the GPU's SMMU at
+    `3da0000`. Their addresses, interrupts and levels are the stock
+    tree's. The board enables the GPU and names its zap shader
+    `qcom/sm6450/Sony/columbia/a710_zap.mbn`. `CHECK_DTBS=y` reports
+    only the two compatibles it always has, the touchscreen's and the
+    panel's.
+  - Two bindings change: `qcom,sm6450-smmu-500` joins the Adreno SMMUs,
+    and `qcom,adreno-gmu-710.0` joins the GMU list beside the 730.
+  - drm/msm loads the GPU on the first open of its device, not at boot.
+    Without `msm.separate_gpu_kms=1` the display's DRM device waits on
+    the GPU, so round 66 passes it and the display does not depend on
+    the GPU's result.
+  - `scripts/msm-submit.c` is the test, because the initramfs has no
+    Mesa. It opens the render node, prints the GPU's IDs, and submits
+    CP_MEM_WRITE jobs one at a time. A job passes when its fence
+    signals and the buffer holds its value.
 - **Pkgrel 14 is pkgrel 13 plus `edt-ft5x06`** — Verified 2026-10-08.
   It built in six minutes with the warm ccache, with no compiler warnings.
   All 427 of pkgrel 13's modules are byte-identical in pkgrel 14 once
@@ -2808,9 +2867,9 @@ as what it would have fixed.
   the driver's probe had been checked.
   - Device package pkgrel 4 puts `edt-ft5x06` in the mainline
     initramfs' modules, so the initramfs' on-screen keyboard has touch
-    without a round loading the driver. It is built, not yet in the
-    rootfs. Once it is, the rounds' own `insmod` of the driver will
-    report that the module is already loaded.
+    without a round loading the driver. Plan 20261011b put it in the
+    rootfs, and in round 65 the driver was loaded and bound before the
+    round's commands ran.
 - **Round 39: UFS works with the floors raised** — Verified 2026-10-08,
   15:21. pkgrel 13 on `ufs8450-vreg.dtb`, which is round 28's tree with
   the fourteen floors raised and nothing else changed. What pkgrel 13
@@ -3251,6 +3310,84 @@ as what it would have fixed.
     disconnect at 18:54:41 and the next enumeration at 18:54:49, which
     was the runtime suspend. After the round, the boots that cycled
     until the bootloader fell back are the same as round 62's.
+- **Round 64: pkgrel 18 on its own tree** — Verified 2026-10-11, 17:08
+  to 17:17, the first round after a week's break. Plan 20261011a put
+  pkgrel 18 in the rootfs and booted the package's own tree, which is
+  byte for byte `fold18.dtb`, with round 63's checks and pkgrel 18's
+  modules. The transcript is `out/try-kernel/live-r64.txt`, and
+  `out/try-kernel/bootlog-card-20261011-171704.txt` is the card dump.
+  - **Verified:** everything round 63 checked. The gadget came up 16 s
+    after the flash. The file's hash matched on the phone both times,
+    and both read-backs matched. Vblanks came 16769 us apart, the
+    touchscreen read "generic ft5x06 (48)", and Bluetooth's QCA setup
+    completed.
+  - **Verified:** the watcher's two results. The ADSP's role reports
+    came at 172.00, 172.02 and 172.09 s, the PHY was initialised again
+    at 173.63 s, and the link came back. A runtime suspend and resume
+    kept it, with GENERAL_CFG at 0x0d afterwards.
+  - **Verified on the host:** a disconnect at 17:11:27 and the next
+    enumeration at 17:11:29, then a disconnect at 17:11:44 and the next
+    enumeration at 17:11:51, as in round 63.
+  - The user touched the screen during this round; see "Touch works".
+  - Afterwards, with the phone in recovery, the plan listed `super`'s
+    logical partitions read-only. Recovery maps all of slot b's, `vendor_b`
+    among them, under `/dev/block/mapper/`, each with a `-cow` device
+    beside it. See "The GPU firmware is in `vendor_b`".
+- **Round 65: the WLAN comes up** — Verified 2026-10-11, 17:18 to 17:25.
+  Plan 20261011b put device pkgrel 4 in the rootfs and booted
+  `out/milestone/wifi-r18.dtb`, branch `sm6450-wifi` on pkgrel 18. It
+  pushed stock's WPSS image and the ath10k files, loaded the modules,
+  and started the WPSS through sysfs. The transcript is
+  `out/try-kernel/live-r65.txt`, and
+  `out/try-kernel/bootlog-card-20261011-172548.txt` is the card dump.
+  - **Verified:** `ath10k_snoc` bound `22800000.wifi` and waited. The
+    WPSS booted `wpss.mbn`, 6205624 bytes, and was up at 93.63 s. No
+    protection domain was needed. ath10k's QMI client found the firmware
+    at 93.72 s: chip_id 0x4320, chip_family 0x4001, board_id 0xff,
+    soc_id 0x400f0000. The firmware is WLAN.HL.3.4.3-00488, built
+    2025-08-21.
+  - **Verified:** ath10k took the board data from the packed
+    `board-2.bin`, reported "wcn3990 hw1.0", firmware API 5, and
+    registered `wlan0` at 99.4 s. The firmware has no MAC address for
+    it, so ath10k chose a random one. `ip link set wlan0 up` succeeded:
+    the flags read 0x1003, which is up, and the operstate stayed `down`,
+    because nothing associated. Nothing scanned.
+  - **Verified:** the initramfs had loaded `edt-ft5x06` by itself, and
+    it was bound to `0-0038` before the round's commands ran. That is
+    device pkgrel 4 working.
+  - **Verified:** no SMMU context fault, and `devices_deferred` was
+    empty. The ADSP and CDSP asked for their images when `qcom_q6v5_pas`
+    loaded, and failed with -2 because this round pushed neither.
+  - **Reasoned:** board_id 0xff is what the firmware reports when the
+    OTP holds no board ID. `scripts/ath10k-board2.py` files stock's
+    `bdwlan.bin`, the file stock uses in that case, under that ID, so
+    the board data was stock's default. Whether stock's own firmware
+    picks `bdwlan.bin` on this phone has not been checked.
+- **Round 66: the GPU at boot panics** — Verified 2026-10-11, 17:54 to
+  18:04. Plan 20261011c put pkgrel 19 in the rootfs and booted
+  `out/milestone/gpu-r19.dtb`, branch `sm6450-gpu`, with
+  `msm.separate_gpu_kms=1`. The run log is `out/try-kernel/run-r66.log`.
+  - **Verified:** our kernel never reached the initramfs. The host saw
+    the phone leave fastboot at 17:54:19 and nothing more until stock
+    Android answered on slot b, 546 s after the reboot. The card and
+    `rddata` held no record of any attempt.
+  - **Reasoned:** each of the seven attempts panicked a few seconds into
+    the kernel. Stock takes about 33 s from a reset to adb, which leaves
+    about 513 s for seven attempts, about 73 s each. With `panic=60`
+    that is 13 s of bootloader and kernel before the panic. A soft
+    lockup would add 20 s to each, and a hard hang would never have
+    fallen back.
+  - **Reasoned:** oopses are not fatal on this kernel, so it was an
+    SError, or an oops in PID 1, where built-in drivers probe. With the
+    graphics clock controller built in, three things ran at boot that
+    no round had run before: the clock controller's probe; the GPU
+    SMMU's probe, which resets every context bank the hardware reports,
+    where stock's node says `qcom,skip-init` and limits Linux to six
+    banks and six stream match groups; and the GPU's bind, whose GMU
+    init writes the RSCC. Which one it was is not known.
+  - Pkgrel 20 makes the clock controller a module again, so the same
+    tree boots with all three waiting on it. Round 67 probes them one
+    at a time from the shell.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -3928,9 +4065,10 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   three-line `vendor/qcom/Makefile` written in `prepare()` is what to revisit.
 - **GPU.** Adreno 710. On the downstream kernel it is KGSL, and Mesa's a7xx
   support targets the mainline `msm` uAPI, so expect software rendering there.
-  On the mainline kernel it is drm/msm's GPU side, which already knows a7xx
-  parts, plus the GMU and zap-shader firmware; that is the path that leads
-  anywhere.
+  On the mainline kernel it is drm/msm's GPU side. Pkgrel 19 taught it the
+  A710, the firmware is collected from `vendor_b`, and the nodes are WIP
+  on `sm6450-gpu` (see "The GPU"). Round 66 panicked at boot with them,
+  and which probe did it is open.
 - **Modem, Wi-Fi, audio, camera.** On mainline, the four remote
   processors they run on are in pkgrel 15's series. Round 34 probed
   them, and rounds 37, 52 and 57 booted the ADSP, which took the USB link
@@ -4153,7 +4291,8 @@ port boots" above. What is left starts from there.
    the cause, the charger firmware leaving the PHY non-driving, and in
    round 62 pkgrel 17's bring-up fix brought the host back by itself.
    Round 63 ran it on the folded tree, which is pkgrel 18's own.
-   Charging, audio, the modem and Wi-Fi all start here.
+   Charging, audio, the modem and Wi-Fi all start here. Round 65 started
+   the WPSS and brought `wlan0` up (see "Round 65").
 7. **Small things the live system asked for.** Nothing sets the clock, so it
    comes up years out and `resize2fs` refuses while it is at the epoch; the
    image needs a sane fallback time. `nftables.service` and
@@ -4163,3 +4302,14 @@ port boots" above. What is left starts from there.
    driver on the downstream kernel. Mainline's `edt-ft5x06` needs neither,
    and in round 36 it probed the chip (see "Round 36"). Touch works:
    the user tried it at the phone on 2026-10-11 (see "Touch works").
+8. **The GPU, the DSPs and the sensors, then a system that boots.** The
+   owner's order, given 2026-10-11, after much of the rest was left for
+   them to try in passing on the first real boot:
+   - the GPU, which round 67 takes up again (see "The GPU");
+   - the ADSP's audio and sensor domains, and the CDSP, which still needs
+     its `cdsp.mbn` pushed;
+   - the sensors, which sit behind the ADSP and reach userspace through
+     `hexagonrpcd` and libssc;
+   - then a pmOS image that boots past the debug shell into Lomiri, with
+     the firmware packaged. `postmarketos-ui-lomiri` is OpenRC only, so
+     that image is an OpenRC one.

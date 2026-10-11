@@ -2801,6 +2801,16 @@ as what it would have fixed.
   the chip's registers: model "generic ft5x06 (48)", report rate 12,
   threshold 55. An input device registered. The interrupt count stayed 0,
   but nobody touched the screen, so touches remain untested.
+- **Touch works** — Verified at the phone 2026-10-11, by the user, who
+  touched the screen while round 64 ran. The round had loaded
+  `edt-ft5x06` at about 17:09, on pkgrel 18's own tree. That is the
+  first touch anyone has made on the mainline kernel. Until now only
+  the driver's probe had been checked.
+  - Device package pkgrel 4 puts `edt-ft5x06` in the mainline
+    initramfs' modules, so the initramfs' on-screen keyboard has touch
+    without a round loading the driver. It is built, not yet in the
+    rootfs. Once it is, the rounds' own `insmod` of the driver will
+    report that the module is already loaded.
 - **Round 39: UFS works with the floors raised** — Verified 2026-10-08,
   15:21. pkgrel 13 on `ufs8450-vreg.dtb`, which is round 28's tree with
   the fourteen floors raised and nothing else changed. What pkgrel 13
@@ -4151,5 +4161,5 @@ port boots" above. What is left starts from there.
    or explained. The touchscreen polls but wants `focaltech_ts_fw_.bin` and a
    `drm_panel`, so it cannot work before display does. That is the vendor
    driver on the downstream kernel. Mainline's `edt-ft5x06` needs neither,
-   and in round 36 it probed the chip (see "Round 36"). A touch needs a
-   finger on the screen, so that test waits for someone at the phone.
+   and in round 36 it probed the chip (see "Round 36"). Touch works:
+   the user tried it at the phone on 2026-10-11 (see "Touch works").

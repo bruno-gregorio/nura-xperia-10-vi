@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=3
+pkgrel=4
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -66,5 +66,5 @@ b5273f0baa014c7df3d3210cc7309328ff60deedc54fbd27701eb6775bc2b35920d8f973bbcc03d1
 e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e57738a425bd75dfe7e28985cc60756f010bfd70fdbff79bb4  kernel-cmdline.downstream.conf
 0de42370419287d3b492ee279ca01d0169ced9b143aa1a4e4d1f94de9437b7df5cc552e5d5388d8909c3fe9c7bc765902f9a883feccd5e87eb0dc46d409c6066  kernel-cmdline.mainline.conf
 603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs.downstream
-ae7b5ca4c28bf75a61ba2b53c714ae91c54f8817a11a772a4939b9cf4a0f51821540f8a4da983239de6fa247919c6a4172ab1d21757b6b00d56d0b17a099c131  modules-initfs.mainline
+5e545a1ad72e7e1459f24c17dd299ab17576c4f1f2b1553d54542990de15442e733104f220d532c53501d1ee509dffbd644e7ee36b8b803f10f239a5b2b179ce  modules-initfs.mainline
 "

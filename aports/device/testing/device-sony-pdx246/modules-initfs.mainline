@@ -1,6 +1,7 @@
-# Modules the initramfs needs, in dependency order. There are none.
+# Modules the initramfs needs, in dependency order.
 #
-# This file exists to say that deliberately. modules-initfs.downstream is a
+# Almost none, and this file exists to say that deliberately.
+# modules-initfs.downstream is a
 # hundred lines long because the stock 5.10 tree builds its whole SoC support
 # as loadable modules and the initramfs has to name every one in probe order.
 # Our mainline config does the opposite: the clock controller, pinctrl, the
@@ -17,3 +18,9 @@
 #
 # If something here ever stops being builtin, it belongs in this file rather
 # than in the config.
+#
+# The one exception is the touchscreen, whose driver the config builds as a
+# module. Without it here the initramfs' on-screen keyboard, buffyboard in
+# the debug shell or unl0kr for an encrypted rootfs, has no touch input.
+# Touch through it was verified at the phone on 2026-10-11.
+edt-ft5x06

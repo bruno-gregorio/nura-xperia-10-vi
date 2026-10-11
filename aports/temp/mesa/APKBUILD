@@ -69,6 +69,18 @@ makedepends="
 	zlib-dev
 	zstd-dev
 	"
+# pmbootstrap reads makedepends from the top level only, so the aarch64
+# additions in the case "$CARCH" block below never reached the build chroot,
+# and meson stopped at "Unknown compiler(s): [['rustc']]". This fork is built
+# for aarch64 alone, so they are repeated here.
+makedepends="
+	$makedepends
+	clang$_llvmver-dev
+	libclc-dev~$_llvmver
+	rust
+	rust-bindgen
+	spirv-llvm-translator-dev
+	"
 _paste_version="1.0.14"
 _proc_macro2_version="1.0.86"
 _quote_version="1.0.33"
@@ -237,6 +249,16 @@ build() {
 		export CXXFLAGS="$CXXFLAGS -mtls-dialect=gnu"
 		;;
 	esac
+
+	# pmbootstrap builds this fork through crossdirect, whose rustc
+	# wrapper compiles for the build machine (x86_64) unless it is given
+	# --target, which only its cargo wrapper passes. meson calls rustc
+	# directly, so NAK and rusticl came out as x86_64 objects and the
+	# link of libvulkan_nouveau.so failed. The chroot's own rustc, run
+	# under QEMU, targets aarch64; meson takes it from RUSTC.
+	if [ -n "${PMB_CROSS:-}" ]; then
+		export RUSTC=/usr/bin/rustc
+	fi
 
 	PATH="$PATH:/usr/lib/llvm$_llvmver/bin" \
 	abuild-meson \

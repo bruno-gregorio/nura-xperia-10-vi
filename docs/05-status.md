@@ -3537,6 +3537,74 @@ as what it would have fixed.
     190.66 s.
   - Round 72 boots the same kernel with `deferred_probe_timeout=600`, so
     the SMMU keeps waiting for the module, as in round 69.
+- **Round 72: the GPU runs jobs; the sensors domain asks for a file we do
+  not serve** — Verified 2026-10-11, 19:19 to 19:32. Plan 20261011i booted
+  round 71's kernel and tree with `deferred_probe_timeout=600` and
+  `msm.separate_gpu_kms=1`, and ran round 71's GPU and DSP steps. Then it
+  started Alpine's hexagonrpcd 0.4.0 on the ADSP's sensors domain, serving
+  `out/hexagonfs/hexagonfs.tar`. The transcript is
+  `out/try-kernel/live-r72.txt`, and
+  `out/try-kernel/bootlog-card-20261011-193148.txt` is the card dump.
+  - **Verified:** with the timeout raised, the GPU SMMU waited. The shell
+    loaded `gpucc-sm6450` at about 97 s, and the SMMU, the GMU and the GPU
+    probed within 0.1 s of each other, with no abort. drm/msm registered
+    the GPU as minor 1.
+  - **Verified:** backport-0008 works. The first open of the render node
+    loaded the SQE and GMU firmware, "Loaded GMU firmware v4.0.7", and
+    `msm-submit` ran 1 job and then 100. All passed, with no faults and
+    exit code 0. The kernel reports chip id 0xffff07010000, 512 KiB of
+    GMEM and 600 MHz at most.
+  - **Verified:** devfreq offers 295, 345, 500 and 600 MHz, under
+    simple_ondemand, and moved between 295 and 600 during the jobs. Both
+    GPU GDSCs were off again afterwards.
+  - **Verified from the source:** Mesa 26.2, which Alpine edge ships, has no
+    freedreno entry for this chip. Mesa main has had one since 2026-09-23,
+    4db0b15c34c1 from MR 44466, "freedreno: Add support for Adreno 710 and
+    720". Its message says the registers were captured from the Android
+    driver's command streams, so it has not been tried on drm/msm.
+    `aports/temp/mesa` forks Alpine's 26.2.4-r1 with that entry backported.
+    It is not built yet.
+  - **Verified:** the DSPs gave round 70's results again. The CDSP was up at
+    193.05 s and the ADSP at 193.22 s. All three FastRPC devices appeared,
+    and both capability queries and both root attaches succeeded, with no
+    context fault. The link came back at 197.09 s.
+  - **Verified:** before hexagonrpcd started, QRTR listed 14 services. Nine
+    of them were the ADSP's, node 5, and among those was service 400,
+    version 1, the one libssc talks to. Four were the CDSP's, node 10.
+  - **Verified:** hexagonrpcd attached to the sensors domain ("Starting
+    /hexagonrpcd (INIT_ATTACH_SNS)") and kept running. In 20 s it logged
+    1340 errors:
+    - ten failed opens of
+      `/mnt/vendor/persist/sensors/registry/registry/../sns_reg_version`;
+    - ten refused attempts to open that file for writing;
+    - then refused writes to `../temp.json` beside it, for the rest of the
+      log as far as the transcript shows it.
+
+    hexagonrpcd's tree has no file at that path, and it refuses every
+    write. Alpine's build logs only failures, so what the domain read
+    successfully is not known. QRTR listed the same 14 services afterwards.
+  - **Verified:** stock's persist has that file. It is
+    `sensors/registry/sns_reg_version`, beside the registry directory: 10
+    bytes, "version=1" and a NUL. `scripts/collect-hexagonfs.sh` now stages
+    it. Our own build of hexagonrpcd changes `rpcd_builder.c` to serve it
+    next to the registry.
+  - **Reasoned:** the domain reads the version file to decide whether its
+    registry is current. When the file is missing, it rebuilds the
+    registry from the JSON configs and writes temp.json on the way. That
+    fits the order of the requests, but it is a reading of the log, not of
+    any source.
+  - **Verified:** persist was read again after the round.
+    `sensors/registry`, `sensors/registry/registry` and 124 of the
+    registry's 173 files had a modification time of 19:30, about a minute
+    earlier. `sns_reg_version` did not. The registry's contents were
+    byte-identical to the copy read before the round. Between the round
+    and that read, the phone booted only the recovery the card read uses,
+    on the stock slot with Sony's `vendor_boot`.
+  - **Reasoned:** something in that recovery boot rewrote the files. Our
+    kernel cannot have: no round mounts persist, and hexagonrpcd served a
+    read-only copy from the ramdisk.
+  - Round 73 runs our hexagonrpcd, built with verbose logging, and serves
+    the version file.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

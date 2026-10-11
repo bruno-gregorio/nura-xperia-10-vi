@@ -3682,6 +3682,71 @@ as what it would have fixed.
     were closed by their author without review.
   - Round 75 runs upstream main 598b591 with PR 27's five commits, on a
     copy of the registry in the initramfs.
+- **Round 75: the sensors domain writes its registry and still publishes no
+  physical sensor** — Verified 2026-10-11, 20:03 to 20:13. Plan 20261011l
+  ran round 74's steps with hexagonrpcd built from upstream main 598b591
+  plus PR 27's five commits, static and verbose. It served a copy of the
+  registry under `/hexagonfs/sensors/persist`. The transcript is
+  `out/try-kernel/live-r75.txt`.
+  - **Verified:** the domain wrote 241 times and renamed `temp.json` over
+    a registry group 150 times, 22 of them over `sns_reg_config`. Nothing
+    was refused: hexagonrpcd logged 1821 lines and no error, and was still
+    running at the end. So was the ADSP.
+  - **Verified:** afterwards 172 of the 173 registry files were
+    byte-identical to their copies from before the round. Only
+    `sns_reg_config` differed. `sns_reg_version` still read `version=1`.
+  - **Verified:** `ssccli` still found no accelerometer, proximity, light,
+    magnetometer, gyroscope or compass, and took no measurements.
+  - **Verified, against round 74's lead:** the refused writes were not
+    what kept the sensors away. The domain only rewrote what the registry
+    already held.
+  - **Reasoned:** `sns_reg_config` records the modification time of each
+    JSON config, and ours differ from stock's, so the domain re-parses the
+    configs at each boot. That is harmless with writes and costs only time
+    without them.
+- **Round 76: the sensor core has only four framework sensors** — Verified
+  2026-10-11, 20:16 to 20:26. Plan 20261011m ran round 75's steps and
+  `scripts/ssc-probe.c` three times: before hexagonrpcd started, once it
+  had settled, and a minute later. The transcript is
+  `out/try-kernel/live-r76.txt`.
+  - **Verified:** before hexagonrpcd, the core published three sensors:
+    `async_com_port`, `timer` and `ext_svc`. After it, and a minute later,
+    it also published `registry`, four in all.
+  - **Verified:** every other data type ssc-probe asked for had no
+    sensor. That includes the framework's own `interrupt`,
+    `remote_proc_state`, `resampler`, `data_acquisition_engine` and
+    `sensor_temperature`, and every physical and virtual type.
+  - **Verified:** the drivers are in the firmware. `adsp.mbn` carries the
+    log strings of bmi26x, stk3a5x, mmc56x3x and af6133e, of the interrupt
+    sensor, the resampler and the remote processor state sensor, and of
+    `sns_fw_init.c`, among them "Register Sensor from static list %i".
+  - **Reasoned:** so the framework stopped registering sensors partway
+    through its static list, rather than the drivers failing to find
+    their hardware. A sensor that is not even registered never gets as
+    far as probing its hardware, and the resampler has no hardware to
+    look for.
+- **The ADSP's sensor code reads an SMP2P entry mainline does not create** —
+  - **Verified:** in `adsp.mbn` the string `sleepstate` sits between
+    `sns_reg_config` and `Remote_proc_state`, next to
+    `sns_sig_remote_proc`. `sleepstate_see` sits next to `sns_cm`, the
+    client manager. The remote processor state sensor's strings include
+    "SMP2P registration failed" and "Wait for SMP2P event failed".
+  - **Verified:** stock's tree has a `sleepstate-out` entry, with entry
+    name `sleepstate`, on the ADSP's SMP2P edge. Beside it is an inbound
+    `sleepstate_see` entry, and a `qcom,smp2p-sleepstate` node that drives
+    the first and listens to the second. Downstream's
+    `smp2p_sleepstate.c` sets bit 12 of the entry at probe. It clears the
+    bit when the system is about to suspend and sets it again on resume.
+  - **Verified:** mainline 6.18 has no such entry, binding or driver, and
+    our ADSP edge had only `master-kernel` and `slave-kernel`.
+  - **Reasoned:** the remote processor state sensor registers for the
+    application processor's `sleepstate` entry and waits for it. If that
+    wait holds up the static list, every sensor registered after it is
+    missing, which is what round 76 saw. This is the hypothesis round 77
+    tests. It is not yet shown.
+  - Kernel pkgrel 22 adds the entry and the node to `sm6450.dtsi`, with a
+    driver of our own, `drivers/soc/qcom/smp2p_sleepstate.c`. It is built
+    in, so the bit is set at boot, before the ADSP starts.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

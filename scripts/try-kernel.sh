@@ -86,6 +86,19 @@ say() { echo; echo "== $*"; }
 
 need_fastboot() {
 	command -v fastboot >/dev/null || die "fastboot not found"
+	# On 2026-10-11, after round 66, the phone sat in recovery on the bus
+	# as 18d1:4ee2 and the adb server listed nothing until it was
+	# restarted. A round started then would have stopped here, so a
+	# phone the bus has and adb does not gets one server restart.
+	if ! fastboot devices | grep -q . \
+		&& ! adb devices | sed 1d | grep -q . \
+		&& lsusb 2>/dev/null | grep -qiE ' ID (18d1|0fce):'; then
+		echo "   the bus has the phone and adb does not; restarting adb"
+		adb kill-server >/dev/null 2>&1 || true
+		sleep 2
+		adb start-server >/dev/null 2>&1 || true
+		sleep 3
+	fi
 	if ! fastboot devices | grep -q .; then
 		# Already booted? Then we can get there ourselves, which is the
 		# whole point of this script.

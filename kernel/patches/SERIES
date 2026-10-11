@@ -53,3 +53,6 @@ drm/msm/adreno: Add A710 support
 arm64: dts: qcom: Add SM6450 SoC device tree
 arm64: dts: qcom: Add PM6450 PMIC device tree
 arm64: dts: qcom: Add Sony Xperia 10 VI
+dt-bindings: soc: qcom: Add SMP2P sleep state
+soc: qcom: Add SMP2P sleep state driver
+arm64: dts: qcom: sm6450: Add the ADSP sleep state

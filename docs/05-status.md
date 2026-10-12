@@ -4688,6 +4688,34 @@ as what it would have fixed.
     now use `hw:`.
   - The ADSP did not crash and nothing oopsed. The accelerometer's iio
     device and iio-sensor-proxy were up.
+- **The on-screen keyboard and the microphones' level** — by hand on plan
+  20261012q's boot, 2026-10-12, after the user found the keyboard gone and
+  the microphones silent in the session.
+  - **Verified, the keyboard went with the session's environment:**
+    greet.py's first version gave the session only `XDG_SESSION_TYPE`.
+    Without `XDG_CURRENT_DESKTOP=Phosh:GNOME`, gnome-session skips the
+    autostart entries marked `OnlyShowIn=Phosh`, phosh-osk-stevia among
+    them, so no keyboard ran to be forced up. greet.py now passes what
+    phrog passes, from the session's desktop file: `XDG_SESSION_TYPE`,
+    `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP` and `GDMSESSION`. After
+    the session was restarted (phoc killed, phrog back, a new login), the
+    session's gnome-session had all four and phosh-osk-stevia ran. The
+    user has not yet confirmed that the keyboard shows.
+  - **Verified, an ADC step is worth 1.5 to 1.8 dB:** with the speaker's
+    tone recorded straight from the PCM, AMIC1 read 25.1, 52.6 and 130.2
+    at ADC1 steps 12, 16 and 20, and AMIC3 read 268 and 1103 at ADC2 steps
+    12 and 20. The control claims 0.25 dB a step. The quiet floor rises
+    with it, from 26.6 to 86.9 RMS on AMIC1.
+  - **Verified, PulseAudio recorded the mono PCM as stereo:** the source's
+    sample specification was two channels, and its downmix halves the
+    level. Device pkgrel 12 gives each microphone `CaptureChannels 1` and
+    its ADC as `CaptureMixerElem`. With it, the source is one channel, its
+    base volume (83%, -5 dB) is the ADC's step 0, and the 93% it showed
+    was step 12, the boot sequence's value then. Its full volume is step
+    20, where the boot sequence now starts both ADCs.
+  - The session's source had Mic3 as its active port, not Mic1.
+    - Guess: the user picked it in the settings while testing; the
+      sound server keeps that choice.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -5489,9 +5517,11 @@ each entry says how much of it held.
     is described, so only that speaker plays.
   - A headset. The headphone path, the headset microphone and the
     buttons are described, but nothing has been plugged in.
-  - A capture volume. The ADC gain controls claim 0.25 dB a step, where a
-    step is worth over 1 dB here, so the UCM gives PulseAudio none (see
-    "Both handset microphones heard, and the UCM drives them").
+  - A true capture volume scale. Since device pkgrel 12 the sound server
+    drives each microphone's ADC, but the control claims 0.25 dB a step
+    where a step measures 1.5 to 1.8 dB (see "The on-screen keyboard and
+    the microphones' level"), so its decibel figures are wrong. The fix
+    belongs in the WCD937x driver's TLV.
   - Recovery from an ADSP crash. The card does not come back on its own
     (see "Sound, a stage at a time").
 - **No `soc-qcom-sm6450` package.** pmOS has no SoC package for this chip; the

@@ -5738,6 +5738,18 @@ each entry says how much of it held.
 - **What the cameras still lack.** All three stream through libcamera
   (see "All three cameras stream"), but only as raw Bayer debayered by
   the soft ISP.
+  - The owner looked at all three in GNOME Snapshot on 2026-10-12: the
+    two Hi-846s are too dark, and the IMX582 is a bit blurry.
+  - Gain for the Hi-846s. Verified the same day
+    (`out/try-kernel/live-hi846-dark.txt`, 20 s of each through `cam`):
+    both reached their 33 ms limit and 16x, the most analogue gain the
+    sensor has, and stayed under the AGC's target. The wide's histogram
+    stayed in its lowest fifth and the front's mean bin was 1.58 against
+    2.5. Their `digital_gain` sat at 512, 1x, as the soft IPA drives
+    only exposure and analogue gain. Stock's sensor libraries add the
+    sensor's digital gain on top, up to 8x on the wide and 16x on the
+    front, for 128x in all (`out/dl-sensors/REPORT.md`), where the
+    IMX582 reaches 60x on analogue gain alone.
   - Proof of focus. The AK7374 moves the IMX582's lens under the soft
     IPA's contrast autofocus (see "The main camera focuses, at 30 fps"),
     but nobody has seen it focus on a lit scene. Where the lens puts
@@ -5750,7 +5762,10 @@ each entry says how much of it held.
   - The flash LED, the OIS rail (`cam_ois_vdd`) and the modules'
     calibration EEPROMs.
   - Tuning. The IMX582's colour matrices are another sensor's, and the
-    Hi-846 file has none.
+    Hi-846 file has none. Stock's Chromatix files for all three
+    (`com.qti.tuned.*.bin`, parameter parser 3.5.1) hold colour
+    matrices, lens shading, gamma, black level, AWB and AEC tuning, and
+    are being decoded into `out/dl-tuned/`.
   - The IMX582's full 8000x6000 quad Bayer readout. The driver offers the
     binned modes only.
   - Sensor delays for the Hi-846, which libcamera has no values for.

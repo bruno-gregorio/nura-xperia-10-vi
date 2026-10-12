@@ -1,7 +1,9 @@
 # Status
 
-Last updated: 2026-10-11. **Our own kernel boots a full system: round 83
-took the 6.18 mainline kernel through OpenRC into Lomiri.** The downstream
+Last updated: 2026-10-12. **Our own kernel boots a full system: round 83
+took the 6.18 mainline kernel through OpenRC into Lomiri, and on
+2026-10-12 all three cameras streamed through libcamera (see "All three
+cameras stream").** The downstream
 5.10 kernel booted pmOS to a login on 2026-10-05 (see "The port boots"). The
 mainline kernel then ran in about eighty rounds that stopped in the
 initramfs' debug shell, and brought up USB, the display, touch, the GPU, the
@@ -4748,6 +4750,108 @@ as what it would have fixed.
     it. Plan 20261012q's session read 12.55, through Mic1 in stereo at
     step 12 with one speaker, so the two are not one change's measure.
   - The ADSP did not crash and nothing oopsed.
+- **The cameras, first light** — plans 20261012s and 20261012t,
+  2026-10-12, stay-up boots of kernel pkgrels 31 and 32 with device
+  pkgrel 13, then live probes on pkgrel 32. The transcripts are
+  `out/try-kernel/live-stayup-cam1.txt`, `live-stayup-cam2.txt` and
+  `live-cam3.txt`. No frame left the phone: `push/cap.sh` summarises each
+  capture there with `push/rawstat.py` and deletes it.
+  - **Verified, the camera PMIC is an ET5907 at 0x35:** pkgrel 31 looked
+    for a WL2868C at 0x2f, where nothing answered, while 0x35 read 0x01 in
+    its ID register. Pkgrel 32's driver takes either and logged
+    "ET5907 at 0x35".
+    - Guess: no ET5907 datasheet is public. Its voltage ranges are the
+      vendor driver's, and its enable time is a generous guess.
+  - **Verified, the CCIs need the SOC AHB clock:** in pkgrel 31 both
+    controllers timed out in reset (`CCI reset timeout`, -110). With
+    `soc_ahb` among their clocks, pkgrel 32 read HW version 0x10070000
+    from both.
+  - **Verified, all three sensors probe:** the IMX582 at 3-001a and the
+    Hi-846s at 4-0021 (ultra-wide) and 6-0020 (front), both with chip ID
+    0x0846. The media graph has each on its own path: the IMX582 on
+    csiphy0 with four lanes, the ultra-wide on csiphy1 into CSID 1 and
+    TFE 1, the front on csiphy3 into CSID 2 and TFE 2. The CSIDs report
+    2.0.3 and the TFEs 2.0.0; the CSI PHY's version register reads 0.
+  - **Verified, the IMX582 streams through RDI:** every 4000x3000
+    capture of five frames completed, colour bars and scene alike.
+  - **Verified, TFE 640 pads every line to 16 bytes:** the colour bars
+    came back smeared, 45% of each frame was never written, and every
+    frame faulted in the SMMU at 0xe4f000 into its buffer, the first page
+    past its 15,000,000 bytes. Matching the frame against itself put the
+    real line pitch at 5008 bytes (a score of 1.000) where the driver had
+    asked for 5000. Pkgrel 33 aligns lines to 16 bytes on SM6450, as camss
+    already does on SC7280 and the newer chips.
+  - **Verified, the Hi-846s did not stream on pkgrel 32,** for two bugs in
+    the upstream driver.
+    - Asked for 1632x1224, the sensor settled on 640x480 and logged "this
+      mode is not supported for 4 lanes": set_format checks the current
+      mode's lane table before it picks the new mode, and 640x480 has no
+      four-lane table.
+    - No frame arrived, and stopping warned in `call_s_stream`:
+      `hi846_write_reg_16` leaves a positive value in its error, so the
+      controls setup returns 1, `hi846_set_stream` stops the sensor, and
+      camss takes the 1 for success.
+    - Pengyu Luo's v5 series of 2026-07-12 fixes both and adds the 6 and
+      8 MP modes. Pkgrel 33 carries its four driver patches and one of
+      ours: the series checks the device tree's link frequencies against
+      the clock before it has fetched the clock, so the check passes
+      against 0 Hz. The board's Hi-846 endpoints now list the series' 90,
+      180 and 360 MHz.
+  - **Verified, libcamera finds the main camera:** `cam -l` on pkgrel 32
+    listed it as "Internal back camera", on the simple pipeline and the
+    soft ISP, but libcamera 0.7.2 has no sensor properties, gain helper or
+    tuning file for the IMX582. `temp/libcamera` pkgrel 104 adds the three.
+    - Verified: the black level, 64 at 10 bits, is the pedestal the
+      vendor's sensor module data gives, and the dark frames of plan
+      20261012u read it.
+    - Reasoned: the gain code (1024 / (1024 - code)) and the delays are
+      those of the other Sony sensors of its generation; the colour
+      matrices are the IMX363's, borrowed as pmaports' imx519.yaml does.
+  - Reasoned: the camera clock controller names no CX or MXA domain, and
+    its binding, shared with SM4450, has none. Its PLLs locked here, so
+    something else holds both rails up.
+- **All three cameras stream** — plan 20261012u, 2026-10-12, a stay-up
+  boot at 15:01 of kernel pkgrel 33 and device pkgrel 13, then live probes
+  as root and as the session's user. The transcripts are
+  `out/try-kernel/live-stayup-cam3.txt`, `live-cam4.txt` and
+  `live-cam6.txt`. As before, every frame was summarised on the phone and
+  deleted there.
+  - **Verified, whole frames from the IMX582:** at 4000x3000 the driver now
+    asks for 5008 bytes a line, the frame matched itself at that pitch with
+    a score of 1.000, and the colour bars read as eight clean bands
+    (255, 191, 191, 127.5, 127.5, 63.8, 63.8 and 0 in the high byte). The
+    binned 2000x1132 mode does the same at 2512 bytes a line, on the
+    412 MHz link.
+  - **Verified, the Hi-846s stream:** both the ultra-wide and the front gave
+    the same eight bands at 1632x1224 on a 180 MHz link and at 3264x2448 on
+    360 MHz, with 2048 and 4080 bytes a line. Pengyu Luo's series dropped
+    the driver's link frequency control, so camss estimates the rate from
+    the pixel rate and says so.
+  - **Verified, the black level is 64 at 10 bits:** with the test pattern
+    off, the dark scenes all three cameras saw averaged 16 to 18 in the high
+    byte at every Bayer site.
+  - **Verified, nothing faulted:** no SMMU fault, no warning and no oops
+    through nine raw captures and the libcamera runs.
+  - **Verified, libcamera captures from all three as the session's user:**
+    `cam` ran the IMX582 at 3992x3000 at 30.1 fps, both Hi-846s at
+    3256x2448 at 30.0 fps, and at 1280x720 the IMX582's binned mode at
+    120.9 fps and the Hi-846s at 30 fps. The soft ISP debayers on the GPU,
+    through Mesa's EGL.
+  - **Verified, the same runs fail as root:** root can open the dma-heaps,
+    and libcamera prefers the CMA heap, which is the kernel's default
+    16 MiB. A 3992x3000 RGBA frame needs 46 MiB, so the allocation fails
+    and `cam` reports "Can't allocate buffers". The session's user cannot
+    open the heaps, which are root's alone, and libcamera falls back to
+    udmabuf, which pmOS's udev rules give the video group.
+  - **Verified, PipeWire sees them:** WirePlumber lists the IMX582 and both
+    Hi-846s as libcamera devices, and three sources: two "Built-in Back
+    Camera" and a "Built-in Front Camera". GNOME Snapshot is installed.
+  - Nobody has looked at a picture yet. The image is the user's to judge,
+    on the phone, in Snapshot.
+  - Reasoned: the Hi-846 helper in `temp/libcamera` pkgrel 105 takes the
+    gain code as sixteenths over unity, 0 to 240 for 1x to 16x. That is
+    the Hynix convention and fits the driver's range, but no Hi-846
+    datasheet has been read.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -5534,14 +5638,33 @@ each entry says how much of it held.
   release has; `temp/mesa` backports it. With it, freedreno reports FD710
   (round 82), kmscube draws at the panel's 60 Hz (round 85), and Lomiri
   renders through it (rounds 86 and 87).
-- **Modem and camera.** On mainline, the remote processors are in
-  pkgrel 15's series, but nothing above the modem's or the camera's is
-  written. Wi-Fi, Bluetooth and sound, which this entry used to list,
+- **Modem.** On mainline, the remote processors are in pkgrel 15's
+  series, but nothing above the modem's is written. The cameras, which
+  this entry used to list, probe and stream (see "The cameras, first
+  light"). Wi-Fi, Bluetooth and sound, which it also listed,
   now work in Phosh (see "The WLAN and Bluetooth in Phosh, and why
   neither worked", and the sound entries from "Sound, a stage at a time"
   on). Their firmware comes from the stock partitions. It is not
   redistributable, and firmware-sony-pdx246 packages it for this phone
   only.
+- **What the cameras still lack.** All three stream through libcamera
+  (see "All three cameras stream"), but only as raw Bayer debayered by
+  the soft ISP.
+  - Focus. The vendor's module data names the IMX582's voice coil driver
+    "ak7374_imx582", an Asahi Kasei AK7374. It is not described, so the
+    main camera is fixed-focus for now.
+  - The flash LED, the OIS rail (`cam_ois_vdd`) and the modules'
+    calibration EEPROMs.
+  - Tuning. The IMX582's colour matrices are another sensor's, and the
+    Hi-846 file has none.
+  - The IMX582's full 8000x6000 quad Bayer readout. The driver offers the
+    binned modes only.
+  - Sensor delays for the Hi-846, which libcamera has no values for.
+  - Captures as root: the CMA heap is 16 MiB. pmOS's SDM845 kernel has
+    256 MiB and the system heap; raising ours would follow it.
+  - Upstream, with the owner's consent: the camss SM6450 series, the
+    IMX582 driver and binding, the ET5907 support, our fix to the Hi-846
+    series, and the two libcamera patches.
 - **What sound still lacks.**
   - Speaker protection. Both amplifiers run 6 dB under stock's profiles
     because nothing watches the speakers' temperature or excursion.
@@ -5619,15 +5742,21 @@ each entry says how much of it held.
   tree. Rounds 30, 31 and 43 ran the nodes and the QUP, SD and USB
   paths, and pkgrel 15's series carries them. UFS, I2C9 and UART11 add
   their paths as WIP, and in round 49 UFS and I2C9 voted.
-- **No reboot-mode, so a mainline shell cannot ask for fastboot.** There is
-  no PON node with `mode-bootloader` in `pm6450.dtsi` or the SoC tree, so
-  even a working boot can only `reboot -f` into the same slot, which walks
-  the retry counter down one attempt at a time. Adding one would have our
-  kernel write the SDAM restart reason, which is the PMIC write that is not
-  authorised (see "Getting back to fastboot without touching the phone"), so
-  it stays out. The loop leaves a mainline boot the sanctioned way:
-  `scripts/queue.sh` resets it over the gadget until the counter runs out
-  and stock answers adb.
+- **A mainline shell must not ask for fastboot.** This entry used to say
+  there was no reboot-mode node. There is one, and it was always there:
+  the board includes `pmk8350.dtsi`, whose `nvmem-reboot-mode` node has
+  `mode-bootloader = <0x02>` in the SDAM restart reason. Using it is the
+  PMIC write that is not authorised (see "Getting back to fastboot without
+  touching the phone"), so `reboot bootloader` is never run. Even a working
+  boot leaves only through a plain reset into the same slot, which walks
+  the retry counter down one attempt at a time. The loop leaves a mainline
+  boot the sanctioned way: `scripts/queue.sh` resets it over the gadget
+  with sysrq until the counter runs out and the bootloader lands in
+  fastboot.
+  - Verified against `drivers/power/reset/reboot-mode.c`: a plain
+    `reboot` goes through the reboot-mode driver too, but with no mode
+    argument it looks up `mode-normal`, which the node lacks, and writes
+    nothing.
 - **The dwc3 node used the deprecated split binding.** Closed
   2026-10-08. `usb@a6f8800` with a `snps,dwc3` child was `qcom,dwc3`,
   which 6.18 handles in `dwc3-qcom-legacy.c`; new SoCs upstream use the

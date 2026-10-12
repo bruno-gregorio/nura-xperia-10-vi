@@ -2,9 +2,9 @@
 # AudioReach topology for the Sony Xperia 10 VI (SM6450), derived from
 # QCS6490-RB3Gen2.m4 and SM8550-HDK.m4.
 #
-# MultiMedia1 (S16) is the headphone stream, MultiMedia2 (S16 to S32) the
-# speaker stream and MultiMedia3 the microphone. The stock ACDB uses
-# container types (GC/SC), hence LPASS_VER_COMPAT 110000.
+# MultiMedia1 is the headphone stream, MultiMedia2 the speaker stream and
+# MultiMedia3 the microphone, all S16. The stock ACDB uses container types
+# (GC/SC), hence LPASS_VER_COMPAT 110000.
 include(`audioreach/audioreach.m4')
 include(`audioreach/stream-subgraph.m4')
 include(`audioreach/device-subgraph.m4')
@@ -25,7 +25,7 @@ STREAM_SG_PCM_ADD(audioreach/subgraph-stream-vol-playback.m4, FRONTEND_DAI_MULTI
 	0x00004001, 0x00004001, 0x00006001, `110000')
 dnl Playback MultiMedia2
 STREAM_SG_PCM_ADD(audioreach/subgraph-stream-vol-playback.m4, FRONTEND_DAI_MULTIMEDIA2,
-	`S32_LE,S24_LE,S16_LE', 48000, 48000, 2, 2,
+	`S16_LE', 48000, 48000, 2, 2,
 	0x00004002, 0x00004002, 0x00006010, `110000')
 dnl Capture MultiMedia3
 STREAM_SG_PCM_ADD(audioreach/subgraph-stream-capture.m4, FRONTEND_DAI_MULTIMEDIA3,
@@ -44,11 +44,13 @@ dnl 	format, min-rate, max-rate, min-channels, max-channels,
 dnl	interface-type, interface-index, sd-line-idx, data-format,
 dnl	sg-iid-start, cont-iid-start, mod-iid-start, mixer-prefix)
 dnl
-dnl Speaker amplifiers: the stock backend is MI2S-LPAIF_VA-RX-PRIMARY,
-dnl 2 channels of 32 bits, on the LPI I2S1 pins. Stock's quinary MI2S
-dnl puts its RX on line 0x1, SD0.
+dnl Speaker amplifiers: the stock backend is MI2S-LPAIF_VA-RX-PRIMARY on the
+dnl LPI I2S1 pins. Stock's quinary MI2S puts its RX on line 0x1, SD0. Stock
+dnl runs it at 32 bits; this runs it at 16, as the stream is: nothing in
+dnl these subgraphs converts the sample width, and the one time a 16-bit
+dnl stream fed a 32-bit I2S endpoint, the ADSP's audio process crashed.
 DEVICE_SG_ADD(audioreach/subgraph-device-i2s-playback.m4, `Quinary', QUINARY_MI2S_RX,
-	`S32_LE', 48000, 48000, 2, 2,
+	`S16_LE', 48000, 48000, 2, 2,
 	LPAIF_INTF_TYPE_VA, I2S_INTF_TYPE_PRIMARY, SD_LINE_IDX_I2S_SD0, DATA_FORMAT_FIXED_POINT,
 	0x00004004, 0x00004004, 0x00006030, `QUINARY_MI2S_RX')
 dnl

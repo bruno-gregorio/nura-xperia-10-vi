@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=firmware-sony-pdx246-audioreach-topology
 pkgver=0_git20260930
 _commit="b4c1510fe6686ab8053715a02c34bec875ca5c6c"
-pkgrel=0
+pkgrel=1
 pkgdesc="AudioReach topology for Sony Xperia 10 VI"
 url="https://github.com/linux-msm/audioreach-topology"
 # these files are not specific to cpu architecture, but only make sense on aarch64 devices
@@ -31,5 +31,5 @@ package() {
 }
 sha512sums="
 bc7e03f943f6c6e23040e020b77c1f264283aa383a669c10c959b9834eeaa4cc051b2106fa911e544d92a2586a52f31fe3d51f246dc6f00028c14546f695ac02  audioreach-topology-b4c1510fe6686ab8053715a02c34bec875ca5c6c.tar.gz
-27cb4baef53aab070984a4dcae7b7b65cd1f0d6035a449b3655e92864d01f83a823e4247e26a3d49de0992e186387ea106a7ad66576596c37dfe7b7b10084b4c  SM6450-Sony-Xperia-10-VI.m4
+8474750fff94938a19405a7f4789c60b3f3fdd9b0af845e6137e1b08b101e6f9e15668ae2c7db3695d79b4bbb7ea4fd9367ba18760ec027332b2c9f9ab225402  SM6450-Sony-Xperia-10-VI.m4
 "

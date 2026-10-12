@@ -4393,6 +4393,301 @@ as what it would have fixed.
   - **Not explained:** ath10k logs "chan info: invalid frequency 0 (idx
     41 out of bounds)" during NetworkManager's scans. It did not stop
     `wlan0` from coming up.
+- **Sound, a stage at a time** — rounds of plans 20261012i to 20261012k,
+  2026-10-12, 08:03 to 08:57, each a stay-up boot.
+  - **The pieces:**
+    - Kernel pkgrel 24 describes the audio. In `sm6450.dtsi`: QUP0's
+      I2C0 for the top speaker amplifier, the GPR with q6apm and q6prm, the
+      RX, TX and VA macros, both SoundWire controllers and the LPASS LPI
+      pins. On the board: the WCD9370 headset codec, the amplifier, and a
+      card on the sc8280xp machine driver.
+    - The speaker amplifiers sit on an LPASS I2S port. The backend is
+      stock's `MI2S-LPAIF_VA-RX-PRIMARY`, our quinary MI2S, on the LPI
+      I2S1 pins, and the SoC drives its bit clock. backport-0009, the MI2S
+      clock control from linux-next, sets that clock.
+    - firmware-sony-pdx246-audioreach-topology is our own AudioReach
+      graph, built from an m4 file on the upstream topology macros. Its
+      streams: MultiMedia1 is the headphones, MultiMedia2 the speaker and
+      MultiMedia3 the microphone.
+    - firmware-sony-pdx246's audio subpackage carries stock's amplifier
+      settings, `aw88261_acf.bin` and `aw88263_acf.bin`.
+    - For these rounds the phone's `/etc/modprobe.d/zz-audio-bringup.conf`
+      blacklists the audio modules, so that nothing loads at boot. Each
+      round loads them a stage at a time, with a mark in the kernel log
+      before each stage. This file is on the phone only, and must go once
+      sound works.
+  - **Verified, round i (pkgrel 24):** the DSP side and the headset codec
+    come up.
+    - The GPR registered its two services when `apr` loaded.
+    - SoundWire enumerated one WCD9370 device on each controller,
+      `sdw:2:0:0217:010a:00:4` and `sdw:3:0:0217:010a:00:3`. The codec
+      bound both.
+    - The amplifier answered on I2C0 at 0x34, but with chip ID 0x2032:
+      "aw88261 0-0034: unsupported device id = 2032". So there was no
+      card.
+    - q6apm-lpass-dais logged "valid dai id not found:0". 6.18 sizes its
+      DAI arrays at 127 entries, and the speaker's port, QUINARY_MI2S_RX,
+      is number 127.
+  - **The fix for round i:** chip ID 0x2032 is the AW88263, by Awinic's
+    own aw882xx driver. Stock carries settings for both parts, so a unit
+    may have either.
+    - Kernel pkgrel 25 adds a driver for the AW88263 on the aw88395
+      library, written from the register layout aw882xx gives that ID, and
+      names it on the board.
+    - backport-0010 is the port limit check from linux-next, d49ee8faefec.
+    - firmware-sony-pdx246 pkgrel 3 adds `aw88263_acf.bin`.
+  - **Verified, round j (pkgrel 25):**
+    - The AW88263 driver bound 0-0034. Its ACF parsed, with checksums
+      matching on both sections, and the driver chose profile 2.
+    - The "valid dai id not found" line is gone.
+    - The card failed: "Failed to add route ADC1_OUTPUT -> TX SWR_ADC0".
+      Those are LPASS v9's tx-macro inputs. SM6450 falls back to SM8450's
+      v9.2 data, whose inputs are named "TX SWR_INPUTn". Pkgrel 26 uses
+      those names.
+    - The amplifier's registers, idle: SYSCTRL 0x3443, so powered down;
+      I2SCTRL 0x94e8, which decodes to 48 kHz, 64 fs, 32-bit Philips I2S,
+      the driver's default before any stream; and SYSST 0.
+  - **Verified, round k (pkgrel 26):** the card registers.
+    - `0 [SonyXperia10VI ]: sm6450 - Sony-Xperia-10-VI`, with three PCMs:
+      MultiMedia1 and 2 for playback and MultiMedia3 for capture.
+    - The headset jack registered as an input device.
+    - The LPI I2S1 pins, gpio6 to gpio9, are claimed by `sound`.
+    - The amplifier's mixer controls exist. "Top PCM Playback Volume" is
+      0 to 360 in quarter decibels from -90 dB, at 280 by default, and
+      "Top Profile Set" offers Music and Receiver.
+    - The front end refuses S32_LE, because q6apm-dai offers only S16 and
+      S24.
+    - An S16 tone on MultiMedia2 started. 6.2 s after its mark, the ADSP's
+      audio process died: "PDM: service 'audio_process' crash:
+      'EF:audio_process:0x2:PM_SERVER:0xbb:memheap.c:1198", an assertion
+      on `INTEGRITY_CHECK_ON_FREE_HEADER`, a heap that was overwritten.
+      remoteproc restarted the ADSP 5.4 s later.
+    - Nobody was listening, so whether the speaker made a sound is not
+      known.
+  - **Reasoned, the crash:** pkgrel 26 forced the speaker's backend to
+    S32_LE, as stock runs that port. The stream from the front end was
+    16-bit, and nothing in our topology's speaker graph converts sample
+    width. Guess: the 32-bit I2S endpoint ran past buffers sized for 16
+    bits. Pkgrel 27 and topology pkgrel 1 keep the speaker path at 16
+    bits from end to end, and the bit clock follows at rate times
+    channels times 16.
+  - **Not fixed: the card does not come back after an ADSP restart.**
+    The GPR came back. The WCD9370 logged "IRQ sync failed to resume:
+    -16" as the card came down, and on the second bind its component
+    probe returned -EBUSY: "failed to instantiate card -16". That ended
+    round k's headphone and microphone tests, which ran after the
+    speaker. Until it is fixed, a crash on the DSP costs the round.
+  - **Seen every round, and harmless so far:**
+    - "qcom-apm ... CMD timeout for [1001021] opcode" when q6prm loads,
+      5 s after the GPR comes up. 0x01001021 is `APM_CMD_GET_SPF_STATE`,
+      q6apm asking whether the DSP's audio framework is ready. Round k's
+      card came up after it.
+    - "missing qcom,mbhc-buttons-vthreshold-microvolt entry" from the
+      WCD9370. The headset buttons have no thresholds yet, and there are
+      no verified values for this board.
+    - "qcom,dmic-sample-rate dt entry missing" from the VA macro. Our
+      tree routes no digital microphone through it yet.
+- **The speaker plays, and the handset microphone hears it** — plan
+  20261012l, 2026-10-12, a stay-up boot at 09:10 of kernel pkgrel 27 and
+  topology pkgrel 1, and a second run on the same boot at about 09:21.
+  The transcripts are `out/try-kernel/live-stayup-audio4.txt` and
+  `out/try-kernel/live-audio-m.txt`.
+  - **Verified, the speaker at 16 bits:** two tones on MultiMedia2 played
+    to the end, and the ADSP did not crash.
+    - Each time, the amplifier logged "started, SYSST 0x0311": PLL
+      locked, clock present, switching and boost on.
+    - While a tone played, SYSCTRL read 0x3440, so powered up with I2S
+      on. I2SCTRL read 0x9408: 48 kHz, 32 fs, 16-bit Philips I2S, which is
+      the bit clock pkgrel 27 sets.
+  - **Verified, hands-free:** the second run played a 1 kHz tone on the
+    speaker's left channel, 15 dB under stock's profile, and recorded the
+    handset microphone, ADC1 on SoundWire input SWR_MIC0. Each recording
+    was reduced on the phone to numbers, then deleted.
+    - With no tone, the 1 kHz bin read 0.13.
+    - With the tone, it read 27.9, against 0.08 at 1370 Hz.
+    - With ADC1's analog gain at 10, it read 157.8, against 0.29.
+    - So the speaker makes sound, and the handset microphone records it.
+      Neither had been shown before.
+  - **Verified, the headphone stream:** MultiMedia1 played to the WCD9370
+    with nothing plugged in. As it stopped, the codec logged "clk already
+    disabled" twice. That is upstream's WCD937x: its RX clock enable stops
+    counting at one, and the HPHL and HPHR paths each disable it. It is
+    harmless.
+  - **Verified, the draft UCM:** with a copy of the UCM tree in `/tmp`,
+    `alsaucm` lists the HiFi verb and the Speaker, Headphones, Mic1 and
+    Mic2 devices. Enabling Mic1 set the controls it names.
+  - **Verified, the second ADC is not heard:** ADC2, on either input,
+    showed on none of SWR_MIC0, 1 or 5.
+    - SWR_MIC1 and SWR_MIC5 gave the signature of a decimator fed
+      nothing: values that fall steadily to 0, identical from one run to
+      the next.
+    - SWR_MIC0 gave no samples at all, and `arecord` failed with an I/O
+      error, so the capture DMA got nothing.
+    - With ADC1 and ADC2 on together, as plan l's sweep had them,
+      SWR_MIC0 turned to loud broadband noise.
+  - **Reasoned, why:** the WCD9370's ADC1 and ADC2 are on different slave
+    ports, 1 and 2, and both use channel bit 0. The board's
+    `qcom,tx-port-mapping`, `<1 1 2 3>` from qcm6490-idp, puts both on
+    master port 1. In 6.18 the bus gives every slave port the parameters
+    of the master port it maps to, so both ADCs send in the same slot.
+    `qcom,tx-channel-mapping` also maps ADC2 to master channel 2, where
+    its slave channel is 1.
+    - The channel mapping never reaches the bus. Only the WCD937x's
+      `get_channel_map` reads it, and on the TX link no DAI takes the map
+      that `qcom_snd_sdw_startup` hands on. linux-next `next-20261009` is
+      the same. The qcom master takes each port's channel mask from the
+      slave port.
+    - The I/O error is DAPM's doing. The sound node routes
+      `TX SWR_INPUT0` from `ADC1_OUTPUT` and `TX SWR_INPUT1` from
+      `ADC2_OUTPUT`. A decimator on SWR_MIC0 with ADC1 off has no complete
+      path, so DAPM leaves it off and the capture DMA gets nothing. ADC1
+      on SWR_MIC1 failed the same way. An input with no route, such as
+      SWR_MIC4, is an endpoint of its own, so its decimator runs and reads
+      an empty channel.
+    - Stock's WCD937x node gives ADC2's slave port offset 0 on lane 1, and
+      ADC1's offset 1 on lane 0, so in stock they cannot collide.
+- **The second ADC on a master port of its own** — plan 20261012n,
+  2026-10-12, a stay-up boot at 09:33 of kernel pkgrel 27 on device tree
+  variant A, `out/milestone/audio-mapA.dts`. The transcript is
+  `out/try-kernel/live-stayup-audio5a.txt`. Variant A maps ADC2's slave port
+  to master port 2, with `qcom,tx-port-mapping = <1 2 3 3>`, and gives master
+  port 2 the ADCs' sample interval. Port 2 already had offset 0 on lane 1,
+  which is what stock gives that slave port. The gains were 10, against
+  stock's 12.
+  - **Verified, ADC2 is on SWR_MIC4 and ADC1 still works:**
+    - ADC1 on SWR_MIC0 read 176.8 at 1 kHz with the tone, against 0.33
+      without it.
+    - ADC2 on AMIC3 gave real data on SWR_MIC4 and on no other input:
+      mean 0.3, 6727 distinct values, acrms 809.
+    - With both ADCs on, SWR_MIC0 still read 169.8 at 1 kHz, so the two no
+      longer collide.
+    - Stock does the same. Sony's stereo and endfire paths put ADC2 on
+      `SWRM_TX2_CH1` and read it as SWR_MIC4, and ADC1 on `SWRM_TX1_CH1`,
+      read as SWR_MIC0 (Verified: `mixer_paths_parrot_qrd_sku1.xml`, paths
+      `sony-handset-mic-audiorec-stereo` and `handset-dmic-endfire`). Stock
+      clocks ADC1 and ADC2 at the same 4.8 MHz (Verified: live.dts
+      `qcom,tx_swr_ch_map`), which is why port 2 takes port 1's interval.
+    - AMIC3 is Sony's second handset microphone, `sony-handset-mic-2nd-mono`
+      (Verified: the same file).
+  - **Verified, not yet the microphone:** ADC2's data carried no trace of
+    the tone. Its 1 kHz bin read 0.22, while ADC1 read 176.8 in the same
+    test. ADC2 ran because its own path, AMIC3 to `ADC2_OUTPUT`, is complete
+    inside the codec, but the board still routed `ADC2_OUTPUT` to SWR_INPUT1.
+  - Variant B was not booted. It only changed `qcom,tx-channel-mapping`,
+    which nothing on the TX path reads. The queue was stopped while it was
+    waiting for the phone.
+- **Both handset microphones heard, and the UCM drives them** — plan
+  20261012o, 2026-10-12, a stay-up boot at 09:45 of kernel pkgrel 27 on
+  device tree variant C, `out/milestone/audio-mapC.dts`. That is variant A
+  with ADC2's output routed to `TX SWR_INPUT4`, which is what kernel pkgrel
+  28 now carries. The transcript is `out/try-kernel/live-stayup-audio6.txt`.
+  The gains were stock's: ADC 12, decimator 84.
+  - **Verified, AMIC3 hears the speaker:** with the tone, its 1 kHz bin read
+    193.2, against 0.05 idle.
+  - **Verified, AMIC1 still does:** it read 19.7 with the tone, against 0.32
+    idle.
+  - **Verified, both at once:** a two-channel capture, decimator 0 on
+    SWR_MIC0 and decimator 1 on SWR_MIC4, read 20.3 on the first channel and
+    193.6 on the second.
+  - **Verified, the bias:** DAPM had MIC BIAS3, AMIC3, ADC2 and
+    `TX SWR_INPUT4` on while AMIC3 recorded. Those are software states,
+    read from debugfs, not from the codec.
+  - **Verified, AMIC2 with nothing plugged in:** acrms 4.9, with nothing at
+    1 kHz, as an open headset input should read.
+  - **Reasoned, AMIC3 is the top microphone:** it hears the top amplifier's
+    speaker about 20 dB louder than AMIC1 does. Stock's handset path uses
+    AMIC1.
+  - **Reasoned, the ADC gain control's scale is wrong:** going from 12 to 20,
+    with the speaker 9 dB louder, raised the 1 kHz bin 18.4 dB on AMIC1.
+    That leaves about 1.2 dB per step. In the second run on plan l's boot,
+    raising it to 10 from its boot value gave about 15 dB.
+    The control's TLV, shared by every WCD driver from wcd9335 on, claims
+    0.25 dB per step. Nothing in this tree says what the hardware's step
+    is.
+  - **Verified, the UCM on the phone:** after the round, the UCM tree in
+    `/tmp` held the packaged files.
+    - `alsaucm` listed Speaker, Headphones, Mic1 "Main Microphone", Mic2
+      "Headset Microphone" and Mic3 "Top Microphone".
+    - Its boot sequence set ADC1 and ADC2 to 12, and the speaker's level to
+      336.
+    - Mic1 and Mic3, each enabled through `alsaucm`, recorded the tone at
+      65.7 and 783.2. Both ADCs were still at 20 from the round.
+    - Enabling and then disabling each microphone left its ADC, its mux and
+      decimator 0 off again.
+  - The ADSP did not crash in the round or after it, and nothing oopsed.
+- **The card at boot, and the greeter's PulseAudio** — plan 20261012p,
+  2026-10-12, a stay-up boot at 09:59 of kernel pkgrel 28 and device pkgrel
+  11, with the bring-up blacklist gone. The transcript is
+  `out/try-kernel/live-stayup-audio7.txt`. The checks after it were run by
+  hand on the same boot.
+  - **Verified, the card loads on its own:** the Sony card was there 25 s
+    after boot. The package's UCM link was in `conf.d/sm6450`.
+  - **Verified, nobody was logged in:** the round expected the Phosh
+    session, but the phone was at phrog's lock screen. The only PulseAudio
+    running was the greeter's, run as `greetd` by phrog's gnome-session. It
+    was the only process holding the card, and only by its control device.
+  - **Verified, PulseAudio takes the UCM:** the greeter's PulseAudio had
+    the HiFi verb, with Speaker and Headphones sinks and a Mic1 source, and
+    Speaker and Mic1 as its defaults. With nothing plugged in, the jacks
+    marked Headphones and the headset microphone not available.
+  - **Verified, sound through PulseAudio both ways:** a 1 kHz tone played
+    to its Speaker sink and recorded from its Mic1 source read 12.56 at
+    1 kHz, against 0.06 at 1370 Hz. Without the tone it read 0.16.
+  - **Verified, the round's own sound check proved nothing:** its `pactl`
+    calls as `user` started a PulseAudio for that user, which had only the
+    null sink. Its tone went round through the null sink's monitor and
+    never reached the speaker.
+  - **Two PulseAudios at once:**
+    - Verified: a user PulseAudio started by hand beside the greeter's made
+      both sinks and the source, and a tone played through it was recorded
+      through it, at 3.22 against 0.24.
+    - Verified: killing the greeter's made its clients start another at
+      once, and after that the user's PulseAudio had only the null sink.
+    - Reasoned: the new one's probe of the card ran under the user's open
+      stream. In plan p's round the two started together as well.
+    - Reasoned: a real login ends the greeter's clients, so nothing would
+      start the greeter's PulseAudio again, and it leaves after 20 s idle.
+      Plan 20261012q tests that.
+  - **Verified, cosmetic:** `wcd937x_codec audio-codec: clk already
+    disabled` appears whenever the headphone path powers down.
+    `wcd937x_rx_clk_enable` counts no higher than 1, while HPHL, HPHR and
+    EAR each call `wcd937x_rx_clk_disable`. That is the upstream driver's,
+    not this board's.
+  - The ADSP did not crash and nothing oopsed. The accelerometer's iio
+    device and iio-sensor-proxy were up.
+- **Sound in the logged-in Phosh session** — plan 20261012q, 2026-10-12,
+  a stay-up boot at 10:17 of kernel pkgrel 29, the headset buttons'
+  thresholds added. The transcript is `out/try-kernel/live-stayup-audio8.txt`.
+  The checks after it were run by hand on the same boot.
+  - **Verified, the buttons' thresholds are read:** the WCD937x no longer
+    logs `missing qcom,mbhc-buttons-vthreshold-microvolt entry`.
+  - **Verified, a login through greetd:** `out/try-kernel/push/greet.py`
+    logs the test user in over greetd's socket, as typing the password on
+    phrog does, with the development password. greetd configures one
+    session at a time, and phrog starts one for its user as soon as it is
+    up, so the round's first try was refused with "a session is already
+    being configured". The second cancels phrog's session first, then
+    succeeds: phrog's session ended, and the user's Phosh session started.
+  - **Verified, the greeter's PulseAudio leaves:** it was gone 27 s after
+    the login. The session's PulseAudio, started with `--start` as the
+    session does, then held the card alone, with Speaker and Headphones
+    sinks, a Mic1 source, and Speaker and Mic1 as its defaults.
+  - **Verified, sound both ways in the session:** a 1 kHz tone played to
+    the default sink and recorded from the default source read 12.55 at
+    1 kHz, against 0.08 at 1370 Hz. Without the tone it read 0.13.
+  - **Verified, beside the greeter's:** before the login, a user
+    PulseAudio kept up by hand next to the greeter's made its sinks and
+    source on each of four starts, and a tone went through it both ways at
+    12.43. The two failures, in plan p's round and in this one's, were
+    both PulseAudios that a client started on its own between commands.
+    - Guess: a second one, started while the first's card was still
+      open, probed the card under it. Nothing in a real session starts
+      PulseAudio that way.
+  - **Verified, `amixer -c 0 cget` finds no codec control with the UCM
+    installed:** `amixer -D hw:0 cget` finds them. The round's helpers
+    now use `hw:`.
+  - The ADSP did not crash and nothing oopsed. The accelerometer's iio
+    device and iio-sensor-proxy were up.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -5179,16 +5474,26 @@ each entry says how much of it held.
   release has; `temp/mesa` backports it. With it, freedreno reports FD710
   (round 82), kmscube draws at the panel's 60 Hz (round 85), and Lomiri
   renders through it (rounds 86 and 87).
-- **Modem, Wi-Fi, audio, camera.** On mainline, the four remote
-  processors they run on are in pkgrel 15's series. Round 34 probed
-  them, and rounds 37, 52 and 57 booted the ADSP, which took the USB link
-  with it both times (see "Round 52"). Of what sits above them, only the WLAN node is
-  written. All of them need firmware from the stock partitions, which is
-  not redistributable and is not packaged here. Plan n read it from
-  `modem_b` into `out/firmware/`, which git ignores, and rounds push it
-  into the shell. Bluetooth is the exception: it needs only
-  linux-firmware's files, round 44 completed its setup (see "Round
-  44"), and its nodes are in pkgrel 16's series.
+- **Modem and camera.** On mainline, the remote processors are in
+  pkgrel 15's series, but nothing above the modem's or the camera's is
+  written. Wi-Fi, Bluetooth and sound, which this entry used to list,
+  now work in Phosh (see "The WLAN and Bluetooth in Phosh, and why
+  neither worked", and the sound entries from "Sound, a stage at a time"
+  on). Their firmware comes from the stock partitions. It is not
+  redistributable, and firmware-sony-pdx246 packages it for this phone
+  only.
+- **What sound still lacks.**
+  - The second speaker. Stock has a second AW882xx amplifier, at 0x34 on
+    QUP0's I2C2 (`i2c@988000`), with its reset on GPIO 27 and
+    `sound-channel = <1>` (Verified: live.dts). Only the first, on I2C0,
+    is described, so only that speaker plays.
+  - A headset. The headphone path, the headset microphone and the
+    buttons are described, but nothing has been plugged in.
+  - A capture volume. The ADC gain controls claim 0.25 dB a step, where a
+    step is worth over 1 dB here, so the UCM gives PulseAudio none (see
+    "Both handset microphones heard, and the UCM drives them").
+  - Recovery from an ADSP crash. The card does not come back on its own
+    (see "Sound, a stage at a time").
 - **No `soc-qcom-sm6450` package.** pmOS has no SoC package for this chip; the
   device package carries everything.
 - **`pmb install` cannot finish inside a rootless container**, because

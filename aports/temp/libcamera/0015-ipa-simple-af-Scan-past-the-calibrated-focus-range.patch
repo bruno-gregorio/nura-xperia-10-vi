@@ -1,0 +1,117 @@
+From d280613988aec3dbd895208554a147f0832b7465 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 19:01:58 -0300
+Subject: [PATCH 15/16] ipa: simple: af: Scan past the calibrated focus range
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Where a lens focuses at infinity and macro moves with its attitude and
+temperature, so a scan from the calibrated infinity to the calibrated
+macro can miss the sharpest position. Add infinityMargin and
+macroMargin tuning parameters that extend the scan by a fraction of the
+calibrated range at each end, as Qualcomm's CamX does with 0.15 and
+0.3. The lens position in dioptres is still reckoned from the
+calibrated ends.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ src/ipa/simple/algorithms/af.cpp | 26 ++++++++++++++++++++------
+ src/ipa/simple/algorithms/af.h   |  4 ++++
+ 2 files changed, 24 insertions(+), 6 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
+index 72fdccf..48044a9 100644
+--- a/src/ipa/simple/algorithms/af.cpp
++++ b/src/ipa/simple/algorithms/af.cpp
+@@ -92,11 +92,14 @@ int Af::init(IPAContext &context, const ValueNode &tuningData)
+ 	macroTuned_ = tuningData["macro"].get<int32_t>();
+ 	macroDioptres_ = tuningData["macroDioptres"].get<float>(10.0f);
+ 	defaultDioptres_ = tuningData["defaultPosition"].get<float>(0.5f);
++	infinityMargin_ = tuningData["infinityMargin"].get<double>(0.0);
++	macroMargin_ = tuningData["macroMargin"].get<double>(0.0);
+ 	coarseSteps_ = tuningData["coarseSteps"].get<unsigned int>(10);
+ 	minContrast_ = tuningData["minContrast"].get<double>(0.1);
+ 	rescanChange_ = tuningData["rescanChange"].get<double>(0.3);
+ 
+-	if (macroDioptres_ <= 0.0f || coarseSteps_ < 2) {
++	if (macroDioptres_ <= 0.0f || coarseSteps_ < 2 ||
++	    infinityMargin_ < 0.0 || macroMargin_ < 0.0) {
+ 		LOG(IPASoftAf, Error) << "Invalid tuning";
+ 		return -EINVAL;
+ 	}
+@@ -149,12 +152,23 @@ int Af::configure(IPAContext &context, const IPAConfigInfo &configInfo)
+ 		return 0;
+ 	}
+ 
++	/*
++	 * Where a calibrated lens focuses moves with its attitude and
++	 * temperature, so scan past both ends by a fraction of the range.
++	 */
++	const int32_t range = macro_ - infinity_;
++	scanFrom_ = std::clamp(infinity_ - static_cast<int32_t>(range * infinityMargin_),
++			       lensMin_, lensMax_);
++	scanTo_ = std::clamp(macro_ + static_cast<int32_t>(range * macroMargin_),
++			     lensMin_, lensMax_);
++
+ 	moveLens(lensFromDioptres(defaultDioptres_));
+ 	context.activeState.lens.position = position_;
+ 
+ 	LOG(IPASoftAf, Info)
+ 		<< "Lens " << lensMin_ << "-" << lensMax_
+-		<< ", infinity at " << infinity_ << ", macro at " << macro_;
++		<< ", infinity at " << infinity_ << ", macro at " << macro_
++		<< ", scanning " << scanFrom_ << "-" << scanTo_;
+ 
+ 	return 0;
+ }
+@@ -309,11 +323,11 @@ void Af::startScan(double brightness)
+ 	watching_ = false;
+ 	phase_ = Phase::Coarse;
+ 	state_ = controls::AfStateScanning;
+-	step_ = (macro_ - infinity_) / steps;
++	step_ = (scanTo_ - scanFrom_) / steps;
+ 	samples_.clear();
+ 	plan_.clear();
+ 	for (int32_t i = 0; i <= steps; i++)
+-		plan_.push_back(infinity_ + (macro_ - infinity_) * i / steps);
++		plan_.push_back(scanFrom_ + (scanTo_ - scanFrom_) * i / steps);
+ 	next_ = 0;
+ 
+ 	LOG(IPASoftAf, Debug) << "Scanning";
+@@ -371,8 +385,8 @@ void Af::scan(double sharpness)
+ 
+ 	/* Step finely across the coarse steps either side of the peak. */
+ 	const int32_t centre = best->first;
+-	const int32_t low = std::min(infinity_, macro_);
+-	const int32_t high = std::max(infinity_, macro_);
++	const int32_t low = std::min(scanFrom_, scanTo_);
++	const int32_t high = std::max(scanFrom_, scanTo_);
+ 	int32_t fine = step_ / kFineDivisions;
+ 	if (!fine)
+ 		fine = step_ < 0 ? -1 : 1;
+diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
+index f778dab..dd64a6f 100644
+--- a/src/ipa/simple/algorithms/af.h
++++ b/src/ipa/simple/algorithms/af.h
+@@ -57,6 +57,8 @@ private:
+ 	std::optional<int32_t> macroTuned_;
+ 	float macroDioptres_ = 10.0f;
+ 	float defaultDioptres_ = 0.5f;
++	double infinityMargin_ = 0.0;
++	double macroMargin_ = 0.0;
+ 	unsigned int coarseSteps_ = 10;
+ 	double minContrast_ = 0.1;
+ 	double rescanChange_ = 0.3;
+@@ -67,6 +69,8 @@ private:
+ 	int32_t lensMax_ = 0;
+ 	int32_t infinity_ = 0;
+ 	int32_t macro_ = 0;
++	int32_t scanFrom_ = 0;
++	int32_t scanTo_ = 0;
+ 	int32_t position_ = 0;
+ 
+ 	controls::AfModeEnum mode_ = controls::AfModeManual;
+-- 
+2.55.0
+

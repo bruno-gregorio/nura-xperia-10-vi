@@ -1,0 +1,60 @@
+From 01748d3481b76d68da7a6b6059f5d05b31d9fef4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 19:01:58 -0300
+Subject: [PATCH 13/16] pipeline: simple: Let the IPA set VBLANK
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An IPA that lengthens the exposure past the default frame length has to
+lengthen the frame too. Add VBLANK to the delayed controls when the
+sensor has it, as a priority write since it sets the exposure limit.
+
+Without a frame start signal the controls are written as soon as the IPA
+sends them, in one go, and the exposure is checked against the limit
+before VBLANK raises it. Write VBLANK on its own first there too.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ src/libcamera/pipeline/simple/simple.cpp | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/src/libcamera/pipeline/simple/simple.cpp b/src/libcamera/pipeline/simple/simple.cpp
+index 0157ece..f45de18 100644
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -572,6 +572,12 @@ SimpleCameraData::SimpleCameraData(SimplePipelineHandler *pipe,
+ 		{ V4L2_CID_ANALOGUE_GAIN, { delays.gainDelay, false } },
+ 		{ V4L2_CID_EXPOSURE, { delays.exposureDelay, false } },
+ 	};
++	/*
++	 * The IPA may lengthen frames to lengthen the exposure. VBLANK sets
++	 * the exposure limit, so it is written ahead of the exposure.
++	 */
++	if (sensor_->controls().count(V4L2_CID_VBLANK))
++		params[V4L2_CID_VBLANK] = { delays.vblankDelay, true };
+ 	delayedCtrls_ = std::make_unique<DelayedControls>(sensor_->device(), params);
+ 
+ 	LOG(SimplePipeline, Debug)
+@@ -1056,7 +1062,17 @@ void SimpleCameraData::setSensorControls(const ControlList &sensorControls,
+ 	 * Both problems should be fixed.
+ 	 */
+ 	if (!frameStartEmitter_) {
+-		ControlList ctrls(sensorControls);
++		/* VBLANK goes first, as DelayedControls writes it. */
++		ControlList vblank(sensor_->controls());
++		ControlList ctrls(sensor_->controls());
++		for (const auto &[id, value] : sensorControls) {
++			if (id == V4L2_CID_VBLANK)
++				vblank.set(id, value);
++			else
++				ctrls.set(id, value);
++		}
++		if (!vblank.empty())
++			sensor_->setControls(&vblank);
+ 		sensor_->setControls(&ctrls);
+ 	}
+ 
+-- 
+2.55.0
+

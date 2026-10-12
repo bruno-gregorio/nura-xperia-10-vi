@@ -3,15 +3,17 @@
 # Xperia 10 VI's cameras: the Sony IMX582's sensor properties and helper
 # (0007), a helper for the Hynix Hi-846 (0008), a contrast detection
 # autofocus for the soft IPA (0009 to 0011), the soft IPA's line duration
-# taken from the configured mode (0012), and an IMX582 tuning file
-# that, like imx519.yaml, borrows the IMX363's colour matrices and runs
-# the autofocus continuously. Drop this fork once libcamera has all of
-# them. pkgrel is pmaports' plus 100, plus one per change here.
+# taken from the configured mode (0012), longer frames and digital gain
+# in low light (0013, 0014), a focus scan past the calibrated range
+# (0015), a tuning file of its own for a front camera (0016), and tuning
+# files for the IMX582 and both Hi-846 modules with Sony's colour
+# matrices. Drop this fork once libcamera has all of them. pkgrel is
+# pmaports' plus 100, plus one per change here.
 maintainer="Robert Mader <robert.mader@collabora.com>"
 pkgname=libcamera
 _pkgver=0.7.2
 pkgver=9999$_pkgver
-pkgrel=109
+pkgrel=110
 pkgdesc="Linux camera framework"
 url="https://libcamera.org/"
 arch="all"
@@ -55,6 +57,7 @@ subpackages="
 	"
 _tuning_files="
 	hi846.yaml
+	hi846-front.yaml
 	imx355.yaml
 	imx363.yaml
 	imx371.yaml
@@ -79,6 +82,10 @@ source="https://gitlab.freedesktop.org/camera/libcamera/-/archive/v$_pkgver/libc
 	0010-libcamera-software_isp-Measure-focus-in-the-statisti.patch
 	0011-ipa-simple-Add-a-contrast-detection-autofocus.patch
 	0012-ipa-simple-Compute-the-line-duration-at-configure-ti.patch
+	0013-pipeline-simple-Let-the-IPA-set-VBLANK.patch
+	0014-ipa-simple-agc-Lengthen-frames-and-add-digital-gain-.patch
+	0015-ipa-simple-af-Scan-past-the-calibrated-focus-range.patch
+	0016-software_isp-Look-for-a-front-camera-tuning-file.patch
 	qcam.desktop
 	$_tuning_files
 	"
@@ -205,14 +212,19 @@ faf4b577702f96b6b9b4db36755fe64366111666242e1c3dc6f1b92b30b9e9fbceb234c813428cdc
 5c67cee552dc9ea77cbf6d266c3eb82d61dbc24cbe51e749b21688b6aa12d2a74e2f868efc33caa826fa16a8a6fe3a10bcb2170f2ccf026791e823a7fcbf754c  0010-libcamera-software_isp-Measure-focus-in-the-statisti.patch
 5641c254f7a3eb41d753d3ae8b55400617476ae6bc709db574e5e474abc6aba9ce423d5bb245ddf1313b61d68b02672cf36f422045151c780e255429652fb7f5  0011-ipa-simple-Add-a-contrast-detection-autofocus.patch
 1f8093b718e21d46b7a33ea90d6ff7036d2c15970dbd90873cca645fd6490a32031447ab284788d801e91a753363f5d8f7554b61e73e488992d8e59e260f9135  0012-ipa-simple-Compute-the-line-duration-at-configure-ti.patch
+655f814dfec8638b77149a1a5954b878c0539a4423f8cd25425267f1eb1658338a233e13232f5312defab219660575fb3ebf028ac8de5861d8f5cb87d9e5703f  0013-pipeline-simple-Let-the-IPA-set-VBLANK.patch
+85b6585a97ff0648ba07531256d7aa5eccfc3acbc33bce3a060ef73bfb201a6d879c9faa0b1f9212043916ee9e16cc74eea5cbce0ccfaaf88e68890a437df4e4  0014-ipa-simple-agc-Lengthen-frames-and-add-digital-gain-.patch
+aa0f7a1152764e4d1891873f38407fb40c70ebde60d8b88abe943f010f3cd3160bb00905b86237d1c982c71a6dcdb4b648a7e3c52f06488523b0856fbd8b34ad  0015-ipa-simple-af-Scan-past-the-calibrated-focus-range.patch
+763511316d4353251cac572de39daf005be92161b2887ddfce4ff98268aa3bd472cc784ceb3f6cab9470f5978aa24c138f5af700ce0f3aee609e6d79dbb8d531  0016-software_isp-Look-for-a-front-camera-tuning-file.patch
 22167a4eceb6d1b40b0b7c45fdf116c71684f5340de7f767535cb8e160ad9d2ae0f00cb3d461f73a344520a48a4641cf46226841d78bee06bfbfd2a91337f754  qcam.desktop
-2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  hi846.yaml
+fd396e845772d93f9e3593e9ea71391d4a507aee8119e6230521534440c7294edc7bd805d5900a81c1680e43b29332901ab7dd1df4517eadc02b60cc745ea4a1  hi846.yaml
+be77af1c742d8d9b31c0eab1d8b6394abc0098de41c55c2289bac7cbb740acf102786d0d5959b0da942a0f94f7d97f6dcd665716633d6d38ddd500f1c3abfe11  hi846-front.yaml
 4942edd551dcf51630246f71e600c17760d3574d5d45e5530d6cfeefe2c9ab1a812fbe220f8e89d92e19a499c592b2507c801ca4eb74cd15fcecb60bff5c650b  imx355.yaml
 285c6d0d712df341c0117c3762ddc139f53f44e6be36c3388d1a62696429175e2916f392163131e21f410c3676f02f5d125f375171f45f8d82ad278aa5076c62  imx363.yaml
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx371.yaml
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx376.yaml
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx519.yaml
-41ffee8609f9c5bbf3e800723318f8f9f411a3844e7d61e6b6da339b0a42b9e1d3298e65d9477cd07aac735f4571f9ec6b5885fe915d2c3d38ed51c912745880  imx582.yaml
+3112a1f67776fa14f2dc788d97dc525bab74d1b6f866248f6d3d33ebda869818a6c7e0a84ec24791496ebfda838fd32bc09e003e9e54073dd1fa2c50e86dce93  imx582.yaml
 55dab9dcb9b1982143b9d63e4e51138c5bffd7c8f4a8e4e122750b3ad9d475446956bc297d9f564819ade4be75a575d06633a064e14f8ba3ef77986783c5f067  imx800.yaml
 55dab9dcb9b1982143b9d63e4e51138c5bffd7c8f4a8e4e122750b3ad9d475446956bc297d9f564819ade4be75a575d06633a064e14f8ba3ef77986783c5f067  imx858.yaml
 2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  s5k3l6xx.yaml

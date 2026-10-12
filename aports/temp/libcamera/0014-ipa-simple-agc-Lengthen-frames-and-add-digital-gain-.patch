@@ -1,0 +1,406 @@
+From cc1db2268f9e689b64441880bbf96fb87a12cbdd Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 19:01:58 -0300
+Subject: [PATCH 14/16] ipa: simple: agc: Lengthen frames and add digital gain
+ in low light
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The AGC stops at the longest exposure the default frame length allows
+and the sensor's highest analogue gain. On an SK Hynix Hi-846 that is
+33 ms and 16x, and indoor scenes come out dark, where the vendor's
+camera stack goes to 66.7 ms and 128x total gain.
+
+Add two optional tuning parameters. exposureTimeMax lets the exposure
+grow past the default frame length, lengthening the frame through
+VBLANK, once analogue gain is at its maximum. digitalGainMax lets the
+software ISP multiply the colour gains after that. The exposure margin
+the sensor keeps below the frame length is taken from the limits it
+reports for the configured mode. Without the parameters nothing changes.
+
+The software ISP applies the gains after subtracting the black level,
+so black stays black. The statistics are taken from the raw frame, so
+the AGC stretches their histogram by the digital gain it applies.
+
+So that the AGC can multiply the colour gains, the IPA resets them for
+every frame and Awb multiplies them rather than replacing them.
+
+Report DigitalGain, and FrameDuration when the AGC sets the frame
+length.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ src/ipa/simple/algorithms/agc.cpp | 167 +++++++++++++++++++++++++++---
+ src/ipa/simple/algorithms/agc.h   |  21 ++++
+ src/ipa/simple/algorithms/awb.cpp |   2 +-
+ src/ipa/simple/ipa_context.h      |   3 +
+ src/ipa/simple/soft_simple.cpp    |   6 ++
+ 5 files changed, 182 insertions(+), 17 deletions(-)
+
+diff --git a/src/ipa/simple/algorithms/agc.cpp b/src/ipa/simple/algorithms/agc.cpp
+index a13a755..89ee4bc 100644
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -11,6 +11,8 @@
+ #include <cmath>
+ #include <stdint.h>
+ 
++#include <linux/v4l2-controls.h>
++
+ #include <libcamera/base/log.h>
+ 
+ #include "control_ids.h"
+@@ -65,10 +67,108 @@ Agc::Agc()
+ {
+ }
+ 
++/*
++ * Two optional tuning parameters let the AGC go past the sensor's default
++ * frame length and its analogue gain in low light: exposureTimeMax, the
++ * longest exposure in microseconds, for which frames are lengthened, and
++ * digitalGainMax, the highest gain the software ISP applies on top.
++ */
++int Agc::init([[maybe_unused]] IPAContext &context, const ValueNode &tuningData)
++{
++	std::optional<double> exposureTimeMax =
++		tuningData["exposureTimeMax"].get<double>();
++	if (exposureTimeMax) {
++		if (*exposureTimeMax <= 0.0) {
++			LOG(IPASoftExposure, Error) << "Invalid exposureTimeMax";
++			return -EINVAL;
++		}
++		exposureTimeMax_ = std::chrono::duration<double, std::micro>(*exposureTimeMax);
++	}
++
++	digitalGainMax_ = tuningData["digitalGainMax"].get<double>(1.0);
++	if (digitalGainMax_ < 1.0) {
++		LOG(IPASoftExposure, Error) << "Invalid digitalGainMax";
++		return -EINVAL;
++	}
++
++	return 0;
++}
++
++int Agc::configure(IPAContext &context, const IPAConfigInfo &configInfo)
++{
++	const auto &limits = context.configuration.agc;
++
++	context.activeState.agc.digitalGain = 1.0;
++	exposureMaxLong_ = limits.exposureMax;
++	longFrames_ = false;
++
++	const auto it = configInfo.sensorControls.find(V4L2_CID_VBLANK);
++	if (exposureTimeMax_ && it != configInfo.sensorControls.end()) {
++		const int32_t height = context.sensorInfo.outputSize.height;
++
++		/*
++		 * Setting the format put the frame length and the exposure
++		 * limit at their defaults, so the margin the sensor keeps
++		 * between the two follows from them.
++		 */
++		vblankDefault_ = it->second.def().get<int32_t>();
++		vblankMax_ = it->second.max().get<int32_t>();
++		exposureMargin_ = height + vblankDefault_ - limits.exposureMax;
++
++		const int32_t lines =
++			static_cast<int32_t>(*exposureTimeMax_ / limits.lineDuration);
++		const int32_t longest = height + vblankMax_ - exposureMargin_;
++		if (exposureMargin_ >= 0 && lines > limits.exposureMax &&
++		    longest > limits.exposureMax) {
++			exposureMaxLong_ = std::min(lines, longest);
++			longFrames_ = true;
++		}
++	}
++
++	LOG(IPASoftExposure, Info)
++		<< "Exposure up to " << exposureMaxLong_ << " lines ("
++		<< utils::Duration(limits.lineDuration * exposureMaxLong_).get<std::milli>()
++		<< " ms), digital gain up to " << digitalGainMax_;
++
++	return 0;
++}
++
++void Agc::prepare(IPAContext &context,
++		  [[maybe_unused]] const uint32_t frame,
++		  IPAFrameContext &frameContext,
++		  DebayerParams *params)
++{
++	/*
++	 * The software ISP applies the gains after it subtracts the black
++	 * level, so digital gain there leaves black where it was.
++	 */
++	frameContext.digitalGain = context.activeState.agc.digitalGain;
++	params->gains *= static_cast<float>(frameContext.digitalGain);
++}
++
++/*
++ * Lengthen the frame to fit the exposure, never below the mode's default
++ * frame length.
++ */
++void Agc::setFrameLength(IPAContext &context, IPAFrameContext &frameContext)
++{
++	if (!longFrames_) {
++		frameContext.sensor.vblank.reset();
++		return;
++	}
++
++	const int32_t height = context.sensorInfo.outputSize.height;
++	frameContext.sensor.vblank =
++		std::clamp(frameContext.sensor.exposure + exposureMargin_ - height,
++			   vblankDefault_, vblankMax_);
++}
++
+ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV)
+ {
++	const auto &limits = context.configuration.agc;
+ 	int32_t &exposure = frameContext.sensor.exposure;
+ 	double &again = frameContext.sensor.gain;
++	double &dgain = context.activeState.agc.digitalGain;
+ 
+ 	double error = kExposureOptimal - exposureMSV;
+ 
+@@ -85,23 +185,39 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
+ 	float factor = 1.0f + step;
+ 
+ 	if (factor > 1.0f) {
+-		/* Scene too dark: increase exposure first, then gain. */
+-		if (exposure < context.configuration.agc.exposureMax) {
++		/*
++		 * Scene too dark: increase exposure within the default frame
++		 * length first, then analogue gain, then lengthen the frames
++		 * for more exposure, and add digital gain last.
++		 */
++		if (exposure < limits.exposureMax) {
+ 			int32_t next = static_cast<int32_t>(exposure * factor);
+-			exposure = std::max(next, exposure + 1);
+-		} else {
++			exposure = std::min(std::max(next, exposure + 1),
++					    limits.exposureMax);
++		} else if (again < limits.againMax) {
+ 			double next = again * factor;
+-			if (next - again < context.configuration.agc.againMinStep)
+-				again += context.configuration.agc.againMinStep;
++			if (next - again < limits.againMinStep)
++				again += limits.againMinStep;
+ 			else
+ 				again = next;
++		} else if (exposure < exposureMaxLong_) {
++			int32_t next = static_cast<int32_t>(exposure * factor);
++			exposure = std::max(next, exposure + 1);
++		} else {
++			dgain *= factor;
+ 		}
+ 	} else {
+-		/* Scene too bright: decrease gain first, then exposure. */
+-		if (again > context.configuration.agc.again10) {
++		/* Scene too bright: undo the same steps in reverse order. */
++		if (dgain > 1.0) {
++			dgain *= factor;
++		} else if (exposure > limits.exposureMax) {
++			int32_t next = static_cast<int32_t>(exposure * factor);
++			exposure = std::max(std::min(next, exposure - 1),
++					    limits.exposureMax);
++		} else if (again > limits.again10) {
+ 			double next = again * factor;
+-			if (again - next < context.configuration.agc.againMinStep)
+-				again -= context.configuration.agc.againMinStep;
++			if (again - next < limits.againMinStep)
++				again -= limits.againMinStep;
+ 			else
+ 				again = next;
+ 		} else {
+@@ -110,10 +226,9 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
+ 		}
+ 	}
+ 
+-	exposure = std::clamp(exposure, context.configuration.agc.exposureMin,
+-			      context.configuration.agc.exposureMax);
+-	again = std::clamp(again, context.configuration.agc.againMin,
+-			   context.configuration.agc.againMax);
++	exposure = std::clamp(exposure, limits.exposureMin, exposureMaxLong_);
++	again = std::clamp(again, limits.againMin, limits.againMax);
++	dgain = std::clamp(dgain, 1.0, digitalGainMax_);
+ 
+ 	context.activeState.agc.exposure = exposure;
+ 	context.activeState.agc.again = again;
+@@ -121,7 +236,8 @@ void Agc::updateExposure(IPAContext &context, IPAFrameContext &frameContext, dou
+ 	LOG(IPASoftExposure, Debug)
+ 		<< "exposureMSV " << exposureMSV
+ 		<< " error " << error << " factor " << factor
+-		<< " exp " << exposure << " again " << again;
++		<< " exp " << exposure << " again " << again
++		<< " dgain " << dgain;
+ }
+ 
+ void Agc::process(IPAContext &context,
+@@ -134,6 +250,14 @@ void Agc::process(IPAContext &context,
+ 		context.configuration.agc.lineDuration * frameContext.sensor.exposure;
+ 	metadata.set(controls::ExposureTime, exposureTime.get<std::micro>());
+ 	metadata.set(controls::AnalogueGain, frameContext.sensor.gain);
++	if (frameContext.digitalGain > 0.0)
++		metadata.set(controls::DigitalGain, frameContext.digitalGain);
++	if (frameContext.sensor.vblank) {
++		utils::Duration frameDuration = context.configuration.agc.lineDuration *
++			static_cast<int32_t>(context.sensorInfo.outputSize.height +
++					     *frameContext.sensor.vblank);
++		metadata.set(controls::FrameDuration, frameDuration.get<std::micro>());
++	}
+ 
+ 	if (!context.activeState.agc.valid) {
+ 		/*
+@@ -152,6 +276,7 @@ void Agc::process(IPAContext &context,
+ 		 */
+ 		frameContext.sensor.exposure = context.activeState.agc.exposure;
+ 		frameContext.sensor.gain = context.activeState.agc.again;
++		setFrameLength(context, frameContext);
+ 		return;
+ 	}
+ 
+@@ -174,11 +299,20 @@ void Agc::process(IPAContext &context,
+ 	if (yHistValsPerBin == 0) {
+ 		LOG(IPASoftExposure, Debug)
+ 			<< "Not adjusting exposure due to insufficient histogram data";
++		setFrameLength(context, frameContext);
+ 		return;
+ 	}
+ 
++	/*
++	 * The statistics are those of the raw frame. Stretch the histogram
++	 * above the black level by the digital gain to see the frame the
++	 * software ISP outputs.
++	 */
++	const double dgain = context.activeState.agc.digitalGain;
+ 	for (unsigned int i = 0; i < histogramSize; i++) {
+-		unsigned int idx = (i - (i / yHistValsPerBinMod)) / yHistValsPerBin;
++		unsigned int j = std::min(static_cast<unsigned int>(i * dgain),
++					  histogramSize - 1);
++		unsigned int idx = (j - (j / yHistValsPerBinMod)) / yHistValsPerBin;
+ 		exposureBins[idx] += histogram[blackLevelHistIdx + i];
+ 	}
+ 
+@@ -190,6 +324,7 @@ void Agc::process(IPAContext &context,
+ 
+ 	float exposureMSV = (denom == 0 ? 0 : static_cast<float>(num) / denom);
+ 	updateExposure(context, frameContext, exposureMSV);
++	setFrameLength(context, frameContext);
+ }
+ 
+ REGISTER_IPA_ALGORITHM(Agc, "Agc")
+diff --git a/src/ipa/simple/algorithms/agc.h b/src/ipa/simple/algorithms/agc.h
+index 112d9f5..cee67fa 100644
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -7,6 +7,10 @@
+ 
+ #pragma once
+ 
++#include <optional>
++
++#include <libcamera/base/utils.h>
++
+ #include "algorithm.h"
+ 
+ namespace libcamera {
+@@ -19,6 +23,11 @@ public:
+ 	Agc();
+ 	~Agc() = default;
+ 
++	int init(IPAContext &context, const ValueNode &tuningData) override;
++	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
++	void prepare(IPAContext &context, const uint32_t frame,
++		     IPAFrameContext &frameContext,
++		     DebayerParams *params) override;
+ 	void process(IPAContext &context, const uint32_t frame,
+ 		     IPAFrameContext &frameContext,
+ 		     const SwIspStats *stats,
+@@ -26,6 +35,18 @@ public:
+ 
+ private:
+ 	void updateExposure(IPAContext &context, IPAFrameContext &frameContext, double exposureMSV);
++	void setFrameLength(IPAContext &context, IPAFrameContext &frameContext);
++
++	/* Tuning */
++	std::optional<utils::Duration> exposureTimeMax_;
++	double digitalGainMax_ = 1.0;
++
++	/* Session */
++	int32_t exposureMaxLong_ = 0;
++	int32_t exposureMargin_ = 0;
++	int32_t vblankDefault_ = 0;
++	int32_t vblankMax_ = 0;
++	bool longFrames_ = false;
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+diff --git a/src/ipa/simple/algorithms/awb.cpp b/src/ipa/simple/algorithms/awb.cpp
+index 05155c8..92ed0bb 100644
+--- a/src/ipa/simple/algorithms/awb.cpp
++++ b/src/ipa/simple/algorithms/awb.cpp
+@@ -40,7 +40,7 @@ void Awb::prepare(IPAContext &context,
+ 	auto &gains = context.activeState.awb.gains;
+ 
+ 	frameContext.gains = gains;
+-	params->gains = gains;
++	params->gains *= gains;
+ }
+ 
+ void Awb::process(IPAContext &context,
+diff --git a/src/ipa/simple/ipa_context.h b/src/ipa/simple/ipa_context.h
+index ac32537..49d2a78 100644
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -39,6 +39,7 @@ struct IPAActiveState {
+ 	struct {
+ 		int32_t exposure;
+ 		double again;
++		double digitalGain;
+ 		bool valid;
+ 	} agc;
+ 
+@@ -73,9 +74,11 @@ struct IPAFrameContext : public FrameContext {
+ 	struct {
+ 		int32_t exposure;
+ 		double gain;
++		std::optional<int32_t> vblank;
+ 	} sensor;
+ 
+ 	RGB<float> gains;
++	double digitalGain;
+ 
+ 	float gamma;
+ 	std::optional<float> contrast;
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index 8147787..e69fdc6 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -302,6 +302,7 @@ void IPASoftSimple::queueRequest(const uint32_t frame, const ControlList &contro
+ void IPASoftSimple::computeParams(const uint32_t frame)
+ {
+ 	context_.activeState.combinedMatrix = Matrix<float, 3, 3>::identity();
++	params_->gains = RGB<float>({ 1.0f, 1.0f, 1.0f });
+ 
+ 	IPAFrameContext &frameContext = context_.frameContexts.get(frame);
+ 	for (const auto &algo : algorithms())
+@@ -321,6 +322,9 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 		sensorControls.get(V4L2_CID_EXPOSURE).get<int32_t>();
+ 	int32_t again = sensorControls.get(V4L2_CID_ANALOGUE_GAIN).get<int32_t>();
+ 	frameContext.sensor.gain = camHelper_ ? camHelper_->gain(again) : again;
++	if (sensorControls.contains(V4L2_CID_VBLANK))
++		frameContext.sensor.vblank =
++			sensorControls.get(V4L2_CID_VBLANK).get<int32_t>();
+ 
+ 	ControlList metadata(controls::controls);
+ 	for (const auto &algo : algorithms())
+@@ -340,6 +344,8 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 	ctrls.set(V4L2_CID_EXPOSURE, frameContext.sensor.exposure);
+ 	ctrls.set(V4L2_CID_ANALOGUE_GAIN,
+ 		  static_cast<int32_t>(camHelper_ ? camHelper_->gainCode(againNew) : againNew));
++	if (frameContext.sensor.vblank)
++		ctrls.set(V4L2_CID_VBLANK, *frameContext.sensor.vblank);
+ 
+ 	/* Move the lens only if an algorithm has placed it. */
+ 	ControlList lensCtrls;
+-- 
+2.55.0
+

@@ -1,0 +1,86 @@
+#!/bin/sh
+# Run before hexagonrpcd-adsp-sensorspd starts; see the start_pre in
+# /usr/share/hexagonrpcd/hexagonrpcd-adsp-sensorspd.conf.
+#
+# The ADSP's sensors domain publishes its physical sensors only if
+# hexagonrpcd attaches within some 25 s of the ADSP booting. Any later and it
+# publishes five sensors, none of them physical, and keeps to that until the
+# ADSP restarts. Stock Android starts its own daemon within moments, so it
+# never sees this. Rounds 78 to 80 in the port's docs/05-status.md have the
+# measurements.
+#
+# So this waits for the ADSP's FastRPC device, and if the ADSP came up more
+# than $max seconds ago, or when that cannot be told, restarts it through its
+# remoteproc and waits for the device again. A restart takes a few seconds,
+# during which the charger's and USB-C's link to the ADSP is down.
+
+max=15
+
+log() {
+	echo "hexagonrpcd-adsp-fresh: $*"
+	echo "hexagonrpcd-adsp-fresh: $*" > /dev/kmsg 2>/dev/null
+}
+
+uptime_s() {
+	cut -d. -f1 /proc/uptime
+}
+
+# Waits up to $1 tenths of a second for the device to be present, or with
+# "gone", to be absent.
+wait_dev() {
+	i=0
+	while [ "$i" -lt "$1" ]; do
+		if [ "$2" = gone ]; then
+			[ -e /dev/fastrpc-adsp ] || return 0
+		else
+			[ -e /dev/fastrpc-adsp ] && return 0
+		fi
+		sleep 0.1
+		i=$((i + 1))
+	done
+	return 1
+}
+
+adsp=
+for r in /sys/class/remoteproc/remoteproc*; do
+	[ "$(cat "$r/name" 2>/dev/null)" = adsp ] && adsp=$r
+done
+if [ -z "$adsp" ]; then
+	log "no ADSP remoteproc, leaving it be"
+	exit 0
+fi
+
+# udev's coldplug boots the ADSP, and the device follows within a second or
+# so of its firmware loading.
+if ! wait_dev 300; then
+	log "no /dev/fastrpc-adsp after 30 s, ADSP $(cat "$adsp/state")"
+	exit 0
+fi
+
+# printk's clock does not count suspend and uptime does, so after a suspend
+# the age comes out too high, which errs towards a restart.
+now=$(uptime_s)
+up=$(dmesg | sed -n 's/^\[ *\([0-9]*\)\.[0-9]*\] remoteproc remoteproc[0-9]*: remote processor adsp is now up$/\1/p' | tail -n 1)
+if [ -n "$up" ] && [ $((now - up)) -le "$max" ]; then
+	log "ADSP up at $up s, now $now s, no restart"
+	exit 0
+fi
+
+log "ADSP up at ${up:+$up s}${up:-an unknown time}, now $now s, restarting it"
+echo stop > "$adsp/state"
+i=0
+while [ "$(cat "$adsp/state")" != offline ] && [ "$i" -lt 50 ]; do
+	sleep 0.1
+	i=$((i + 1))
+done
+wait_dev 50 gone
+echo start > "$adsp/state"
+if ! wait_dev 300; then
+	log "no /dev/fastrpc-adsp 30 s after the restart, ADSP $(cat "$adsp/state")"
+	exit 1
+fi
+
+# An attach in the first moments after the device appears fails with
+# "No session available" (round 79).
+sleep 1
+log "ADSP restarted, ready at $(uptime_s) s"

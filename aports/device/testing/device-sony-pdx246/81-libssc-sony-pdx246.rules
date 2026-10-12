@@ -1,0 +1,8 @@
+# iio-sensor-proxy with libssc: accelerometer mount matrix
+#
+# libssc hands over the accelerometer in Android's frame, which the sensors
+# registry's orient settings have already mapped each chip onto: lying face
+# up it reads +9.8 m/s² along z (round 78). Most libssc devices negate every
+# axis for iio-sensor-proxy, and so does this one until turning the phone in
+# hand says otherwise.
+SUBSYSTEM=="misc", KERNEL=="fastrpc-*", ENV{ACCEL_MOUNT_MATRIX}+="-1, 0, 0; 0, -1, 0; 0, 0, -1"

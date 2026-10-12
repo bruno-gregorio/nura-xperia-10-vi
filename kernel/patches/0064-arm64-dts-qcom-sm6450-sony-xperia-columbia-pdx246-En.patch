@@ -1,0 +1,302 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 07:40:11 -0300
+Subject: [PATCH] arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable
+ audio
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Describe the WCD9370 codec with its two SoundWire devices, the top
+AW88261 speaker amplifier on I2C0, and a sound card with headphone,
+microphone and speaker links. The supplies, reset lines, micbias
+voltages and amplifier channel are the vendor tree's, and so is the
+speaker's bit clock, the LPASS speaker I2S clock.
+
+The bottom amplifier sits on I2C2, which the vendor tree marks as shared
+with another execution environment. It is left out until that bus is
+known to be usable.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 203 ++++++++++++++++++
+ 1 file changed, 203 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index 45d513710..a37ed9ca7 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -9,6 +9,7 @@
+ #include <dt-bindings/input/input.h>
+ #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+ #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
++#include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
+ 
+ #define PMK8350_SID 0
+ 
+@@ -27,6 +28,30 @@ aliases {
+ 		serial1 = &uart11;
+ 	};
+ 
++	wcd9370: audio-codec {
++		compatible = "qcom,wcd9370-codec";
++
++		pinctrl-0 = <&wcd_default>;
++		pinctrl-names = "default";
++
++		reset-gpios = <&tlmm 102 GPIO_ACTIVE_LOW>;
++
++		vdd-buck-supply = <&pm6450_l20>;
++		vdd-rxtx-supply = <&pm6450_l21>;
++		vdd-px-supply = <&pm6450_l21>;
++		vdd-mic-bias-supply = <&pm6150l_bob>;
++
++		qcom,micbias1-microvolt = <1800000>;
++		qcom,micbias2-microvolt = <1800000>;
++		qcom,micbias3-microvolt = <1800000>;
++		qcom,micbias4-microvolt = <1800000>;
++
++		qcom,rx-device = <&wcd937x_rx>;
++		qcom,tx-device = <&wcd937x_tx>;
++
++		#sound-dai-cells = <1>;
++	};
++
+ 	chosen {
+ 		stdout-path = "serial0:115200n8";
+ 	};
+@@ -104,6 +129,75 @@ ts_avdd: regulator-ts-avdd {
+ 		gpio = <&tlmm 103 GPIO_ACTIVE_HIGH>;
+ 		enable-active-high;
+ 	};
++
++	/*
++	 * AMIC1 is the main microphone, AMIC2 the headset one and AMIC3 the
++	 * second internal one. The speakers are two Awinic amplifiers on the
++	 * LPASS I2S1 lines; the one on QUP0 SE0 also serves as the earpiece.
++	 */
++	sound {
++		compatible = "qcom,sm6450-sndcard", "qcom,sm8450-sndcard";
++		model = "Sony-Xperia-10-VI";
++
++		pinctrl-0 = <&i2s1_active>;
++		pinctrl-names = "default";
++
++		audio-routing = "IN1_HPHL", "HPHL_OUT",
++				"IN2_HPHR", "HPHR_OUT",
++				"AMIC1", "MIC BIAS1",
++				"AMIC2", "MIC BIAS2",
++				"AMIC3", "MIC BIAS3",
++				"TX SWR_ADC0", "ADC1_OUTPUT",
++				"TX SWR_ADC1", "ADC2_OUTPUT";
++
++		speaker-dai-link {
++			link-name = "Speaker Playback";
++
++			codec {
++				sound-dai = <&amp_top>;
++			};
++
++			cpu {
++				sound-dai = <&q6apmbedai QUINARY_MI2S_RX>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
++		wcd-playback-dai-link {
++			link-name = "WCD Playback";
++
++			codec {
++				sound-dai = <&wcd9370 0>, <&swr1 0>, <&rxmacro 0>;
++			};
++
++			cpu {
++				sound-dai = <&q6apmbedai RX_CODEC_DMA_RX_0>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++
++		wcd-capture-dai-link {
++			link-name = "WCD Capture";
++
++			codec {
++				sound-dai = <&wcd9370 1>, <&swr2 0>, <&txmacro 0>;
++			};
++
++			cpu {
++				sound-dai = <&q6apmbedai TX_CODEC_DMA_TX_3>;
++			};
++
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++	};
+ };
+ 
+ &apps_rsc {
+@@ -342,6 +436,25 @@ &gpu_zap_shader {
+ 	firmware-name = "qcom/sm6450/Sony/columbia/a710_zap.mbn";
+ };
+ 
++&i2c0 {
++	status = "okay";
++
++	amp_top: audio-codec@34 {
++		compatible = "awinic,aw88261";
++		reg = <0x34>;
++
++		reset-gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
++
++		pinctrl-0 = <&amp_top_reset>;
++		pinctrl-names = "default";
++
++		awinic,audio-channel = <0>;
++		sound-name-prefix = "Top";
++
++		#sound-dai-cells = <0>;
++	};
++};
++
+ &i2c9 {
+ 	status = "okay";
+ 
+@@ -362,6 +475,10 @@ touchscreen@38 {
+ 	};
+ };
+ 
++&lpass_tlmm {
++	status = "okay";
++};
++
+ &mdss {
+ 	status = "okay";
+ };
+@@ -440,6 +557,17 @@ &pon_resin {
+ 	status = "okay";
+ };
+ 
++&q6apmbedai {
++	#address-cells = <1>;
++	#size-cells = <0>;
++
++	dai@127 {
++		reg = <QUINARY_MI2S_RX>;
++		clocks = <&q6prmcc LPASS_CLK_ID_SPEAKER_I2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
++		clock-names = "bclk";
++	};
++};
++
+ &qupv3_id_0 {
+ 	status = "okay";
+ };
+@@ -472,6 +600,10 @@ &remoteproc_wpss {
+ 	status = "okay";
+ };
+ 
++&rxmacro {
++	status = "okay";
++};
++
+ &sdc2_off_state {
+ 	sd-cd-pins {
+ 		pins = "gpio107";
+@@ -502,7 +634,63 @@ &sdhc_2 {
+ 	status = "okay";
+ };
+ 
++&swr1 {
++	status = "okay";
++
++	wcd937x_rx: codec@0,4 {
++		compatible = "sdw20217010a00";
++		reg = <0 4>;
++
++		/*
++		 * WCD9370 RX Port 1 (HPH_L/R)       <==>    SWR1 Port 1 (HPH_L/R)
++		 * WCD9370 RX Port 2 (CLSH)          <==>    SWR1 Port 2 (CLSH)
++		 * WCD9370 RX Port 3 (COMP_L/R)      <==>    SWR1 Port 3 (COMP_L/R)
++		 * WCD9370 RX Port 4 (LO)            <==>    SWR1 Port 4 (LO)
++		 * WCD9370 RX Port 5 (DSD_L/R)       <==>    SWR1 Port 5 (DSD)
++		 */
++		qcom,rx-port-mapping = <1 2 3 4 5>;
++
++		/*
++		 * Static channels mapping between slave and master rx port channels.
++		 * In the order of slave port channels, which is
++		 * hph_l, hph_r, clsh, comp_l, comp_r, lo, dsd_r, dsd_l.
++		 */
++		qcom,rx-channel-mapping = /bits/ 8 <1 2 1 1 2 1 1 2>;
++	};
++};
++
++&swr2 {
++	status = "okay";
++
++	wcd937x_tx: codec@0,3 {
++		compatible = "sdw20217010a00";
++		reg = <0 3>;
++
++		/*
++		 * WCD9370 TX Port 1 (ADC1)               <=> SWR2 Port 1
++		 * WCD9370 TX Port 2 (ADC2, 3)            <=> SWR2 Port 1
++		 * WCD9370 TX Port 3 (DMIC0,1,2,3 & MBHC) <=> SWR2 Port 2
++		 * WCD9370 TX Port 4 (DMIC4,5,6,7)        <=> SWR2 Port 3
++		 */
++		qcom,tx-port-mapping = <1 1 2 3>;
++
++		/*
++		 * Static channel mapping between slave and master tx port channels.
++		 * In the order of slave port channels which is adc1, adc2, adc3,
++		 * mic0, dmic1, mbhc, dmic2, dmic3, dmci4, dmic5, dmic6, dmic7.
++		 */
++		qcom,tx-channel-mapping = /bits/ 8 <1 2 1 1 2 3 3 4 1 2 3 4>;
++	};
++};
++
+ &tlmm {
++	amp_top_reset: amp-top-reset-state {
++		pins = "gpio26";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	panel_reset_active: panel-reset-active-state {
+ 		pins = "gpio127";
+ 		function = "gpio";
+@@ -537,6 +725,17 @@ ts_reset_default: ts-reset-default-state {
+ 		drive-strength = <8>;
+ 		bias-pull-up;
+ 	};
++
++	wcd_default: wcd-reset-n-active-state {
++		pins = "gpio102";
++		function = "gpio";
++		drive-strength = <16>;
++		bias-disable;
++	};
++};
++
++&txmacro {
++	status = "okay";
+ };
+ 
+ &uart11 {
+@@ -610,6 +809,10 @@ &usb_1_hsphy {
+ 	status = "okay";
+ };
+ 
++&vamacro {
++	status = "okay";
++};
++
+ &wifi {
+ 	vdd-0.8-cx-mx-supply = <&pm6450_l11>;
+ 	vdd-1.8-xo-supply = <&pm6150l_l1>;

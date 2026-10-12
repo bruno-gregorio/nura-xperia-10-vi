@@ -57,3 +57,13 @@ dt-bindings: soc: qcom: Add SMP2P sleep state
 soc: qcom: Add SMP2P sleep state driver
 arm64: dts: qcom: sm6450: Add the ADSP sleep state
 remoteproc: qcom: pas: Boot the SM6450 WPSS at probe
+dt-bindings: pinctrl: qcom,sm8450-lpass-lpi-pinctrl: Add SM6450
+ASoC: dt-bindings: qcom: Add SM6450 LPASS RX, TX and VA macros
+ASoC: dt-bindings: qcom,sm8250: Add SM6450 sound card
+ASoC: dt-bindings: awinic,aw88395: Allow a reset GPIO on the AW88261
+ASoC: codecs: aw88261: Add an OF match table
+ASoC: codecs: aw88261: Release the reset line at probe
+ASoC: qcom: sc8280xp: Add SM6450 support
+arm64: dts: qcom: sm6450: Add QUP0 I2C0 and I2C2
+arm64: dts: qcom: sm6450: Add the audio subsystem
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable audio

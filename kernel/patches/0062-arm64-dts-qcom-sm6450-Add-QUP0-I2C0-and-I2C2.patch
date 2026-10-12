@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 07:40:11 -0300
+Subject: [PATCH] arm64: dts: qcom: sm6450: Add QUP0 I2C0 and I2C2
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add the I2C controllers on serial engines 0 and 2 of the first QUP
+wrapper, with their pins.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 56 ++++++++++++++++++++++++++++
+ 1 file changed, 56 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+index 97e87f592..020115288 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+@@ -759,6 +759,46 @@ qupv3_id_0: geniqup@9c0000 {
+ 			#size-cells = <2>;
+ 			status = "disabled";
+ 
++			i2c0: i2c@980000 {
++				compatible = "qcom,geni-i2c";
++				reg = <0x0 0x00980000 0x0 0x4000>;
++				clocks = <&gcc GCC_QUPV3_WRAP0_S0_CLK>;
++				clock-names = "se";
++				interrupts = <GIC_SPI 601 IRQ_TYPE_LEVEL_HIGH>;
++				interconnects = <&clk_virt MASTER_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS
++						 &clk_virt SLAVE_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS>,
++						<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++						 &cnoc2 SLAVE_QUP_0 QCOM_ICC_TAG_ACTIVE_ONLY>,
++						<&aggre1_noc MASTER_QUP_0 QCOM_ICC_TAG_ALWAYS
++						 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
++				interconnect-names = "qup-core", "qup-config", "qup-memory";
++				pinctrl-0 = <&qup_i2c0_data_clk>;
++				pinctrl-names = "default";
++				#address-cells = <1>;
++				#size-cells = <0>;
++				status = "disabled";
++			};
++
++			i2c2: i2c@988000 {
++				compatible = "qcom,geni-i2c";
++				reg = <0x0 0x00988000 0x0 0x4000>;
++				clocks = <&gcc GCC_QUPV3_WRAP0_S2_CLK>;
++				clock-names = "se";
++				interrupts = <GIC_SPI 603 IRQ_TYPE_LEVEL_HIGH>;
++				interconnects = <&clk_virt MASTER_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS
++						 &clk_virt SLAVE_QUP_CORE_0 QCOM_ICC_TAG_ALWAYS>,
++						<&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
++						 &cnoc2 SLAVE_QUP_0 QCOM_ICC_TAG_ACTIVE_ONLY>,
++						<&aggre1_noc MASTER_QUP_0 QCOM_ICC_TAG_ALWAYS
++						 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
++				interconnect-names = "qup-core", "qup-config", "qup-memory";
++				pinctrl-0 = <&qup_i2c2_data_clk>;
++				pinctrl-names = "default";
++				#address-cells = <1>;
++				#size-cells = <0>;
++				status = "disabled";
++			};
++
+ 			uart3: serial@98c000 {
+ 				compatible = "qcom,geni-debug-uart";
+ 				reg = <0x0 0x0098c000 0x0 0x4000>;
+@@ -1811,6 +1851,22 @@ tlmm: pinctrl@f100000 {
+ 			gpio-reserved-ranges = <38 1>;
+ 			wakeup-parent = <&pdc>;
+ 
++			qup_i2c0_data_clk: qup-i2c0-data-clk-state {
++				/* SDA, SCL */
++				pins = "gpio28", "gpio29";
++				function = "qup0_se0";
++				drive-strength = <2>;
++				bias-pull-up;
++			};
++
++			qup_i2c2_data_clk: qup-i2c2-data-clk-state {
++				/* SDA, SCL */
++				pins = "gpio24", "gpio25";
++				function = "qup0_se2";
++				drive-strength = <2>;
++				bias-pull-up;
++			};
++
+ 			qup_i2c9_data_clk: qup-i2c9-data-clk-state {
+ 				/* SDA, SCL */
+ 				pins = "gpio10", "gpio11";

@@ -1,0 +1,51 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 07:39:55 -0300
+Subject: [PATCH] ASoC: codecs: aw88261: Release the reset line at probe
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The driver has a reset_gpio field it never fills in, so on a board that
+holds the amplifier in reset through a GPIO the chip ID read fails.
+Take the optional reset GPIO, pulse it and leave the chip running before
+the ID is read, with the 1 ms waits Awinic's own driver uses.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ sound/soc/codecs/aw88261.c | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/sound/soc/codecs/aw88261.c b/sound/soc/codecs/aw88261.c
+index 555ffd2b3..24e38b6eb 100644
+--- a/sound/soc/codecs/aw88261.c
++++ b/sound/soc/codecs/aw88261.c
+@@ -8,8 +8,10 @@
+ // Author: Weidong Wang <wangweidong.a@awinic.com>
+ //
+ 
++#include <linux/delay.h>
+ #include <linux/i2c.h>
+ #include <linux/firmware.h>
++#include <linux/gpio/consumer.h>
+ #include <linux/regmap.h>
+ #include <sound/soc.h>
+ #include "aw88261.h"
+@@ -1254,6 +1256,17 @@ static int aw88261_i2c_probe(struct i2c_client *i2c)
+ 		return dev_err_probe(&i2c->dev, ret, "failed to init regmap: %d\n", ret);
+ 	}
+ 
++	aw88261->reset_gpio = devm_gpiod_get_optional(&i2c->dev, "reset", GPIOD_OUT_HIGH);
++	if (IS_ERR(aw88261->reset_gpio))
++		return dev_err_probe(&i2c->dev, PTR_ERR(aw88261->reset_gpio),
++				     "failed to get reset gpio\n");
++
++	if (aw88261->reset_gpio) {
++		usleep_range(1000, 2000);
++		gpiod_set_value_cansleep(aw88261->reset_gpio, 0);
++		usleep_range(1000, 2000);
++	}
++
+ 	/* aw pa init */
+ 	ret = aw88261_init(&aw88261, i2c, aw88261->regmap);
+ 	if (ret)

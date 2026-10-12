@@ -45,6 +45,7 @@ catches a later hang rather than only a panic.
   bootlog.py stages  <vendor_boot> [seconds-to-fallback]
   bootlog.py decode  <rddata-dump | card-region-dump | card> [all]
   bootlog.py card-sh <read | clear>
+  bootlog.py usbquirk <vendor_boot-in> <vendor_boot-out> [--no-watchdog]
 
 'install' only rewrites the vendor ramdisk. The dtb area is copied across
 untouched, which matters: this bootloader red-states any image whose device
@@ -1467,8 +1468,12 @@ echo "[pdx246] udc after ${_w}s: ${_real:-none}"
 """
 
 
-def usbquirk(src, dst):
-    """Rebuild a vendor_boot whose real /init asks dwc3 for peripheral mode."""
+def usbquirk(src, dst, watchdog=True):
+    """Rebuild a vendor_boot whose real /init asks dwc3 for peripheral mode.
+
+    watchdog=False leaves USB_WATCHDOG out, for a boot that is meant to stay
+    up with someone using the phone: try-kernel.sh's STAYUP=1.
+    """
     d = open(src, "rb").read()
     s = sections(d)
     o_rd, vr = s["ramdisk"]
@@ -1495,7 +1500,7 @@ def usbquirk(src, dst):
         text = text.replace(anchor, "\n" + USB_QUIRK + anchor, 1)
         # The watchdog belongs in stage 1 only, and before the jump: a
         # background job survives its parent's exec, so one is enough.
-        if name == "init":
+        if name == "init" and watchdog:
             # As early as the file allows: after the shebang, before anything
             # that could wedge. "set -a" is line 5 and appears once.
             wd = "set -a\n"
@@ -1519,8 +1524,11 @@ def usbquirk(src, dst):
     print(f"  patched: {', '.join('/' + n for n in patched)}")
     print("  each now writes peripheral to *.ssusb/mode before"
           " setup_usb_network")
-    print(f"  and /init arms a {WATCHDOG_S}s watchdog, so a boot the host"
-          " never sees resets itself")
+    if watchdog:
+        print(f"  and /init arms a {WATCHDOG_S}s watchdog, so a boot the host"
+              " never sees resets itself")
+    else:
+        print("  and no watchdog: nothing in /init resets the phone")
     print(f"  vendor ramdisk {vr} -> {len(newrd)} bytes")
     print(f"  dtb area {s['dtb'][1]} bytes, copied across untouched")
 
@@ -1961,6 +1969,8 @@ if __name__ == "__main__":
         devdecode(float(a[1]))
     elif len(a) == 3 and a[0] == "usbquirk":
         usbquirk(a[1], a[2])
+    elif len(a) == 4 and a[0] == "usbquirk" and a[3] == "--no-watchdog":
+        usbquirk(a[1], a[2], watchdog=False)
     elif a[:1] == ["marks"] and len(a) in (6, 7):
         marks(a[1], a[2], a[3], *map(int, a[4:]))
     elif a[:1] == ["markdecode"] and len(a) in (4, 5):

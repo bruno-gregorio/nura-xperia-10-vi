@@ -4,6 +4,7 @@
 #   scripts/try-kernel.sh            flash our kernel to the spare slot and boot it
 #   scripts/try-kernel.sh --log      read the last boot's log back off flash
 #   scripts/try-kernel.sh --restore  put the spare slot back to stock
+#   STAYUP=1 scripts/try-kernel.sh   boot the whole system there and leave it up
 #
 # The problem this solves: a kernel that dies leaves the phone on a black
 # screen with no USB, and the only way back to fastboot is holding Power and
@@ -189,6 +190,21 @@ wait_for_adb() {
 
 build_vendor_boot() {
 	mkdir -p "$WORK"
+	# STAYUP=1 is a boot for someone to use rather than a round: the whole
+	# system, as FULLBOOT=1 boots it, with nothing in the initramfs that
+	# resets the phone afterwards - no USB watchdog and no log hook, whose
+	# backup reset needs a host renewing a hold. So nothing reads a log back
+	# either. The system still never marks the slot good, so each boot of
+	# it, a reboot from the shell included, uses one of the bootloader's
+	# seven attempts, and once they are spent the bootloader boots stock, as
+	# after any round.
+	if [ "${STAYUP:-0}" = "1" ]; then
+		FULLBOOT=1
+		BOOTLOG=0
+		MARKS=""
+		[ "${STAGE:-0}${DEVPROBE:-0}${WDTPROBE:-0}${PROBE:-0}" = 0000 ] \
+			|| die "STAYUP=1 boots the real init, not a probe"
+	fi
 	[ -f "$BOOT/vendor_boot.img" ] || die "missing $BOOT/vendor_boot.img - run 'pmb install' first"
 	[ -f "$STOCK/vendor_boot_b.img" ] || die "missing $STOCK/vendor_boot_b.img - run scripts/device-collect.sh from recovery"
 	if [ "$KERNEL" = mainline ]; then
@@ -271,7 +287,11 @@ build_vendor_boot() {
 		# patch goes in at image-build time instead. Without it nothing
 		# asks dwc3 for a role and no UDC is ever created.
 		say "patching /init to ask dwc3 for peripheral mode"
-		"$ROOT/scripts/bootlog.py" usbquirk "$WORK/vendor_boot.img" "$WORK/vendor_boot-q.img"
+		if [ "${STAYUP:-0}" = "1" ]; then
+			"$ROOT/scripts/bootlog.py" usbquirk "$WORK/vendor_boot.img" "$WORK/vendor_boot-q.img" --no-watchdog
+		else
+			"$ROOT/scripts/bootlog.py" usbquirk "$WORK/vendor_boot.img" "$WORK/vendor_boot-q.img"
+		fi
 		mv "$WORK/vendor_boot-q.img" "$WORK/vendor_boot.img"
 		# MARKS="base scale [panic-scale]" makes the init report how far
 		# it got through the retry counter: before each step k it writes
@@ -483,6 +503,14 @@ cmd_try() {
 		echo
 		if [ "${FULLBOOT:-0}" = "1" ]; then
 			run_live_ssh || true
+			if [ "${STAYUP:-0}" = "1" ]; then
+				echo
+				echo "STAYUP=1: the phone stays up on slot $spare, with nothing"
+				echo "  to reset it. Each boot of that slot uses one of the"
+				echo "  bootloader's seven attempts, so rebooting it a few times"
+				echo "  lands on stock by itself. A queue started now does that"
+				echo "  for you: it resets a phone it finds on the gadget."
+			fi
 		elif cmd_harvest && [ -n "${LIVE:-}" ]; then
 			run_live
 		fi
@@ -692,7 +720,8 @@ run_live_ssh() {
 	echo "   sshd answers after about $i s"
 	cmds=$(mktemp "$WORK/.fullboot.XXXXXX")
 	{
-		echo '@hold'
+		# STAYUP=1 has no initramfs jobs to hold back.
+		[ "${STAYUP:-0}" = "1" ] || echo '@hold'
 		if [ -n "${LIVE:-}" ]; then cat "$LIVE"; else fullboot_cmds; fi
 	} > "$cmds"
 	# Anything shaped like a serial number goes before it reaches the

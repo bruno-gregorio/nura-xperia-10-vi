@@ -147,6 +147,7 @@ DISPCC_INCLUDES = """#include <linux/clk-provider.h>
 # The graphics clock controller's is the display one's with the other header:
 # gpucc-sm4450.c includes exactly the same files in the same order.
 GPUCC_INCLUDES = DISPCC_INCLUDES.replace("-dispcc.h>", "-gpucc.h>")
+CAMCC_INCLUDES = DISPCC_INCLUDES.replace("-dispcc.h>", "-camcc.h>")
 
 # Downstream names its board-file parents by string; upstream indexes them into
 # the clocks= property, so each distinct .fw_name becomes one DT_* enum member.
@@ -199,6 +200,16 @@ BLOCKS = {
         "always_on_comment": "Keep some clocks always enabled",
         "module_driver": True,
         "fold_case": True,
+    },
+    # The camera controller's only board clock is the XO; its bus clock from
+    # GCC is in the binding but nothing in the driver parents to it.
+    "cam_cc": {
+        "includes": CAMCC_INCLUDES,
+        "dt": [["bi_tcxo"]],
+        "dt_always": ("bi_tcxo",),
+        "always_on_comment": "Keep some clocks always enabled",
+        "module_driver": True,
+        "merge_pll_configs": False,
     },
 }
 
@@ -444,7 +455,7 @@ def byte_div(text):
                   r" = \{\n.*?^\};\n", fix, text)
 
 
-def pll_configs(text):
+def pll_configs(text, merge=True):
     """Bring the alpha_pll_config blocks to upstream's spelling.
 
     Two fields are rewritten for a Lucid EVO PLL, and both are no-ops on
@@ -456,11 +467,20 @@ def pll_configs(text):
     A .cal_l other than 0x44 is kept and reported, because upstream would
     silently write something else.
 
-    Then two configs that are now identical become one: dispcc-sm4450
-    configures both of its PLLs from disp_cc_pll0_config.
+    A Rivian EVO PLL takes the same two: clk_rivian_evo_pll_configure() never
+    writes a calibration L at all, and its enable is the Lucid 5LPE one, which
+    sets PLL_OUT_MASK the same way (cam_cc_pll2 in camcc-sm4450).
+
+    Then two configs that are now identical become one, where the block's
+    upstream drivers do that: dispcc-sm4450 configures both of its PLLs from
+    disp_cc_pll0_config, but camcc-sm4450 keeps a cam_cc_pll3_config equal to
+    cam_cc_pll1_config.
     """
     evo = set(re.findall(r"clk_lucid_evo_pll_configure\(&\w+, regmap, &(\w+)\);",
                          text))
+    rivian = set(re.findall(r"clk_rivian_evo_pll_configure\(&\w+, regmap, "
+                            r"&(\w+)\);", text))
+    evo |= rivian
     blocks = {}
     for m in re.finditer(r"^static const struct alpha_pll_config (\w+) = \{\n"
                          r"(.*?)\n\};\n", text, re.M | re.S):
@@ -468,7 +488,7 @@ def pll_configs(text):
             continue
         body = m.group(2)
         cal = re.search(r"\t\.cal_l = (0x[0-9a-fA-F]+),\n", body)
-        if cal and int(cal.group(1), 16) == 0x44:
+        if cal and (m.group(1) in rivian or int(cal.group(1), 16) == 0x44):
             body = body.replace(cal.group(0), "")
         elif cal:
             print("note: %s has .cal_l = %s, which upstream's Lucid EVO "
@@ -481,7 +501,7 @@ def pll_configs(text):
         text = text.replace(m.group(0), m.group(0).replace(m.group(2), body), 1)
 
     seen = {}
-    for name, body in blocks.items():
+    for name, body in (blocks.items() if merge else ()):
         first = seen.setdefault(body.lower(), name)
         if first == name:
             continue
@@ -735,7 +755,8 @@ def rewrite_probe(text, soc, target, keep_calls, pfx, block, moved=()):
         stmt = "\n".join(l.strip() and "\t" + " " * l.strip().startswith("*")
                          + l.strip() or l for l in stmt.split("\n"))
         others.append(stmt.lstrip("\t"))
-    pll = re.findall(r"clk_lucid_evo_pll_configure\([^\n]*\);", body)
+    pll = re.findall(r"clk_(?:lucid|rivian)_evo_pll_configure\([^\n]*\);",
+                     body)
     dfs = "qcom_cc_register_rcg_dfs" in body
 
     new = ["static int %s_%s_probe(struct platform_device *pdev)" % (pfx, target),
@@ -1015,8 +1036,10 @@ def to_driver_data(text, pfx, target, use_rpm):
     span = find_func(text, r"^static int %s_probe\(struct platform_device "
                            r"\*pdev\)\n\{" % name)
     body = text[span[0]:span[1]]
-    plls = re.findall(r"clk_lucid_evo_pll_configure\(&(\w+), regmap, &(\w+)\);",
-                      body)
+    # qcom_clk_alpha_pll_configure() picks the PLL's own configure by its
+    # type, so a Rivian EVO goes in the same list as the Lucid EVOs.
+    plls = re.findall(r"clk_(?:lucid|rivian)_evo_pll_configure\(&(\w+), "
+                      r"regmap, &(\w+)\);", body)
     for pll, cfg in plls:
         text = re.sub(r"(static struct clk_alpha_pll %s = \{\n\t\.offset = "
                       r"[^\n]*\n)" % pll, r"\1\t.config = &%s,\n" % cfg, text,
@@ -1098,6 +1121,10 @@ def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
                      if not any(d in l for d in DROP_LINES))
     text = re.sub(r"CLK_DONT_HOLD_STATE \| | ?\| CLK_DONT_HOLD_STATE\b", "",
                   text)
+    # The camera front ends' RCGs ask for their rate to be read back from the
+    # hardware every time, for a vendor firmware that changes it behind the
+    # kernel's back. camcc-sm4450 drops the flag.
+    text = re.sub(r" \| CLK_GET_RATE_NOCACHE\b", "", text)
 
     # 3. Parent naming, ops, PLL configurations and the pipe mux - in that
     #    order, because the mux rewrite wants the DT_* names to already exist.
@@ -1106,7 +1133,7 @@ def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
     text = dp_link(text)
     text = rewrite_ops(text)
     text = byte_div(text)
-    text = pll_configs(text)
+    text = pll_configs(text, prof.get("merge_pll_configs", True))
     if phy_mux:
         text, suffix = to_phy_mux(text, phy_mux, pfx)
         if suffix:
@@ -1159,6 +1186,9 @@ def convert(src, soc, target, phy_mux=None, gdscs=None, keep_calls=(),
     start = text.index("#include <linux/")
     end = text.index("\n\n", text.index('#include "reset.h"'))
     text = text[:start] + inc + text[end + 1:]
+    # The divider header goes with the last divider: camcc-sm4450 has none.
+    if "clk_regmap_div " not in text:
+        text = text.replace('#include "clk-regmap-divider.h"\n', "")
     text = re.sub(r"\n((?:#define [^\n]*\n\n)?enum \{\n\tP_)",
                   lambda m: "\n%s\n%s" % (dt_enum(text, prof), m.group(1)),
                   text, count=1)
@@ -1235,6 +1265,14 @@ PAIRS = [
         ],
         "always_on": ["gpu_cc_cxo_aon_clk", "gpu_cc_demet_clk"],
         "always_on_regs": [(0x93a4, "GPU_CC_CB_CLK")],
+        "copyright_year": "2024",
+    }),
+    ("camcc-ravelin.c", "camcc-sm4450.c", "qcom,sm4450-camcc.h", {
+        "block": "cam_cc",
+        "gdscs": [
+            gdsc("cam_cc_camss_top_gdsc", 0x14004,
+                 ["POLL_CFG_GDSCR", "RETAIN_FF_ENABLE"]),
+        ],
         "copyright_year": "2024",
     }),
 ]

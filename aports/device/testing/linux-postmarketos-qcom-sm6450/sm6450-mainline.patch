@@ -1564,7 +1564,7 @@ index 000000000..2e4253896
 +};
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 new file mode 100644
-index 000000000..d1d027fb3
+index 000000000..a1a7ac593
 --- /dev/null
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -0,0 +1,829 @@
@@ -1717,8 +1717,8 @@ index 000000000..d1d027fb3
 +				"AMIC1", "MIC BIAS1",
 +				"AMIC2", "MIC BIAS2",
 +				"AMIC3", "MIC BIAS3",
-+				"TX SWR_ADC0", "ADC1_OUTPUT",
-+				"TX SWR_ADC1", "ADC2_OUTPUT";
++				"TX SWR_INPUT0", "ADC1_OUTPUT",
++				"TX SWR_INPUT1", "ADC2_OUTPUT";
 +
 +		speaker-dai-link {
 +			link-name = "Speaker Playback";

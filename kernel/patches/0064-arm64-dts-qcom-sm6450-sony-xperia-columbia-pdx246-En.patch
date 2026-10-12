@@ -23,7 +23,7 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 203 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 45d513710..a37ed9ca7 100644
+index 45d513710..962d72e6a 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -9,6 +9,7 @@
@@ -87,8 +87,8 @@ index 45d513710..a37ed9ca7 100644
 +				"AMIC1", "MIC BIAS1",
 +				"AMIC2", "MIC BIAS2",
 +				"AMIC3", "MIC BIAS3",
-+				"TX SWR_ADC0", "ADC1_OUTPUT",
-+				"TX SWR_ADC1", "ADC2_OUTPUT";
++				"TX SWR_INPUT0", "ADC1_OUTPUT",
++				"TX SWR_INPUT1", "ADC2_OUTPUT";
 +
 +		speaker-dai-link {
 +			link-name = "Speaker Playback";

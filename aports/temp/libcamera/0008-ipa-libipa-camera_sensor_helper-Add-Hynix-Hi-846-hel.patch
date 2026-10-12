@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 15:08:22 -0300
+Subject: [PATCH] ipa: libipa: camera_sensor_helper: Add Hynix Hi-846 helper
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The Hi-846 has sensor properties but no helper, so the IPAs run it with
+no gain model. Its analogue gain register counts sixteenths over unity,
+0 to 240 for 1x to 16x, which is how the kernel driver bounds it. Its
+black level reads 64 at 10 bits in dark frames.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ src/ipa/libipa/camera_sensor_helper.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
+index e101d73..2ee1cd7 100644
+--- a/src/ipa/libipa/camera_sensor_helper.cpp
++++ b/src/ipa/libipa/camera_sensor_helper.cpp
+@@ -520,6 +520,19 @@ public:
+ };
+ REGISTER_CAMERA_SENSOR_HELPER("gc08a3", CameraSensorHelperGc08a3)
+ 
++class CameraSensorHelperHi846 : public CameraSensorHelper
++{
++public:
++	CameraSensorHelperHi846()
++	{
++		/* 64 at 10 bits, as dark frames read. */
++		blackLevel_ = 4096;
++		/* The gain code is in 1/16ths over unity, 0 to 240 for 1x to 16x. */
++		gain_ = AnalogueGainLinear{ 1, 16, 0, 16 };
++	}
++};
++REGISTER_CAMERA_SENSOR_HELPER("hi846", CameraSensorHelperHi846)
++
+ class CameraSensorHelperHm1246 : public CameraSensorHelper
+ {
+ public:

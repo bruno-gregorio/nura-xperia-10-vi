@@ -1,14 +1,15 @@
 # Forked from Alpine for temporary downstream patches
-# Forked again from pmaports' temp/libcamera 0.7.2-r4 (9fec495) for the Sony
-# IMX582, the Xperia 10 VI's main camera: sensor properties and a helper
-# (0007), and a tuning file that, like imx519.yaml, borrows the IMX363's
-# colour matrices. Drop this fork once libcamera has an IMX582 entry. pkgrel
-# is pmaports' plus 100.
+# Forked again from pmaports' temp/libcamera 0.7.2-r4 (9fec495) for the
+# Xperia 10 VI's cameras: the Sony IMX582's sensor properties and helper
+# (0007), a helper for the Hynix Hi-846 (0008), and an IMX582 tuning file
+# that, like imx519.yaml, borrows the IMX363's colour matrices. Drop this
+# fork once libcamera has both. pkgrel is pmaports' plus 100, plus one per
+# change here.
 maintainer="Robert Mader <robert.mader@collabora.com>"
 pkgname=libcamera
 _pkgver=0.7.2
 pkgver=9999$_pkgver
-pkgrel=104
+pkgrel=105
 pkgdesc="Linux camera framework"
 url="https://libcamera.org/"
 arch="all"
@@ -71,6 +72,7 @@ source="https://gitlab.freedesktop.org/camera/libcamera/-/archive/v$_pkgver/libc
 	0005-ipa-simple-Derive-AGC-minimum-gain-step-from-sensor-.patch
 	0006-libcamera-Add-quad-Bayer-CFA-layout-support.patch
 	0007-libcamera-camera_sensor-Add-Sony-IMX582-sensor-prope.patch
+	0008-ipa-libipa-camera_sensor_helper-Add-Hynix-Hi-846-hel.patch
 	qcam.desktop
 	$_tuning_files
 	"
@@ -192,6 +194,7 @@ b317cdc96f61682ee0bf26dfb7c4d6441db9a9c5b93ab53528121a8cd44862b3d59cbaa3881bb083
 50fd6a28353534e143418207ee07d462f017078091c2909ca2d495840facf7849dfebb061a7ed29a62f57dbf4e506aa9ec085b0c05ccd054d19c31a987b7e37d  0005-ipa-simple-Derive-AGC-minimum-gain-step-from-sensor-.patch
 47277fedc943ad45391ba150f1c4ae70b7bd041fb162239996fe5430429c50fe27a1c5915c9de90cb714ec578c68c4ba5e4c25a3431e35e721fdd232368b703f  0006-libcamera-Add-quad-Bayer-CFA-layout-support.patch
 4b041ccfa99372a36debd899041f3bc2b6d76fb81fa77bc90577f7bf8abe74e115fdeadd7ec6524910d4068b9dd5ca801a6968731ed4861a5ebd711ec14e383f  0007-libcamera-camera_sensor-Add-Sony-IMX582-sensor-prope.patch
+faf4b577702f96b6b9b4db36755fe64366111666242e1c3dc6f1b92b30b9e9fbceb234c813428cdc4b5abf28abefadbac18fd261e1c488678a45dbdef25ed0dc  0008-ipa-libipa-camera_sensor_helper-Add-Hynix-Hi-846-hel.patch
 22167a4eceb6d1b40b0b7c45fdf116c71684f5340de7f767535cb8e160ad9d2ae0f00cb3d461f73a344520a48a4641cf46226841d78bee06bfbfd2a91337f754  qcam.desktop
 2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  hi846.yaml
 4942edd551dcf51630246f71e600c17760d3574d5d45e5530d6cfeefe2c9ab1a812fbe220f8e89d92e19a499c592b2507c801ca4eb74cd15fcecb60bff5c650b  imx355.yaml

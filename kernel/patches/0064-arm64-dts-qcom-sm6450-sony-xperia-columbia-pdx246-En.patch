@@ -13,17 +13,23 @@ microphone and speaker links. The supplies, reset lines, micbias
 voltages and amplifier channel are the vendor tree's, and so is the
 speaker's bit clock, the LPASS speaker I2S clock.
 
+The WCD9370 sends ADC1 and ADC2 from two SoundWire ports of its own,
+each on the port's first channel. On one master port, as qcm6490-idp
+maps them, the two land in the same slot, so ADC2 gets master port 2
+at the ADCs' sample interval and is read as SWR_MIC4. The vendor tree
+lays them out the same way.
+
 The bottom amplifier sits on I2C2, which the vendor tree marks as shared
 with another execution environment. It is left out until that bus is
 known to be usable.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 203 ++++++++++++++++++
- 1 file changed, 203 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 215 ++++++++++++++++++
+ 1 file changed, 215 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 45d513710..962d72e6a 100644
+index 45d513710..9ecaff92a 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -9,6 +9,7 @@
@@ -88,7 +94,7 @@ index 45d513710..962d72e6a 100644
 +				"AMIC2", "MIC BIAS2",
 +				"AMIC3", "MIC BIAS3",
 +				"TX SWR_INPUT0", "ADC1_OUTPUT",
-+				"TX SWR_INPUT1", "ADC2_OUTPUT";
++				"TX SWR_INPUT4", "ADC2_OUTPUT";
 +
 +		speaker-dai-link {
 +			link-name = "Speaker Playback";
@@ -207,7 +213,7 @@ index 45d513710..962d72e6a 100644
  &sdc2_off_state {
  	sd-cd-pins {
  		pins = "gpio107";
-@@ -502,7 +634,63 @@ &sdhc_2 {
+@@ -502,7 +634,75 @@ &sdhc_2 {
  	status = "okay";
  };
  
@@ -237,6 +243,13 @@ index 45d513710..962d72e6a 100644
 +};
 +
 +&swr2 {
++	/*
++	 * Port 2 carries ADC2 here, so it runs at the ADCs' sample interval,
++	 * as port 1 does. Its offset and lane are the ones stock gives the
++	 * codec's ADC2 port.
++	 */
++	qcom,ports-sinterval-low = /bits/ 8 <0x01 0x01 0x03>;
++
 +	status = "okay";
 +
 +	wcd937x_tx: codec@0,3 {
@@ -244,19 +257,24 @@ index 45d513710..962d72e6a 100644
 +		reg = <0 3>;
 +
 +		/*
++		 * ADC1 and ADC2 each have a port of their own on the WCD9370,
++		 * and each sends on that port's first channel. On one master
++		 * port the two would land in the same slot, so ADC2 gets port
++		 * 2, which the TX macro reads as SWR_MIC4, as stock does.
++		 *
 +		 * WCD9370 TX Port 1 (ADC1)               <=> SWR2 Port 1
-+		 * WCD9370 TX Port 2 (ADC2, 3)            <=> SWR2 Port 1
-+		 * WCD9370 TX Port 3 (DMIC0,1,2,3 & MBHC) <=> SWR2 Port 2
++		 * WCD9370 TX Port 2 (ADC2, 3)            <=> SWR2 Port 2
++		 * WCD9370 TX Port 3 (DMIC0,1,2,3 & MBHC) <=> SWR2 Port 3
 +		 * WCD9370 TX Port 4 (DMIC4,5,6,7)        <=> SWR2 Port 3
 +		 */
-+		qcom,tx-port-mapping = <1 1 2 3>;
++		qcom,tx-port-mapping = <1 2 3 3>;
 +
 +		/*
 +		 * Static channel mapping between slave and master tx port channels.
 +		 * In the order of slave port channels which is adc1, adc2, adc3,
 +		 * mic0, dmic1, mbhc, dmic2, dmic3, dmci4, dmic5, dmic6, dmic7.
 +		 */
-+		qcom,tx-channel-mapping = /bits/ 8 <1 2 1 1 2 3 3 4 1 2 3 4>;
++		qcom,tx-channel-mapping = /bits/ 8 <1 1 1 1 2 3 3 4 1 2 3 4>;
 +	};
 +};
 +
@@ -271,7 +289,7 @@ index 45d513710..962d72e6a 100644
  	panel_reset_active: panel-reset-active-state {
  		pins = "gpio127";
  		function = "gpio";
-@@ -537,6 +725,17 @@ ts_reset_default: ts-reset-default-state {
+@@ -537,6 +737,17 @@ ts_reset_default: ts-reset-default-state {
  		drive-strength = <8>;
  		bias-pull-up;
  	};
@@ -289,7 +307,7 @@ index 45d513710..962d72e6a 100644
  };
  
  &uart11 {
-@@ -610,6 +809,10 @@ &usb_1_hsphy {
+@@ -610,6 +821,10 @@ &usb_1_hsphy {
  	status = "okay";
  };
  

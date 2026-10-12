@@ -18,7 +18,7 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 6 insertions(+), 1 deletion(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 962d72e6a..a1a7ac593 100644
+index 9ecaff92a..ce91ed3e3 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -439,8 +439,13 @@ &gpu_zap_shader {

@@ -73,3 +73,14 @@ arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: The top amplifier is an AW
 dt-bindings: dma: qcom,gpi: Document the SM6450 GPI DMA engine
 arm64: dts: qcom: sm6450: Add the QUP0 GPI DMA engine
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the bottom amplifier
+dt-bindings: clock: qcom: Add SM6450 camera clock controller
+clk: qcom: Add Camera Clock Controller driver for SM6450
+arm64: dts: qcom: sm6450: Add the camera clock controller
+dt-bindings: i2c: qcom-cci: Document the SM6450 compatible
+arm64: dts: qcom: sm6450: Add the camera control interfaces
+regulator: dt-bindings: Add Will Semiconductor WL2868C
+regulator: Add Will Semiconductor WL2868C driver
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the Hi-846 cameras
+media: dt-bindings: Add Sony IMX582
+media: i2c: Add Sony IMX582 sensor driver
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the main camera

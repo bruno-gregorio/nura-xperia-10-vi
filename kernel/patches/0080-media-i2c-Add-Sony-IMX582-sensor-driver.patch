@@ -1,0 +1,1236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 13:38:46 -0300
+Subject: [PATCH] media: i2c: Add Sony IMX582 sensor driver
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add a driver for the Sony IMX582 in its binned modes, which read each
+group of same-colour pixels of its quad Bayer array as one and give an
+ordinary RGGB image: 4000x3000 at 30 fps, 4000x2256 at 60 fps and
+2000x1132 at 120 fps, in RAW10 over four lanes, from a 24 MHz clock. The
+register settings are those the Sony Xperia 10 VI programs.
+
+The controls cover exposure, analogue and digital gain, vertical
+blanking, flips and the sensor's test patterns.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/media/i2c/Kconfig  |   10 +
+ drivers/media/i2c/Makefile |    1 +
+ drivers/media/i2c/imx582.c | 1172 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 1183 insertions(+)
+ create mode 100644 drivers/media/i2c/imx582.c
+
+diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
+index cdd7ba5da..6598682af 100644
+--- a/drivers/media/i2c/Kconfig
++++ b/drivers/media/i2c/Kconfig
+@@ -277,6 +277,16 @@ config VIDEO_IMX415
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called imx415.
+ 
++config VIDEO_IMX582
++	tristate "Sony IMX582 sensor support"
++	select V4L2_CCI_I2C
++	help
++	  This is a Video4Linux2 sensor driver for the Sony
++	  IMX582 camera.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called imx582.
++
+ config VIDEO_MAX9271_LIB
+ 	tristate
+ 
+diff --git a/drivers/media/i2c/Makefile b/drivers/media/i2c/Makefile
+index 57cdd8dc9..b2323577f 100644
+--- a/drivers/media/i2c/Makefile
++++ b/drivers/media/i2c/Makefile
+@@ -60,6 +60,7 @@ obj-$(CONFIG_VIDEO_IMX335) += imx335.o
+ obj-$(CONFIG_VIDEO_IMX355) += imx355.o
+ obj-$(CONFIG_VIDEO_IMX412) += imx412.o
+ obj-$(CONFIG_VIDEO_IMX415) += imx415.o
++obj-$(CONFIG_VIDEO_IMX582) += imx582.o
+ obj-$(CONFIG_VIDEO_IR_I2C) += ir-kbd-i2c.o
+ obj-$(CONFIG_VIDEO_ISL7998X) += isl7998x.o
+ obj-$(CONFIG_VIDEO_KS0127) += ks0127.o
+diff --git a/drivers/media/i2c/imx582.c b/drivers/media/i2c/imx582.c
+new file mode 100644
+index 000000000..f13f7d78a
+--- /dev/null
++++ b/drivers/media/i2c/imx582.c
+@@ -0,0 +1,1172 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Sony IMX582 sensor driver
++ *
++ * The IMX582 is a 1/2-inch 48 megapixel quad Bayer sensor, 8000x6000 with
++ * 0.8 um pixels, that sends RAW10 over four MIPI CSI-2 D-PHY lanes. This
++ * driver runs it in its binned modes, where each group of same-colour
++ * pixels reads out as one, so that the output is an ordinary RGGB Bayer
++ * image.
++ *
++ * The register settings are those of the Sony Xperia 10 VI, for a 24 MHz
++ * external clock.
++ */
++
++#include <linux/clk.h>
++#include <linux/delay.h>
++#include <linux/gpio/consumer.h>
++#include <linux/i2c.h>
++#include <linux/module.h>
++#include <linux/pm_runtime.h>
++#include <linux/regulator/consumer.h>
++#include <linux/units.h>
++
++#include <media/v4l2-cci.h>
++#include <media/v4l2-ctrls.h>
++#include <media/v4l2-device.h>
++#include <media/v4l2-fwnode.h>
++#include <media/v4l2-mediabus.h>
++
++#define IMX582_REG_CHIP_ID		CCI_REG16(0x0016)
++#define IMX582_CHIP_ID			0x0582
++
++#define IMX582_REG_MODE_SELECT		CCI_REG8(0x0100)
++#define IMX582_MODE_STANDBY		0x00
++#define IMX582_MODE_STREAMING		0x01
++
++/* Bit 0 mirrors the image, bit 1 flips it */
++#define IMX582_REG_ORIENTATION		CCI_REG8(0x0101)
++
++/* Frame length, in lines */
++#define IMX582_REG_FRAME_LENGTH		CCI_REG16(0x0340)
++#define IMX582_FRAME_LENGTH_MAX		0xffff
++
++/* Coarse integration time, in lines */
++#define IMX582_REG_EXPOSURE		CCI_REG16(0x0202)
++#define IMX582_EXPOSURE_MIN		5
++#define IMX582_EXPOSURE_MARGIN		48
++#define IMX582_EXPOSURE_STEP		1
++
++/* The analogue gain is 1024 / (1024 - code), from 1x to 64x */
++#define IMX582_REG_ANALOG_GAIN		CCI_REG16(0x0204)
++#define IMX582_ANA_GAIN_MIN		0
++#define IMX582_ANA_GAIN_MAX		1008
++#define IMX582_ANA_GAIN_STEP		1
++#define IMX582_ANA_GAIN_DEFAULT		0
++
++/* The digital gain of each colour, in 8.8 fixed point, up to 4x */
++#define IMX582_REG_DIG_GAIN_GR		CCI_REG16(0x020e)
++#define IMX582_REG_DIG_GAIN_R		CCI_REG16(0x0210)
++#define IMX582_REG_DIG_GAIN_B		CCI_REG16(0x0212)
++#define IMX582_REG_DIG_GAIN_GB		CCI_REG16(0x0214)
++#define IMX582_DGTL_GAIN_MIN		0x0100
++#define IMX582_DGTL_GAIN_MAX		0x0400
++#define IMX582_DGTL_GAIN_STEP		1
++#define IMX582_DGTL_GAIN_DEFAULT	0x0100
++
++#define IMX582_REG_TEST_PATTERN		CCI_REG16(0x0600)
++#define IMX582_REG_TESTP_RED		CCI_REG16(0x0602)
++#define IMX582_REG_TESTP_GREENR		CCI_REG16(0x0604)
++#define IMX582_REG_TESTP_BLUE		CCI_REG16(0x0606)
++#define IMX582_REG_TESTP_GREENB		CCI_REG16(0x0608)
++#define IMX582_TESTP_COLOUR_MIN		0
++#define IMX582_TESTP_COLOUR_MAX		0x03ff
++#define IMX582_TESTP_COLOUR_STEP	1
++
++#define IMX582_XCLK_FREQ		(24 * HZ_PER_MHZ)
++
++#define IMX582_NATIVE_WIDTH		8000
++#define IMX582_NATIVE_HEIGHT		6000
++
++/* From the end of reset to the first I2C access */
++#define IMX582_RESET_DELAY_US		10000
++
++static const char * const imx582_supply_names[] = {
++	"avdd",		/* Analogue, 2.9 V */
++	"dvdd",		/* Digital core, 1.1 V */
++	"dovdd",	/* Interface, 1.8 V */
++};
++
++/* The Bayer order unflipped, mirrored, flipped, and both */
++static const u32 imx582_mbus_codes[] = {
++	MEDIA_BUS_FMT_SRGGB10_1X10,
++	MEDIA_BUS_FMT_SGRBG10_1X10,
++	MEDIA_BUS_FMT_SGBRG10_1X10,
++	MEDIA_BUS_FMT_SBGGR10_1X10,
++};
++
++/* Each mode has its own output clock */
++static const s64 imx582_link_freq_menu[] = {
++	632000000,
++	782400000,
++	412000000,
++};
++
++static const char * const imx582_test_pattern_menu[] = {
++	"Disabled",
++	"Solid Colour",
++	"Colour Bars",
++	"Fade to Grey Colour Bars",
++	"PN9",
++};
++
++/* Common to every mode; the controls write exposure, gain and frame length */
++static const struct cci_reg_sequence imx582_common_regs[] = {
++	{ CCI_REG8(0x0136), 0x18 },
++	{ CCI_REG8(0x0137), 0x00 },
++	{ CCI_REG8(0x3c7e), 0x05 },
++	{ CCI_REG8(0x3c7f), 0x06 },
++	{ CCI_REG8(0x3c00), 0x10 },
++	{ CCI_REG8(0x3c01), 0x10 },
++	{ CCI_REG8(0x3c02), 0x10 },
++	{ CCI_REG8(0x3c03), 0x10 },
++	{ CCI_REG8(0x3c04), 0x10 },
++	{ CCI_REG8(0x3c05), 0x01 },
++	{ CCI_REG8(0x3c06), 0x00 },
++	{ CCI_REG8(0x3c07), 0x00 },
++	{ CCI_REG8(0x3c08), 0x03 },
++	{ CCI_REG8(0x3c09), 0xff },
++	{ CCI_REG8(0x3c0a), 0x01 },
++	{ CCI_REG8(0x3c0b), 0x00 },
++	{ CCI_REG8(0x3c0c), 0x00 },
++	{ CCI_REG8(0x3c0d), 0x03 },
++	{ CCI_REG8(0x3c0e), 0xff },
++	{ CCI_REG8(0x3c0f), 0x20 },
++	{ CCI_REG8(0x6e1d), 0x00 },
++	{ CCI_REG8(0x6e25), 0x00 },
++	{ CCI_REG8(0x6e38), 0x03 },
++	{ CCI_REG8(0x6e3b), 0x01 },
++	{ CCI_REG8(0x9004), 0x2c },
++	{ CCI_REG8(0x9200), 0xf4 },
++	{ CCI_REG8(0x9201), 0xa7 },
++	{ CCI_REG8(0x9202), 0xf4 },
++	{ CCI_REG8(0x9203), 0xaa },
++	{ CCI_REG8(0x9204), 0xf4 },
++	{ CCI_REG8(0x9205), 0xad },
++	{ CCI_REG8(0x9206), 0xf4 },
++	{ CCI_REG8(0x9207), 0xb0 },
++	{ CCI_REG8(0x9208), 0xf4 },
++	{ CCI_REG8(0x9209), 0xb3 },
++	{ CCI_REG8(0x920a), 0xb7 },
++	{ CCI_REG8(0x920b), 0x34 },
++	{ CCI_REG8(0x920c), 0xb7 },
++	{ CCI_REG8(0x920d), 0x36 },
++	{ CCI_REG8(0x920e), 0xb7 },
++	{ CCI_REG8(0x920f), 0x37 },
++	{ CCI_REG8(0x9210), 0xb7 },
++	{ CCI_REG8(0x9211), 0x38 },
++	{ CCI_REG8(0x9212), 0xb7 },
++	{ CCI_REG8(0x9213), 0x39 },
++	{ CCI_REG8(0x9214), 0xb7 },
++	{ CCI_REG8(0x9215), 0x3a },
++	{ CCI_REG8(0x9216), 0xb7 },
++	{ CCI_REG8(0x9217), 0x3c },
++	{ CCI_REG8(0x9218), 0xb7 },
++	{ CCI_REG8(0x9219), 0x3d },
++	{ CCI_REG8(0x921a), 0xb7 },
++	{ CCI_REG8(0x921b), 0x3e },
++	{ CCI_REG8(0x921c), 0xb7 },
++	{ CCI_REG8(0x921d), 0x3f },
++	{ CCI_REG8(0x921e), 0x85 },
++	{ CCI_REG8(0x921f), 0x77 },
++	{ CCI_REG8(0x9226), 0x42 },
++	{ CCI_REG8(0x9227), 0x52 },
++	{ CCI_REG8(0x9228), 0x60 },
++	{ CCI_REG8(0x9229), 0xb9 },
++	{ CCI_REG8(0x922a), 0x60 },
++	{ CCI_REG8(0x922b), 0xbf },
++	{ CCI_REG8(0x922c), 0x60 },
++	{ CCI_REG8(0x922d), 0xc5 },
++	{ CCI_REG8(0x922e), 0x60 },
++	{ CCI_REG8(0x922f), 0xcb },
++	{ CCI_REG8(0x9230), 0x60 },
++	{ CCI_REG8(0x9231), 0xd1 },
++	{ CCI_REG8(0x9232), 0x60 },
++	{ CCI_REG8(0x9233), 0xd7 },
++	{ CCI_REG8(0x9234), 0x60 },
++	{ CCI_REG8(0x9235), 0xdd },
++	{ CCI_REG8(0x9236), 0x60 },
++	{ CCI_REG8(0x9237), 0xe3 },
++	{ CCI_REG8(0x9238), 0x60 },
++	{ CCI_REG8(0x9239), 0xe9 },
++	{ CCI_REG8(0x923a), 0x60 },
++	{ CCI_REG8(0x923b), 0xef },
++	{ CCI_REG8(0x923c), 0x60 },
++	{ CCI_REG8(0x923d), 0xf5 },
++	{ CCI_REG8(0x923e), 0x60 },
++	{ CCI_REG8(0x923f), 0xf9 },
++	{ CCI_REG8(0x9240), 0x60 },
++	{ CCI_REG8(0x9241), 0xfd },
++	{ CCI_REG8(0x9242), 0x61 },
++	{ CCI_REG8(0x9243), 0x01 },
++	{ CCI_REG8(0x9244), 0x61 },
++	{ CCI_REG8(0x9245), 0x05 },
++	{ CCI_REG8(0x924a), 0x61 },
++	{ CCI_REG8(0x924b), 0x6b },
++	{ CCI_REG8(0x924c), 0x61 },
++	{ CCI_REG8(0x924d), 0x7f },
++	{ CCI_REG8(0x924e), 0x61 },
++	{ CCI_REG8(0x924f), 0x92 },
++	{ CCI_REG8(0x9250), 0x61 },
++	{ CCI_REG8(0x9251), 0x9c },
++	{ CCI_REG8(0x9252), 0x61 },
++	{ CCI_REG8(0x9253), 0xab },
++	{ CCI_REG8(0x9254), 0x61 },
++	{ CCI_REG8(0x9255), 0xc4 },
++	{ CCI_REG8(0x9256), 0x61 },
++	{ CCI_REG8(0x9257), 0xce },
++	{ CCI_REG8(0x9810), 0x14 },
++	{ CCI_REG8(0x9814), 0x14 },
++	{ CCI_REG8(0xc449), 0x04 },
++	{ CCI_REG8(0xc44a), 0x01 },
++	{ CCI_REG8(0xe286), 0x31 },
++	{ CCI_REG8(0xe2a6), 0x32 },
++	{ CCI_REG8(0xe2c6), 0x33 },
++	{ CCI_REG8(0x0138), 0x01 },
++	{ CCI_REG8(0x0112), 0x0a },
++	{ CCI_REG8(0x0113), 0x0a },
++	{ CCI_REG8(0x0114), 0x03 },
++	{ CCI_REG8(0x0344), 0x00 },
++	{ CCI_REG8(0x0345), 0x00 },
++	{ CCI_REG8(0x0348), 0x1f },
++	{ CCI_REG8(0x0349), 0x3f },
++	{ CCI_REG8(0x0900), 0x01 },
++	{ CCI_REG8(0x0902), 0x08 },
++	{ CCI_REG8(0x0401), 0x00 },
++	{ CCI_REG8(0x0404), 0x00 },
++	{ CCI_REG8(0x0405), 0x10 },
++	{ CCI_REG8(0x0408), 0x00 },
++	{ CCI_REG8(0x0409), 0x00 },
++	{ CCI_REG8(0x040a), 0x00 },
++	{ CCI_REG8(0x040b), 0x00 },
++	{ CCI_REG8(0x0301), 0x05 },
++	{ CCI_REG8(0x0303), 0x02 },
++	{ CCI_REG8(0x0305), 0x04 },
++	{ CCI_REG8(0x030e), 0x01 },
++	{ CCI_REG8(0x0310), 0x01 },
++	{ CCI_REG8(0x3620), 0x00 },
++	{ CCI_REG8(0x3621), 0x00 },
++	{ CCI_REG8(0x380c), 0x80 },
++	{ CCI_REG8(0x3c13), 0x00 },
++	{ CCI_REG8(0x3c14), 0x28 },
++	{ CCI_REG8(0x3c15), 0x28 },
++	{ CCI_REG8(0x3c16), 0x32 },
++	{ CCI_REG8(0x3c17), 0x46 },
++	{ CCI_REG8(0x3c18), 0x67 },
++	{ CCI_REG8(0x3c19), 0x8f },
++	{ CCI_REG8(0x3c1a), 0x8f },
++	{ CCI_REG8(0x3c1b), 0x99 },
++	{ CCI_REG8(0x3c1c), 0xad },
++	{ CCI_REG8(0x3c1d), 0xce },
++	{ CCI_REG8(0x3c1e), 0x8f },
++	{ CCI_REG8(0x3c1f), 0x8f },
++	{ CCI_REG8(0x3c20), 0x99 },
++	{ CCI_REG8(0x3c21), 0xad },
++	{ CCI_REG8(0x3c22), 0xce },
++	{ CCI_REG8(0x3c25), 0x22 },
++	{ CCI_REG8(0x3c26), 0x23 },
++	{ CCI_REG8(0x3c27), 0xe6 },
++	{ CCI_REG8(0x3c28), 0xe6 },
++	{ CCI_REG8(0x3c29), 0x08 },
++	{ CCI_REG8(0x3c2a), 0x0f },
++	{ CCI_REG8(0x3c2b), 0x14 },
++	{ CCI_REG8(0x3f80), 0x00 },
++	{ CCI_REG8(0x3f81), 0x00 },
++	{ CCI_REG8(0x3ff4), 0x00 },
++	{ CCI_REG8(0x0224), 0x01 },
++	{ CCI_REG8(0x0225), 0xf4 },
++	{ CCI_REG8(0x3fe0), 0x01 },
++	{ CCI_REG8(0x3fe1), 0xf4 },
++	{ CCI_REG8(0x0216), 0x00 },
++	{ CCI_REG8(0x0217), 0x70 },
++	{ CCI_REG8(0x0218), 0x01 },
++	{ CCI_REG8(0x0219), 0x00 },
++	{ CCI_REG8(0x3fe2), 0x00 },
++	{ CCI_REG8(0x3fe3), 0x70 },
++	{ CCI_REG8(0x3fe4), 0x01 },
++	{ CCI_REG8(0x3fe5), 0x00 },
++	/* No phase detection data */
++	{ CCI_REG8(0x3e3b), 0x00 },
++	{ CCI_REG8(0x4034), 0x01 },
++	{ CCI_REG8(0x4035), 0xf0 },
++};
++
++/* 4000x3000, 2x2 binned, at 30 fps */
++static const struct cci_reg_sequence imx582_4000x3000_regs[] = {
++	{ CCI_REG8(0x0342), 0x1e },
++	{ CCI_REG8(0x0343), 0xc0 },
++	{ CCI_REG8(0x0346), 0x00 },
++	{ CCI_REG8(0x0347), 0x00 },
++	{ CCI_REG8(0x034a), 0x17 },
++	{ CCI_REG8(0x034b), 0x6f },
++	{ CCI_REG8(0x0901), 0x22 },
++	{ CCI_REG8(0x3246), 0x81 },
++	{ CCI_REG8(0x3247), 0x81 },
++	{ CCI_REG8(0x040c), 0x0f },
++	{ CCI_REG8(0x040d), 0xa0 },
++	{ CCI_REG8(0x040e), 0x0b },
++	{ CCI_REG8(0x040f), 0xb8 },
++	{ CCI_REG8(0x034c), 0x0f },
++	{ CCI_REG8(0x034d), 0xa0 },
++	{ CCI_REG8(0x034e), 0x0b },
++	{ CCI_REG8(0x034f), 0xb8 },
++	{ CCI_REG8(0x0306), 0x01 },
++	{ CCI_REG8(0x0307), 0x4c },
++	{ CCI_REG8(0x030b), 0x01 },
++	{ CCI_REG8(0x030d), 0x06 },
++	{ CCI_REG8(0x030f), 0x3c },
++	{ CCI_REG8(0x3f0c), 0x01 },
++	{ CCI_REG8(0x3f14), 0x00 },
++	{ CCI_REG8(0x3f82), 0x00 },
++	{ CCI_REG8(0x3f83), 0x00 },
++	{ CCI_REG8(0x3f8c), 0x07 },
++	{ CCI_REG8(0x3f8d), 0xd0 },
++	{ CCI_REG8(0x3ff5), 0x00 },
++	{ CCI_REG8(0x3ffc), 0x04 },
++	{ CCI_REG8(0x3ffd), 0xb0 },
++	{ CCI_REG8(0x3e20), 0x02 },
++};
++
++/* 4000x2256, 2x2 binned and cropped to 16:9, at 60 fps */
++static const struct cci_reg_sequence imx582_4000x2256_regs[] = {
++	{ CCI_REG8(0x0342), 0x11 },
++	{ CCI_REG8(0x0343), 0xf0 },
++	{ CCI_REG8(0x0346), 0x02 },
++	{ CCI_REG8(0x0347), 0xe8 },
++	{ CCI_REG8(0x034a), 0x14 },
++	{ CCI_REG8(0x034b), 0x87 },
++	{ CCI_REG8(0x0901), 0x22 },
++	{ CCI_REG8(0x3246), 0x81 },
++	{ CCI_REG8(0x3247), 0x81 },
++	{ CCI_REG8(0x040c), 0x0f },
++	{ CCI_REG8(0x040d), 0xa0 },
++	{ CCI_REG8(0x040e), 0x08 },
++	{ CCI_REG8(0x040f), 0xd0 },
++	{ CCI_REG8(0x034c), 0x0f },
++	{ CCI_REG8(0x034d), 0xa0 },
++	{ CCI_REG8(0x034e), 0x08 },
++	{ CCI_REG8(0x034f), 0xd0 },
++	{ CCI_REG8(0x0306), 0x01 },
++	{ CCI_REG8(0x0307), 0x17 },
++	{ CCI_REG8(0x030b), 0x01 },
++	{ CCI_REG8(0x030d), 0x05 },
++	{ CCI_REG8(0x030f), 0x46 },
++	{ CCI_REG8(0x3f0c), 0x00 },
++	{ CCI_REG8(0x3f14), 0x01 },
++	{ CCI_REG8(0x3f82), 0x04 },
++	{ CCI_REG8(0x3f83), 0x38 },
++	{ CCI_REG8(0x3f8c), 0x00 },
++	{ CCI_REG8(0x3f8d), 0x00 },
++	{ CCI_REG8(0x3ff5), 0x4c },
++	{ CCI_REG8(0x3ffc), 0x00 },
++	{ CCI_REG8(0x3ffd), 0x00 },
++	{ CCI_REG8(0x3e20), 0x02 },
++};
++
++/* 2000x1132, 4x4 binned and cropped to 16:9, at 120 fps */
++static const struct cci_reg_sequence imx582_2000x1132_regs[] = {
++	{ CCI_REG8(0x0342), 0x0b },
++	{ CCI_REG8(0x0343), 0x60 },
++	{ CCI_REG8(0x0346), 0x02 },
++	{ CCI_REG8(0x0347), 0xe0 },
++	{ CCI_REG8(0x034a), 0x14 },
++	{ CCI_REG8(0x034b), 0x8f },
++	{ CCI_REG8(0x0901), 0x44 },
++	{ CCI_REG8(0x3246), 0x89 },
++	{ CCI_REG8(0x3247), 0x89 },
++	{ CCI_REG8(0x040c), 0x07 },
++	{ CCI_REG8(0x040d), 0xd0 },
++	{ CCI_REG8(0x040e), 0x04 },
++	{ CCI_REG8(0x040f), 0x6c },
++	{ CCI_REG8(0x034c), 0x07 },
++	{ CCI_REG8(0x034d), 0xd0 },
++	{ CCI_REG8(0x034e), 0x04 },
++	{ CCI_REG8(0x034f), 0x6c },
++	{ CCI_REG8(0x0306), 0x00 },
++	{ CCI_REG8(0x0307), 0xb8 },
++	{ CCI_REG8(0x030b), 0x02 },
++	{ CCI_REG8(0x030d), 0x06 },
++	{ CCI_REG8(0x030f), 0x9c },
++	{ CCI_REG8(0x3f0c), 0x00 },
++	{ CCI_REG8(0x3f14), 0x00 },
++	{ CCI_REG8(0x3f82), 0x00 },
++	{ CCI_REG8(0x3f83), 0x00 },
++	{ CCI_REG8(0x3f8c), 0x00 },
++	{ CCI_REG8(0x3f8d), 0x00 },
++	{ CCI_REG8(0x3ff5), 0x4c },
++	{ CCI_REG8(0x3ffc), 0x00 },
++	{ CCI_REG8(0x3ffd), 0x00 },
++	{ CCI_REG8(0x3e20), 0x01 },
++};
++
++struct imx582_mode {
++	u32 width;
++	u32 height;
++	/* The part of the pixel array that is read out */
++	struct v4l2_rect crop;
++	/* Line length, in pixel clocks */
++	u32 llp;
++	/* Default frame length, in lines */
++	u32 fll_def;
++	u32 vblank_min;
++	u64 pixel_rate;
++	unsigned int link_freq_index;
++	const struct cci_reg_sequence *regs;
++	unsigned int num_regs;
++};
++
++static const struct imx582_mode imx582_modes[] = {
++	{
++		.width = 4000,
++		.height = 3000,
++		.crop = { 0, 0, 8000, 6000 },
++		.llp = 7872,
++		.fll_def = 3366,
++		.vblank_min = 347,
++		.pixel_rate = 796800000,
++		.link_freq_index = 0,
++		.regs = imx582_4000x3000_regs,
++		.num_regs = ARRAY_SIZE(imx582_4000x3000_regs),
++	},
++	{
++		.width = 4000,
++		.height = 2256,
++		.crop = { 0, 744, 8000, 4512 },
++		.llp = 4592,
++		.fll_def = 2430,
++		.vblank_min = 155,
++		.pixel_rate = 669600000,
++		.link_freq_index = 1,
++		.regs = imx582_4000x2256_regs,
++		.num_regs = ARRAY_SIZE(imx582_4000x2256_regs),
++	},
++	{
++		.width = 2000,
++		.height = 1132,
++		.crop = { 0, 736, 8000, 4528 },
++		.llp = 2912,
++		.fll_def = 1262,
++		.vblank_min = 97,
++		.pixel_rate = 441600000,
++		.link_freq_index = 2,
++		.regs = imx582_2000x1132_regs,
++		.num_regs = ARRAY_SIZE(imx582_2000x1132_regs),
++	},
++};
++
++struct imx582 {
++	struct v4l2_subdev sd;
++	struct media_pad pad;
++
++	struct regmap *regmap;
++	struct clk *xclk;
++	struct gpio_desc *reset_gpio;
++	struct regulator_bulk_data supplies[ARRAY_SIZE(imx582_supply_names)];
++
++	struct v4l2_ctrl_handler ctrl_handler;
++	struct v4l2_ctrl *pixel_rate;
++	struct v4l2_ctrl *link_freq;
++	struct v4l2_ctrl *exposure;
++	struct v4l2_ctrl *vblank;
++	struct v4l2_ctrl *hblank;
++	struct v4l2_ctrl *hflip;
++	struct v4l2_ctrl *vflip;
++};
++
++static inline struct imx582 *to_imx582(struct v4l2_subdev *sd)
++{
++	return container_of(sd, struct imx582, sd);
++}
++
++static u32 imx582_get_format_code(struct imx582 *imx582)
++{
++	return imx582_mbus_codes[(imx582->vflip->val ? 2 : 0) |
++				 (imx582->hflip->val ? 1 : 0)];
++}
++
++static const struct imx582_mode *
++imx582_find_mode(const struct v4l2_mbus_framefmt *format)
++{
++	return v4l2_find_nearest_size(imx582_modes, ARRAY_SIZE(imx582_modes),
++				      width, height,
++				      format->width, format->height);
++}
++
++/* -----------------------------------------------------------------------------
++ * Controls
++ */
++
++static int imx582_set_ctrl(struct v4l2_ctrl *ctrl)
++{
++	struct imx582 *imx582 = container_of(ctrl->handler, struct imx582,
++					     ctrl_handler);
++	struct device *dev = imx582->sd.dev;
++	const struct v4l2_mbus_framefmt *format;
++	struct v4l2_subdev_state *state;
++	int ret = 0;
++
++	state = v4l2_subdev_get_locked_active_state(&imx582->sd);
++	format = v4l2_subdev_state_get_format(state, 0);
++
++	if (ctrl->id == V4L2_CID_VBLANK) {
++		int exposure_max = format->height + ctrl->val -
++				   IMX582_EXPOSURE_MARGIN;
++
++		__v4l2_ctrl_modify_range(imx582->exposure,
++					 imx582->exposure->minimum,
++					 exposure_max, imx582->exposure->step,
++					 exposure_max);
++	}
++
++	/* The registers are written when streaming starts */
++	if (pm_runtime_get_if_in_use(dev) <= 0)
++		return 0;
++
++	switch (ctrl->id) {
++	case V4L2_CID_EXPOSURE:
++		cci_write(imx582->regmap, IMX582_REG_EXPOSURE, ctrl->val, &ret);
++		break;
++	case V4L2_CID_ANALOGUE_GAIN:
++		cci_write(imx582->regmap, IMX582_REG_ANALOG_GAIN, ctrl->val,
++			  &ret);
++		break;
++	case V4L2_CID_DIGITAL_GAIN:
++		cci_write(imx582->regmap, IMX582_REG_DIG_GAIN_GR, ctrl->val,
++			  &ret);
++		cci_write(imx582->regmap, IMX582_REG_DIG_GAIN_R, ctrl->val,
++			  &ret);
++		cci_write(imx582->regmap, IMX582_REG_DIG_GAIN_B, ctrl->val,
++			  &ret);
++		cci_write(imx582->regmap, IMX582_REG_DIG_GAIN_GB, ctrl->val,
++			  &ret);
++		break;
++	case V4L2_CID_VBLANK:
++		cci_write(imx582->regmap, IMX582_REG_FRAME_LENGTH,
++			  format->height + ctrl->val, &ret);
++		break;
++	case V4L2_CID_HFLIP:
++	case V4L2_CID_VFLIP:
++		cci_write(imx582->regmap, IMX582_REG_ORIENTATION,
++			  imx582->hflip->val | imx582->vflip->val << 1, &ret);
++		break;
++	case V4L2_CID_TEST_PATTERN:
++		cci_write(imx582->regmap, IMX582_REG_TEST_PATTERN, ctrl->val,
++			  &ret);
++		break;
++	case V4L2_CID_TEST_PATTERN_RED:
++		cci_write(imx582->regmap, IMX582_REG_TESTP_RED, ctrl->val,
++			  &ret);
++		break;
++	case V4L2_CID_TEST_PATTERN_GREENR:
++		cci_write(imx582->regmap, IMX582_REG_TESTP_GREENR, ctrl->val,
++			  &ret);
++		break;
++	case V4L2_CID_TEST_PATTERN_BLUE:
++		cci_write(imx582->regmap, IMX582_REG_TESTP_BLUE, ctrl->val,
++			  &ret);
++		break;
++	case V4L2_CID_TEST_PATTERN_GREENB:
++		cci_write(imx582->regmap, IMX582_REG_TESTP_GREENB, ctrl->val,
++			  &ret);
++		break;
++	case V4L2_CID_PIXEL_RATE:
++	case V4L2_CID_LINK_FREQ:
++	case V4L2_CID_HBLANK:
++		/* Set by the mode */
++		break;
++	default:
++		ret = -EINVAL;
++		break;
++	}
++
++	pm_runtime_put(dev);
++
++	return ret;
++}
++
++static const struct v4l2_ctrl_ops imx582_ctrl_ops = {
++	.s_ctrl = imx582_set_ctrl,
++};
++
++static int imx582_init_controls(struct imx582 *imx582)
++{
++	const struct imx582_mode *mode = &imx582_modes[0];
++	struct v4l2_ctrl_handler *hdl = &imx582->ctrl_handler;
++	struct v4l2_fwnode_device_properties props;
++	int exposure_max, hblank;
++	unsigned int i;
++	int ret;
++
++	ret = v4l2_fwnode_device_parse(imx582->sd.dev, &props);
++	if (ret)
++		return ret;
++
++	v4l2_ctrl_handler_init(hdl, 16);
++
++	imx582->pixel_rate = v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops,
++					       V4L2_CID_PIXEL_RATE,
++					       mode->pixel_rate,
++					       mode->pixel_rate, 1,
++					       mode->pixel_rate);
++
++	imx582->link_freq =
++		v4l2_ctrl_new_int_menu(hdl, &imx582_ctrl_ops,
++				       V4L2_CID_LINK_FREQ,
++				       ARRAY_SIZE(imx582_link_freq_menu) - 1,
++				       mode->link_freq_index,
++				       imx582_link_freq_menu);
++	if (imx582->link_freq)
++		imx582->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
++
++	imx582->vblank = v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops,
++					   V4L2_CID_VBLANK, mode->vblank_min,
++					   IMX582_FRAME_LENGTH_MAX - mode->height,
++					   1, mode->fll_def - mode->height);
++
++	hblank = mode->llp - mode->width;
++	imx582->hblank = v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops,
++					   V4L2_CID_HBLANK, hblank, hblank, 1,
++					   hblank);
++	if (imx582->hblank)
++		imx582->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
++
++	exposure_max = mode->fll_def - IMX582_EXPOSURE_MARGIN;
++	imx582->exposure = v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops,
++					     V4L2_CID_EXPOSURE,
++					     IMX582_EXPOSURE_MIN, exposure_max,
++					     IMX582_EXPOSURE_STEP,
++					     exposure_max);
++
++	v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops, V4L2_CID_ANALOGUE_GAIN,
++			  IMX582_ANA_GAIN_MIN, IMX582_ANA_GAIN_MAX,
++			  IMX582_ANA_GAIN_STEP, IMX582_ANA_GAIN_DEFAULT);
++
++	v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops, V4L2_CID_DIGITAL_GAIN,
++			  IMX582_DGTL_GAIN_MIN, IMX582_DGTL_GAIN_MAX,
++			  IMX582_DGTL_GAIN_STEP, IMX582_DGTL_GAIN_DEFAULT);
++
++	imx582->hflip = v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops,
++					  V4L2_CID_HFLIP, 0, 1, 1, 0);
++	if (imx582->hflip)
++		imx582->hflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
++
++	imx582->vflip = v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops,
++					  V4L2_CID_VFLIP, 0, 1, 1, 0);
++	if (imx582->vflip)
++		imx582->vflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
++
++	v4l2_ctrl_new_std_menu_items(hdl, &imx582_ctrl_ops,
++				     V4L2_CID_TEST_PATTERN,
++				     ARRAY_SIZE(imx582_test_pattern_menu) - 1,
++				     0, 0, imx582_test_pattern_menu);
++
++	/* The solid colour pattern is white by default */
++	for (i = 0; i < 4; i++)
++		v4l2_ctrl_new_std(hdl, &imx582_ctrl_ops,
++				  V4L2_CID_TEST_PATTERN_RED + i,
++				  IMX582_TESTP_COLOUR_MIN,
++				  IMX582_TESTP_COLOUR_MAX,
++				  IMX582_TESTP_COLOUR_STEP,
++				  IMX582_TESTP_COLOUR_MAX);
++
++	v4l2_ctrl_new_fwnode_properties(hdl, &imx582_ctrl_ops, &props);
++
++	if (hdl->error) {
++		ret = hdl->error;
++		v4l2_ctrl_handler_free(hdl);
++		return dev_err_probe(imx582->sd.dev, ret,
++				     "failed to init controls\n");
++	}
++
++	imx582->sd.ctrl_handler = hdl;
++
++	return 0;
++}
++
++/* -----------------------------------------------------------------------------
++ * Subdev operations
++ */
++
++static int imx582_enable_streams(struct v4l2_subdev *sd,
++				 struct v4l2_subdev_state *state, u32 pad,
++				 u64 streams_mask)
++{
++	struct imx582 *imx582 = to_imx582(sd);
++	const struct imx582_mode *mode;
++	int ret;
++
++	ret = pm_runtime_resume_and_get(sd->dev);
++	if (ret < 0)
++		return ret;
++
++	mode = imx582_find_mode(v4l2_subdev_state_get_format(state, 0));
++
++	ret = cci_multi_reg_write(imx582->regmap, imx582_common_regs,
++				  ARRAY_SIZE(imx582_common_regs), NULL);
++	if (!ret)
++		ret = cci_multi_reg_write(imx582->regmap, mode->regs,
++					  mode->num_regs, NULL);
++	if (ret) {
++		dev_err(sd->dev, "failed to write the mode: %d\n", ret);
++		goto err_rpm_put;
++	}
++
++	ret = __v4l2_ctrl_handler_setup(imx582->sd.ctrl_handler);
++	if (ret)
++		goto err_rpm_put;
++
++	ret = cci_write(imx582->regmap, IMX582_REG_MODE_SELECT,
++			IMX582_MODE_STREAMING, NULL);
++	if (ret)
++		goto err_rpm_put;
++
++	/* The Bayer order can't change while streaming */
++	__v4l2_ctrl_grab(imx582->vflip, true);
++	__v4l2_ctrl_grab(imx582->hflip, true);
++
++	return 0;
++
++err_rpm_put:
++	pm_runtime_put_autosuspend(sd->dev);
++
++	return ret;
++}
++
++static int imx582_disable_streams(struct v4l2_subdev *sd,
++				  struct v4l2_subdev_state *state, u32 pad,
++				  u64 streams_mask)
++{
++	struct imx582 *imx582 = to_imx582(sd);
++	int ret;
++
++	ret = cci_write(imx582->regmap, IMX582_REG_MODE_SELECT,
++			IMX582_MODE_STANDBY, NULL);
++	if (ret)
++		dev_err(sd->dev, "failed to stop streaming: %d\n", ret);
++
++	__v4l2_ctrl_grab(imx582->vflip, false);
++	__v4l2_ctrl_grab(imx582->hflip, false);
++
++	pm_runtime_put_autosuspend(sd->dev);
++
++	return ret;
++}
++
++static void imx582_update_pad_format(struct imx582 *imx582,
++				     const struct imx582_mode *mode,
++				     struct v4l2_mbus_framefmt *fmt)
++{
++	fmt->code = imx582_get_format_code(imx582);
++	fmt->width = mode->width;
++	fmt->height = mode->height;
++	fmt->field = V4L2_FIELD_NONE;
++	fmt->colorspace = V4L2_COLORSPACE_RAW;
++	fmt->ycbcr_enc = V4L2_YCBCR_ENC_601;
++	fmt->quantization = V4L2_QUANTIZATION_FULL_RANGE;
++	fmt->xfer_func = V4L2_XFER_FUNC_NONE;
++}
++
++static int imx582_enum_mbus_code(struct v4l2_subdev *sd,
++				 struct v4l2_subdev_state *state,
++				 struct v4l2_subdev_mbus_code_enum *code)
++{
++	struct imx582 *imx582 = to_imx582(sd);
++
++	if (code->index > 0)
++		return -EINVAL;
++
++	code->code = imx582_get_format_code(imx582);
++
++	return 0;
++}
++
++static int imx582_enum_frame_size(struct v4l2_subdev *sd,
++				  struct v4l2_subdev_state *state,
++				  struct v4l2_subdev_frame_size_enum *fse)
++{
++	struct imx582 *imx582 = to_imx582(sd);
++
++	if (fse->index >= ARRAY_SIZE(imx582_modes))
++		return -EINVAL;
++
++	if (fse->code != imx582_get_format_code(imx582))
++		return -EINVAL;
++
++	fse->min_width = imx582_modes[fse->index].width;
++	fse->max_width = fse->min_width;
++	fse->min_height = imx582_modes[fse->index].height;
++	fse->max_height = fse->min_height;
++
++	return 0;
++}
++
++static int imx582_set_pad_format(struct v4l2_subdev *sd,
++				 struct v4l2_subdev_state *state,
++				 struct v4l2_subdev_format *fmt)
++{
++	struct imx582 *imx582 = to_imx582(sd);
++	const struct imx582_mode *mode;
++	int exposure_max, hblank;
++	int ret;
++
++	mode = imx582_find_mode(&fmt->format);
++
++	imx582_update_pad_format(imx582, mode, &fmt->format);
++	*v4l2_subdev_state_get_format(state, 0) = fmt->format;
++	*v4l2_subdev_state_get_crop(state, 0) = mode->crop;
++
++	if (fmt->which == V4L2_SUBDEV_FORMAT_TRY)
++		return 0;
++
++	ret = __v4l2_ctrl_modify_range(imx582->pixel_rate, mode->pixel_rate,
++				       mode->pixel_rate, 1, mode->pixel_rate);
++	if (ret)
++		return ret;
++
++	ret = __v4l2_ctrl_s_ctrl(imx582->link_freq, mode->link_freq_index);
++	if (ret)
++		return ret;
++
++	hblank = mode->llp - mode->width;
++	ret = __v4l2_ctrl_modify_range(imx582->hblank, hblank, hblank, 1,
++				       hblank);
++	if (ret)
++		return ret;
++
++	ret = __v4l2_ctrl_modify_range(imx582->vblank, mode->vblank_min,
++				       IMX582_FRAME_LENGTH_MAX - mode->height,
++				       1, mode->fll_def - mode->height);
++	if (ret)
++		return ret;
++
++	ret = __v4l2_ctrl_s_ctrl(imx582->vblank, mode->fll_def - mode->height);
++	if (ret)
++		return ret;
++
++	exposure_max = mode->fll_def - IMX582_EXPOSURE_MARGIN;
++
++	return __v4l2_ctrl_modify_range(imx582->exposure, IMX582_EXPOSURE_MIN,
++					exposure_max, IMX582_EXPOSURE_STEP,
++					exposure_max);
++}
++
++static int imx582_get_selection(struct v4l2_subdev *sd,
++				struct v4l2_subdev_state *state,
++				struct v4l2_subdev_selection *sel)
++{
++	switch (sel->target) {
++	case V4L2_SEL_TGT_CROP:
++		sel->r = *v4l2_subdev_state_get_crop(state, 0);
++		return 0;
++
++	case V4L2_SEL_TGT_NATIVE_SIZE:
++	case V4L2_SEL_TGT_CROP_DEFAULT:
++	case V4L2_SEL_TGT_CROP_BOUNDS:
++		sel->r.top = 0;
++		sel->r.left = 0;
++		sel->r.width = IMX582_NATIVE_WIDTH;
++		sel->r.height = IMX582_NATIVE_HEIGHT;
++		return 0;
++	}
++
++	return -EINVAL;
++}
++
++static int imx582_init_state(struct v4l2_subdev *sd,
++			     struct v4l2_subdev_state *state)
++{
++	struct v4l2_subdev_format fmt = {
++		.which = V4L2_SUBDEV_FORMAT_TRY,
++		.pad = 0,
++		.format = {
++			.width = imx582_modes[0].width,
++			.height = imx582_modes[0].height,
++		},
++	};
++
++	return imx582_set_pad_format(sd, state, &fmt);
++}
++
++static const struct v4l2_subdev_video_ops imx582_video_ops = {
++	.s_stream = v4l2_subdev_s_stream_helper,
++};
++
++static const struct v4l2_subdev_pad_ops imx582_pad_ops = {
++	.enum_mbus_code = imx582_enum_mbus_code,
++	.get_fmt = v4l2_subdev_get_fmt,
++	.set_fmt = imx582_set_pad_format,
++	.get_selection = imx582_get_selection,
++	.enum_frame_size = imx582_enum_frame_size,
++	.enable_streams = imx582_enable_streams,
++	.disable_streams = imx582_disable_streams,
++};
++
++static const struct v4l2_subdev_ops imx582_subdev_ops = {
++	.video = &imx582_video_ops,
++	.pad = &imx582_pad_ops,
++};
++
++static const struct v4l2_subdev_internal_ops imx582_internal_ops = {
++	.init_state = imx582_init_state,
++};
++
++/* -----------------------------------------------------------------------------
++ * Power management
++ */
++
++static int imx582_power_on(struct device *dev)
++{
++	struct v4l2_subdev *sd = dev_get_drvdata(dev);
++	struct imx582 *imx582 = to_imx582(sd);
++	int ret;
++
++	ret = regulator_bulk_enable(ARRAY_SIZE(imx582->supplies),
++				    imx582->supplies);
++	if (ret) {
++		dev_err(dev, "failed to enable regulators: %d\n", ret);
++		return ret;
++	}
++
++	ret = clk_prepare_enable(imx582->xclk);
++	if (ret) {
++		dev_err(dev, "failed to enable clock: %d\n", ret);
++		goto err_regulators;
++	}
++
++	gpiod_set_value_cansleep(imx582->reset_gpio, 0);
++	fsleep(IMX582_RESET_DELAY_US);
++
++	return 0;
++
++err_regulators:
++	regulator_bulk_disable(ARRAY_SIZE(imx582->supplies), imx582->supplies);
++
++	return ret;
++}
++
++static int imx582_power_off(struct device *dev)
++{
++	struct v4l2_subdev *sd = dev_get_drvdata(dev);
++	struct imx582 *imx582 = to_imx582(sd);
++
++	clk_disable_unprepare(imx582->xclk);
++	gpiod_set_value_cansleep(imx582->reset_gpio, 1);
++	regulator_bulk_disable(ARRAY_SIZE(imx582->supplies), imx582->supplies);
++
++	return 0;
++}
++
++/* -----------------------------------------------------------------------------
++ * Probe & remove
++ */
++
++static int imx582_identify_module(struct imx582 *imx582)
++{
++	struct device *dev = imx582->sd.dev;
++	u64 val;
++	int ret;
++
++	ret = cci_read(imx582->regmap, IMX582_REG_CHIP_ID, &val, NULL);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to read chip id\n");
++
++	if (val != IMX582_CHIP_ID)
++		return dev_err_probe(dev, -ENODEV,
++				     "chip id mismatch: %x!=%llx\n",
++				     IMX582_CHIP_ID, val);
++
++	return 0;
++}
++
++static int imx582_check_hwcfg(struct device *dev)
++{
++	struct v4l2_fwnode_endpoint ep_cfg = {
++		.bus_type = V4L2_MBUS_CSI2_DPHY
++	};
++	struct fwnode_handle *endpoint;
++	unsigned long link_freq_bitmap;
++	int ret;
++
++	endpoint = fwnode_graph_get_next_endpoint(dev_fwnode(dev), NULL);
++	if (!endpoint)
++		return dev_err_probe(dev, -EINVAL, "endpoint node not found\n");
++
++	ret = v4l2_fwnode_endpoint_alloc_parse(endpoint, &ep_cfg);
++	fwnode_handle_put(endpoint);
++	if (ret)
++		return dev_err_probe(dev, ret, "could not parse endpoint\n");
++
++	if (ep_cfg.bus.mipi_csi2.num_data_lanes != 4) {
++		ret = dev_err_probe(dev, -EINVAL,
++				    "only 4 data lanes are supported\n");
++		goto out;
++	}
++
++	ret = v4l2_link_freq_to_bitmap(dev, ep_cfg.link_frequencies,
++				       ep_cfg.nr_of_link_frequencies,
++				       imx582_link_freq_menu,
++				       ARRAY_SIZE(imx582_link_freq_menu),
++				       &link_freq_bitmap);
++	if (ret)
++		goto out;
++
++	if (link_freq_bitmap != GENMASK(ARRAY_SIZE(imx582_link_freq_menu) - 1, 0))
++		ret = dev_err_probe(dev, -EINVAL,
++				    "every mode's link frequency is needed\n");
++
++out:
++	v4l2_fwnode_endpoint_free(&ep_cfg);
++
++	return ret;
++}
++
++static int imx582_probe(struct i2c_client *client)
++{
++	struct device *dev = &client->dev;
++	struct imx582 *imx582;
++	unsigned long rate;
++	unsigned int i;
++	int ret;
++
++	imx582 = devm_kzalloc(dev, sizeof(*imx582), GFP_KERNEL);
++	if (!imx582)
++		return -ENOMEM;
++
++	v4l2_i2c_subdev_init(&imx582->sd, client, &imx582_subdev_ops);
++	imx582->sd.internal_ops = &imx582_internal_ops;
++
++	ret = imx582_check_hwcfg(dev);
++	if (ret)
++		return ret;
++
++	imx582->regmap = devm_cci_regmap_init_i2c(client, 16);
++	if (IS_ERR(imx582->regmap))
++		return dev_err_probe(dev, PTR_ERR(imx582->regmap),
++				     "failed to initialize CCI\n");
++
++	imx582->xclk = devm_v4l2_sensor_clk_get(dev, NULL);
++	if (IS_ERR(imx582->xclk))
++		return dev_err_probe(dev, PTR_ERR(imx582->xclk),
++				     "failed to get xclk\n");
++
++	rate = clk_get_rate(imx582->xclk);
++	if (rate != IMX582_XCLK_FREQ)
++		return dev_err_probe(dev, -EINVAL,
++				     "xclk frequency not supported: %lu Hz\n",
++				     rate);
++
++	for (i = 0; i < ARRAY_SIZE(imx582_supply_names); i++)
++		imx582->supplies[i].supply = imx582_supply_names[i];
++
++	ret = devm_regulator_bulk_get(dev, ARRAY_SIZE(imx582->supplies),
++				      imx582->supplies);
++	if (ret)
++		return dev_err_probe(dev, ret, "failed to get regulators\n");
++
++	imx582->reset_gpio = devm_gpiod_get_optional(dev, "reset",
++						     GPIOD_OUT_HIGH);
++	if (IS_ERR(imx582->reset_gpio))
++		return dev_err_probe(dev, PTR_ERR(imx582->reset_gpio),
++				     "failed to get reset gpio\n");
++
++	ret = imx582_power_on(dev);
++	if (ret)
++		return ret;
++
++	ret = imx582_identify_module(imx582);
++	if (ret)
++		goto error_power_off;
++
++	ret = imx582_init_controls(imx582);
++	if (ret)
++		goto error_power_off;
++
++	imx582->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
++	imx582->sd.entity.function = MEDIA_ENT_F_CAM_SENSOR;
++	imx582->pad.flags = MEDIA_PAD_FL_SOURCE;
++
++	ret = media_entity_pads_init(&imx582->sd.entity, 1, &imx582->pad);
++	if (ret) {
++		dev_err_probe(dev, ret, "failed to init entity pads\n");
++		goto error_handler_free;
++	}
++
++	imx582->sd.state_lock = imx582->ctrl_handler.lock;
++	ret = v4l2_subdev_init_finalize(&imx582->sd);
++	if (ret < 0) {
++		dev_err_probe(dev, ret, "subdev init error\n");
++		goto error_media_entity;
++	}
++
++	pm_runtime_set_active(dev);
++	pm_runtime_enable(dev);
++
++	ret = v4l2_async_register_subdev_sensor(&imx582->sd);
++	if (ret < 0) {
++		dev_err_probe(dev, ret,
++			      "failed to register sensor sub-device\n");
++		goto error_subdev_cleanup;
++	}
++
++	pm_runtime_set_autosuspend_delay(dev, 1000);
++	pm_runtime_use_autosuspend(dev);
++	pm_runtime_idle(dev);
++
++	return 0;
++
++error_subdev_cleanup:
++	v4l2_subdev_cleanup(&imx582->sd);
++	pm_runtime_disable(dev);
++	pm_runtime_set_suspended(dev);
++
++error_media_entity:
++	media_entity_cleanup(&imx582->sd.entity);
++
++error_handler_free:
++	v4l2_ctrl_handler_free(imx582->sd.ctrl_handler);
++
++error_power_off:
++	imx582_power_off(dev);
++
++	return ret;
++}
++
++static void imx582_remove(struct i2c_client *client)
++{
++	struct v4l2_subdev *sd = i2c_get_clientdata(client);
++
++	v4l2_async_unregister_subdev(sd);
++	v4l2_subdev_cleanup(sd);
++	media_entity_cleanup(&sd->entity);
++	v4l2_ctrl_handler_free(sd->ctrl_handler);
++
++	pm_runtime_disable(&client->dev);
++	if (!pm_runtime_status_suspended(&client->dev)) {
++		imx582_power_off(&client->dev);
++		pm_runtime_set_suspended(&client->dev);
++	}
++}
++
++static DEFINE_RUNTIME_DEV_PM_OPS(imx582_pm_ops, imx582_power_off,
++				 imx582_power_on, NULL);
++
++static const struct of_device_id imx582_of_match[] = {
++	{ .compatible = "sony,imx582" },
++	{ /* sentinel */ }
++};
++MODULE_DEVICE_TABLE(of, imx582_of_match);
++
++static struct i2c_driver imx582_i2c_driver = {
++	.driver = {
++		.name = "imx582",
++		.of_match_table = imx582_of_match,
++		.pm = pm_ptr(&imx582_pm_ops),
++	},
++	.probe = imx582_probe,
++	.remove = imx582_remove,
++};
++module_i2c_driver(imx582_i2c_driver);
++
++MODULE_AUTHOR("Bruno Gregório <accounts@bruno.pw>");
++MODULE_DESCRIPTION("Sony IMX582 sensor driver");
++MODULE_LICENSE("GPL");

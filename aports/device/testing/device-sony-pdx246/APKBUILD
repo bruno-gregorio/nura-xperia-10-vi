@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=12
+pkgrel=13
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -185,5 +185,5 @@ f21a83a2d72f89825ffe640e3e2af53f4603995e1e9027e64970c277d02b52229c3fa8995de65a45
 603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs.downstream
 427a4881e9e9b169d05a96d681378c0dc91179cab6bd2e3e6865147507558f537d9558a03caf50962e4013709bcc54f6303fc01e2f8cd34443ba76564ee2505f  modules-initfs.mainline
 1866b559231ecf5943ee386d17a308bef856583f1ff26e4fbff65e7b6f0f6f145a31fc3777d8e7eb61f57a6a86cbdfa15ad91d79853fbfda7fec3fd1804c7773  ucm-HiFi.conf
-e2d73b17aea70973a4dda2fc0c7009ad5c162b7d5ed9cc0e3a8ba5b5f85ca068d9c61598aa537aae7ad9e85bc13ae3fa1dc60759daf8670d8940524f5a90cda3  ucm-Sony-Xperia-10-VI.conf
+2e0ea13e2885198814854da47b21485e56fab1de650d31feda44da6133d546ad42bcba76c382168eb11e2e9cb746fac64684ec91b23b6bbedbe74ad51e849f07  ucm-Sony-Xperia-10-VI.conf
 "

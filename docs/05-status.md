@@ -5170,6 +5170,48 @@ as what it would have fixed.
       about 4.7 times the gain.
     - The dump stays in the scratch directory, out of git, and bytes
       0x00 to 0x19 were neither printed nor kept.
+- **egisap64 loads over `qcomtee` from a Linux client** — our own
+  `egisfp-tee` package (binary `egisfp-load`), kernel pkgrel 39,
+  2026-10-12. `out/try-kernel/run-fp-smoke.log` and `run-fp-diag.log`
+  have the transcripts. This is the first time this phone's own
+  fingerprint trusted app has run under mainline Linux.
+  - **Verified, the image assembles:** the client reads
+    `egisap64.b00`–`.b08` from `out/firmware/modem_b/image`, parses the
+    ELF64 program headers in `.b00`, and lays each `.bNN` at its
+    `p_offset` — the same split-MBN assembly Qualcomm's
+    `__qseecom_start_app` does — producing a 2519128-byte image.
+  - **Verified, QTEE loads it:** the client opens the root object,
+    registers a client with a credentials object, opens `IClientEnv`
+    UID 122 (the QSEEComCompat app loader), and calls `loadFromBuffer`
+    (op 1) with the image and the name "egisap64". It returns
+    `QCOMTEE_OK` and `distName` "fingerprint". So QTEE accepts Sony's
+    OEM-only v7 chain from a plain HLOS client, and route (b) — the UID
+    122 compat loader — is real on this phone, resolving the research's
+    main open question. The client then unloads (op 2) cleanly, freeing
+    the single-residency "fingerprint" app name for the next run.
+  - **Verified, invocation round-trips:** `sendRequest` (op 0,
+    `ObjectCounts(4,2,4,0)`: `reqIn`, `rspIn`, an empty
+    `embeddedBufOffsets`, `is64`=1; `reqOut`, `rspOut`; four null memory
+    objects) returned `QCOMTEE_OK` for top commands 0x00 and 0x01. No
+    listener, no RPMB and no shared-memory object were needed for this.
+  - **Verified, command 0x01 writes no response:** with the response
+    buffer pre-filled to 0xAA, commands 0x00 and 0x01 (operands 7 and 3)
+    both left it entirely 0xAA and left `reqOut` equal to `reqIn`. So
+    cmd 0x01 does **not** store `operand*10` at response offset 0; the
+    earlier reading of the handler — `out/dl-fp/notes-re/re-findings.md`
+    — overstated a C `return len*10` as a buffer write. The compat path
+    surfaces only the transport status (0), not the app's return, so
+    command 0x01 cannot by itself prove the in-TA handler ran.
+  - **Reasoned, real data needs the ETS path:** confirming the handler
+    and reaching the BIX commands (`get_version`, `hello`, enrol,
+    verify) needs top command 0xE0, which carries a pointer at request
+    offset 8 that TrustZone must fix up (route b,
+    `embeddedBufOffsets=[8]` with a memory object as `smo1`). A wrong
+    fix-up resets the phone, so 0xE0 stays gated until the fix-up is
+    proven, and enrol/verify will also need the RPMB and GP-FS
+    listeners and owner consent before any RPMB write.
+  - No TA blob is committed: `egisfp-tee` ships only the binary, and the
+    `.bNN` segments were pushed to `/tmp` on the phone for the test.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

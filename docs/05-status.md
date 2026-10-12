@@ -5030,8 +5030,10 @@ as what it would have fixed.
       the range between them by 15% past infinity and 30% past macro,
       and scans it in 400 steps. Our autofocus scans the lens's whole
       range, 0 to 1023, in steps of about 100 and then 25.
-    - This phone's EEPROM has not been read. Its bytes 0x00 to 0x19 may
-      hold a serial number, and stay out of git and logs.
+    - This phone's EEPROM was read in plan 20261012za (see "The
+      fingerprint's GPIOs and Qualcomm's TEE, on the phone"). Its bytes
+      0x00 to 0x19 may hold a serial number, and stay out of git and
+      logs.
   - **Verified, the Hi-846s keep their calibration in the sensor's own
     OTP:** white balance and lens shading, in three groups each, and no
     focus data.
@@ -5115,9 +5117,10 @@ as what it would have fixed.
       `qcom_scm` creates only when TrustZone answers its probe.
     - Reasoned: only a QSEECom compatibility loader (UID 122) can fix
       up the pointer through `qcomtee`. Whether this QTEE lets a Linux
-      client open it is the open question. The fallback is an
-      out-of-tree QSEECom TEE driver that others have used with a
-      fingerprint app of this kind.
+      client open it was the open question; plan 20261012za found that
+      it does (see the next entry). The fallback is an out-of-tree
+      QSEECom TEE driver that others have used with a fingerprint app of
+      this kind.
   - **Rules for everything that follows:**
     - Load only `egisap64`. `fingerpr`, Qualcomm's ultrasonic app, is
       unused here and declares the same app name.
@@ -5126,6 +5129,47 @@ as what it would have fixed.
     - Never provision or erase RPMB, and write nothing to it without
       the owner's word: its counters are shared with Android.
     - Leave the fingerprint's SPI engine and its pins to TrustZone.
+- **The fingerprint's GPIOs and Qualcomm's TEE, on the phone** — plan
+  20261012za, kernel pkgrel 39 with quic-teec 1.0.2 and libgpiod 2.3.1,
+  2026-10-12. One stay-up boot; `cmds-stayup-fp1.sh` and
+  `live-stayup-fp1.txt` under `out/try-kernel/` have the commands and
+  what they printed.
+  - **Verified, pkgrel 39 changes nothing else:** it builds `qcomtee` as
+    a module, which moves TrustZone's memory onto the SHM bridge. With
+    `modprobe.blacklist=qcomtee` holding the module back, the ADSP, CDSP
+    and WPSS ran, Wi-Fi and Bluetooth came up, and the sound card,
+    FastRPC nodes and three cameras were there. The modem stayed
+    offline, as it was before. No SMMU fault, warning or oops.
+  - **Verified, TrustZone answers `qcomtee`:** `modprobe qcomtee` made
+    `/dev/tee0`. quic-teec's test client queried the diagnostics service
+    (UID 143), which reported a 782208-byte heap with 613824 bytes free.
+    Then it opened and released UIDs 143, 122, 3 and 87: the QSEECom
+    compatibility loader, the app loader and the listener registration
+    are all within a Linux client's reach. Nothing was loaded and no
+    command was sent.
+    - The driver logged "QTEE version 0.0.0". Guess: this QTEE does not
+      answer the driver's version query, since stock reports 5.2.0.
+  - **Verified, the sensor's GPIOs:** lines 96, 106, 108 and 111 on the
+    TLMM (`gpiochip3`) were unclaimed inputs. Power and reset read low,
+    and the interrupt read 0 even with its pull-up. With VDD and VCC
+    raised, then reset 10 ms later, the interrupt read 1 and gave no
+    edge in 5 s. Power went off in the order Sony's driver uses.
+    - Reasoned: an unpowered sensor holds its interrupt pin low, and an
+      idle one lets it go high. Only TrustZone can tell whether it
+      answers.
+  - **Verified, this phone's IMX582 EEPROM:** read through `at24` as a
+    24c64 at 0x50 on `i2c-3` while the camera streamed 600 frames, from
+    0x1a to the end, with nothing written. `imx582_eeprom_decode.py`
+    under `out/dl-afcal/tools/` decodes it.
+    - The lens focuses at infinity at AK7374 code 136 and at macro at
+      698. CamX's margins make its scan range 52 to 866.
+    - The white balance ratios at D50 are R/G 0.6143 and B/G 0.5313,
+      the same as the golden module's in the tuning file. Reasoned: this
+      unit's colour needs no correction for its module.
+    - The lens shading grid's red corner is 218/1023 of the centre,
+      about 4.7 times the gain.
+    - The dump stays in the scratch directory, out of git, and bytes
+      0x00 to 0x19 were neither printed nor kept.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

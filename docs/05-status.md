@@ -4345,6 +4345,54 @@ as what it would have fixed.
     is not shown. A photo of the screen would settle it.
   - The phone was left up on slot a, logged in. As with any stay-up boot,
     each further boot of that slot uses one of the bootloader's attempts.
+- **The WLAN and Bluetooth in Phosh, and why neither worked** — Verified
+  2026-10-12, 06:47 to 07:07. The owner found both dead in Phosh.
+  - **Verified, the WLAN:** the WPSS sat offline, and nothing in the
+    session started it.
+    - SM6450's node falls back to SC7280's WPSS data, which leaves
+      `auto_boot` off, because on SC7280 ath11k boots the WPSS itself
+      through `qcom,rproc`. ath10k_snoc has no such link.
+    - Writing `start` to the WPSS's remoteproc `state` on the running
+      phone brought it up in under a second. ath10k registered `wlan0`
+      6 s later, and NetworkManager took it as `disconnected`, ready to
+      use. That is what round 65 had done by hand.
+  - **Verified, Bluetooth:** setup on the UART finished, but `btmgmt
+    info` listed no controller, and `bluetoothctl list` was empty.
+    - btqca sets `HCI_QUIRK_USE_BDADDR_PROPERTY` when the controller
+      reports its NVM's default address. Our tree has no
+      `local-bd-address` for the bootloader to fill in, so hci0 stays
+      unconfigured, and bluetoothd only sees configured controllers.
+    - Running bootmac 0.7.1 on the running phone set an address with
+      `btmgmt public-addr`. bluetoothctl then showed the controller,
+      named "Sony Xperia 10 VI", powered.
+  - **The fixes:**
+    - Kernel pkgrel 23 gives `qcom,sm6450-wpss-pas` its own data, the same
+      as SC7280's but with `auto_boot` on.
+    - Device pkgrel 9 depends on `soc-qcom`, as other mainline Qualcomm
+      devices in pmaports do. That brings bootmac, tqftpserv and
+      swclock-offset. swclock-offset only reads the RTC and keeps its
+      offset in a file.
+    - Not `soc-qcom-qbootctl`: it marks the slot good in the UFS GPT.
+  - **How it was deployed:** apk installed the packages into the rootfs
+    chroot, and the same package set onto the running phone. mkinitfs
+    then ran in the chroot, and its `vendor_boot` still names UUID
+    07b8a001. So the card was not rewritten.
+  - **Verified, the stay-up boot of pkgrel 23 (plan 20261012h):** the
+    queue reset the phone back to stock, then flashed and booted it.
+    - The WPSS booted on its own at 8.7 s, and `wlan0` existed by 21.7 s.
+    - The controller was configured and powered, and tqftpserv was
+      started.
+    - The phrog greeter was on screen at about 60 s.
+    - The transcript is `out/try-kernel/live-stayup-net.txt`.
+  - **Not verified:** whether bootmac's WLAN address took. When NetworkManager is
+    not connected it gives `wlan0` a random address for scanning. The
+    address it had read `addr_assign_type` 3, with a prefix that is not
+    bootmac's `02:00`, which fits either case. No log line from bootmac
+    reached logread for either interface. For Bluetooth, though, the
+    configured controller shows that bootmac ran.
+  - **Not explained:** ath10k logs "chan info: invalid frequency 0 (idx
+    41 out of bounds)" during NetworkManager's scans. It did not stop
+    `wlan0` from coming up.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

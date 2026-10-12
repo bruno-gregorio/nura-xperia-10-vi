@@ -3,7 +3,8 @@
 Last updated: 2026-10-12. **Our own kernel boots a full system: round 83
 took the 6.18 mainline kernel through OpenRC into Lomiri, and on
 2026-10-12 all three cameras streamed through libcamera (see "All three
-cameras stream").** The downstream
+cameras stream"), and the main camera focused (see "The main camera
+focuses, at 30 fps").** The downstream
 5.10 kernel booted pmOS to a login on 2026-10-05 (see "The port boots"). The
 mainline kernel then ran in about eighty rounds that stopped in the
 initramfs' debug shell, and brought up USB, the display, touch, the GPU, the
@@ -4796,7 +4797,8 @@ as what it would have fixed.
       ours: the series checks the device tree's link frequencies against
       the clock before it has fetched the clock, so the check passes
       against 0 Hz. The board's Hi-846 endpoints now list the series' 90,
-      180 and 360 MHz.
+      180 and 360 MHz. Pkgrel 36 moved to v6, which fixes that too (see
+      "The main camera focuses, at 30 fps").
   - **Verified, libcamera finds the main camera:** `cam -l` on pkgrel 32
     listed it as "Internal back camera", on the simple pipeline and the
     soft ISP, but libcamera 0.7.2 has no sensor properties, gain helper or
@@ -4852,6 +4854,92 @@ as what it would have fixed.
     gain code as sixteenths over unity, 0 to 240 for 1x to 16x. That is
     the Hynix convention and fits the driver's range, but no Hi-846
     datasheet has been read.
+- **The main camera focuses, at 30 fps** — plans 20261012v, 20261012w
+  and 20261012x, 2026-10-12: stay-up boots of kernel pkgrels 34 to 36
+  with device pkgrel 13, and live runs of `temp/libcamera` pkgrels 106 to
+  109 as the session's user. The transcripts are
+  `out/try-kernel/live-stayup-cam4.txt` to `live-stayup-cam6.txt` and
+  `live-af1.txt` to `live-af3.txt`. As before, no frame left the
+  phone.
+  - **Verified, the AK7374 binds as the IMX582's lens:** the vendor's
+    module data names the main camera's actuator "ak7374_imx582".
+    Pkgrel 34 teaches `ak7375` the AK7374 (a 10-bit position in 0x00 and
+    0x01, shifted by six, and no standby mode) and describes it at 0x0f
+    on the main camera's CCI bus. It binds 3-000f, its `focus_absolute`
+    runs 0 to 1023, and the media graph has an ancillary link from the
+    IMX582 at 3-001a to it.
+    - Reasoned, the lens moves: with exposure and gain held, a sweep
+      from 0 to 1023 lowered the frame's mean from 29.1 to 26.1, and the
+      sweep back raised it again. The camera faced the desk, too close
+      and too dark to show focus.
+  - **Verified, all three sensors report rotation 270,** in V4L2's
+    `camera_sensor_rotation` and in libcamera's Rotation, with the
+    IMX582 and the Hi-846 at 4-0021 at the back and the one at 6-0020 at
+    the front.
+    - Reasoned, 270 is right where stock says 90: stock's roll for the
+      back cameras follows the opposite convention to the binding's, and
+      its front camera reads that sensor turned 180 degrees from ours
+      (GRBG against our GBRG). Nobody has looked at a picture yet.
+  - **Verified, libcamera moves the lens:** `temp/libcamera` pkgrel 106
+    adds lens controls between the simple pipeline and the soft IPA, a
+    sharpness measure in the CPU statistics over the middle third of the
+    frame each way, and a contrast detection autofocus with AfMode,
+    AfTrigger, AfPause and LensPosition. `imx582.yaml` runs it
+    continuously, as apps reaching the camera through PipeWire cannot
+    start a scan. The kernel's `focus_absolute` followed the IPA through
+    0, 204, 31, 613 and 1023, and AfState and LensPosition came back in
+    the metadata.
+  - **Verified, the first three versions of the autofocus did not
+    focus** on that view of the desk in a dim room.
+    - Pkgrel 106 scanned while the AGC was still raising the gain, and
+      the rising noise read as a peak at the macro end.
+    - Pkgrel 107 waits for the brightness to hold still and does not
+      scan a scene under 8 out of 255 above the black level. At 120 fps
+      it said "Too dark to scan" and left the lens at its default of 0.3
+      dioptres. At 30 fps it started five scans while the AGC climbed,
+      and dropped each when the brightness moved more than a fifth.
+    - Pkgrel 108 also waits for the AGC to stop changing the exposure
+      and gain. It then started scans at once, but dropped each of the
+      fourteen the log's summary shows, because moving the lens alone
+      changed the brightness by a fifth: 18.8 at position 0, 15.3 at
+      920. Pkgrel 109 drops a scan when exposure times gain moves by half
+      instead.
+  - **Verified, pkgrel 109 focuses:** on kernel pkgrel 36 it scanned
+    once, as soon as the AGC had settled at 60x gain and 33 ms. In the
+    statistics the transcript kept, one in six, the sharpness rose
+    towards the macro end (0.038 at position 31, 0.045 at 511, 0.051 at
+    948, 0.052 at 1023), and it reported Focused at 1023, 10 dioptres.
+    - Reasoned, that is the right answer: the desk under the lens is
+      nearer than the closest focus of 10 cm.
+  - **Verified, 120 fps had capped the exposure:** libcamera picks the
+    IMX582's 2000x1132 mode for a 1280x720 viewfinder, and that mode
+    started at 120 fps, so exposures stopped at 8 ms. In the dim room
+    the AGC sat at 60x gain and the scene averaged 5 out of 255. Kernel
+    pkgrel 35 starts every IMX582 mode at 30 fps, with frame lengths of
+    4860 and 5055 lines for the 60 and 120 fps modes, which a shorter
+    vertical blanking still reaches. On pkgrel 35 the mode streamed at
+    30.2 fps, with vertical blanking 3923 and exposures up to 5007
+    lines, and the same scene averaged 17.
+  - **Verified, ExposureTime was wrong for every camera:**
+    - The soft IPA took its line duration from the sensor information
+      the software ISP reads at creation, before any mode is set, so the
+      IMX582 reported 12 ms at 117 fps. `temp/libcamera` pkgrel 108
+      passes the configured mode's information at configure time, and
+      the IMX582 now reports 33,017 us at 30 fps: 5007 lines of 6.594 us.
+    - The Hi-846s still reported 133 ms at 30 fps on pkgrel 108. Their
+      driver's pixel rate read 72 MHz, the default 640x480 mode's rate,
+      which the control's range holds every mode to, while every mode's
+      timing needs 288 MHz: lines of 3800, and 2526 of them at 30 fps.
+      The driver logged its 1632x1224 link at 180 MHz, which would give
+      144 MHz and 15 fps. Kernel pkgrel 36 reports 288 MHz in every mode,
+      and the Hi-846s now report 29.6 ms at 30 fps.
+  - **Verified, the Hi-846s stream on v6 of Pengyu Luo's series:**
+    pkgrel 36 carries v6 of 2026-08-31 in place of v5 and our own patch.
+    v6 fetches the clock before it checks link frequencies, as ours did,
+    and brings back the LINK_FREQ control, so camss reads the true link
+    frequency instead of working it out from the pixel rate. It read
+    180 MHz at 1632x1224 and 360 MHz at 3264x2448, and both cameras
+    streamed at 30 fps with no fault.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -5650,9 +5738,15 @@ each entry says how much of it held.
 - **What the cameras still lack.** All three stream through libcamera
   (see "All three cameras stream"), but only as raw Bayer debayered by
   the soft ISP.
-  - Focus. The vendor's module data names the IMX582's voice coil driver
-    "ak7374_imx582", an Asahi Kasei AK7374. It is not described, so the
-    main camera is fixed-focus for now.
+  - Proof of focus. The AK7374 moves the IMX582's lens under the soft
+    IPA's contrast autofocus (see "The main camera focuses, at 30 fps"),
+    but nobody has seen it focus on a lit scene. Where the lens puts
+    infinity and 10 cm is a guess: its whole range stands for them.
+  - A quick start in the dark. The soft IPA's AGC raises the exposure by
+    at most 6% per set of statistics, which come every fourth frame,
+    because its error stops growing once every pixel is in the lowest
+    bin. From a black frame to 60x gain took nine seconds, and the
+    autofocus waits for it.
   - The flash LED, the OIS rail (`cam_ois_vdd`) and the modules'
     calibration EEPROMs.
   - Tuning. The IMX582's colour matrices are another sensor's, and the
@@ -5663,8 +5757,11 @@ each entry says how much of it held.
   - Captures as root: the CMA heap is 16 MiB. pmOS's SDM845 kernel has
     256 MiB and the system heap; raising ours would follow it.
   - Upstream, with the owner's consent: the camss SM6450 series, the
-    IMX582 driver and binding, the ET5907 support, our fix to the Hi-846
-    series, and the two libcamera patches.
+    IMX582 driver and binding, the ET5907 support, the AK7374 support,
+    the Hi-846 pixel rate fix (after v6 or its successor lands), and
+    the libcamera patches: the IMX582's and Hi-846's helpers, the lens
+    controls, the focus statistics, the autofocus and the line duration
+    fix.
 - **What sound still lacks.**
   - Speaker protection. Both amplifiers run 6 dB under stock's profiles
     because nothing watches the speakers' temperature or excursion.

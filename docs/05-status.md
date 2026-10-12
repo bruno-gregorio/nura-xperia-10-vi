@@ -4211,6 +4211,33 @@ as what it would have fixed.
     in qt5-qtsensors. qtmir would also start the sensor again on repowerd's
     `DisplayPowerStateChange`, so turning the screen off and on again may
     bring rotation in the meantime. Reasoned, not tried.
+- **Rounds 95 and 96: the orientation sensor from boot** — Verified
+  2026-10-12, 01:25 to 01:41. Round 95 put make-rootfs-img.sh's image of
+  01:25, UUID 69f7660e, into the card's p1 (fsck 0, resize 0): round 94's
+  rootfs plus our fork of qt5-qtsensors, `temp/qt5-qtsensors`
+  5.15.18_git20250330-r100, whose patch 0007 makes the iio-sensor-proxy
+  backend claim the accelerometer whether or not iio-sensor-proxy has one
+  yet. Round 96 booted it. The transcript is `out/try-kernel/live-r96.txt`.
+  - **Verified:** the session from boot now gets readings. qtmir started
+    its orientation sensor at 23.6 s, iio-sensor-proxy had the
+    accelerometer by 31 s, and at 36.6 s qtmir logged
+    "OrientationSensor::readingChanged", which round 94's session from
+    boot never did. The reading was "undefined", which qtmir ignores
+    ("unknown orientation"), and iio-sensor-proxy's
+    `AccelerometerOrientation` read "undefined" to 57 s.
+  - **Reasoned:** iio-sensor-proxy reports "undefined" for a phone lying
+    flat, which is how it most likely lay. The timing fits a claim: with
+    clients waiting, iio-sensor-proxy sends the orientation after the
+    sensor's first measurement, as it did here 6 s after the sensor
+    appeared, and with none it sends only the sensor's arrival, at once.
+    That the shell turns when the phone does is for someone holding it.
+  - **Verified, and no use as a control:** iio-sensor-proxy used no CPU
+    time over 10 s with Lomiri running, and none after `rc-service tinydm
+    stop`; the samples are handled on the ADSP. Lomiri was also still
+    running 5 s after that stop.
+  - **Verified:** KDE's `kde/5.15` branch of qtsensors and Qt 6's `dev`
+    have the same check in `IIOSensorProxyOrientationSensor::start()`, so
+    the patch is upstream's to take in Qt 6 first.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -5263,10 +5290,11 @@ port boots" above. What is left starts from there.
    by 32 s (round 92). Lomiri boots at its own scale, a grid unit of 24, on
    the pmOS wallpaper (round 94), through our fork of
    postmarketos-ui-lomiri and device pkgrel 8. What is left here:
-   - rotation in the session from boot, which needs Qt 5's iio-sensor-proxy
-     backend to claim the accelerometer before it exists (see "Rounds 93
-     and 94");
+   - rotation in the session from boot: our qt5-qtsensors fork has the
+     session claim the accelerometer and get readings (round 96), and what
+     is left is to tilt the phone and watch the shell turn;
    - a clock, which needs an RTC driver that only reads;
    - and upstream, with the owner's consent: qtmir's rounding (rounds 92
      and 94), `GRID_UNIT_PX` and the wallpaper in postmarketos-ui-lomiri
-     (pmaports issue 2411), and iio-sensor-proxy for Lomiri.
+     (pmaports issue 2411), iio-sensor-proxy for Lomiri, and the
+     qtsensors claim (round 96).

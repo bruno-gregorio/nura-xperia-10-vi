@@ -1,4 +1,4 @@
-From 0c40105adbc76a939c46cc8226c3957ec355a9ac Mon Sep 17 00:00:00 2001
+From f7ce7b56b5f0c26051c5a010e6f7421c2c6ee292 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
 Date: Mon, 12 Oct 2026 15:37:45 -0300
 Subject: [PATCH 3/3] ipa: simple: Add a contrast detection autofocus
@@ -15,9 +15,9 @@ it and its neighbours. A scan whose best is not clearly above its worst
 fails and leaves the lens at the default position.
 
 Noise adds to the sharpness and grows with the gain, so a scan waits
-for the brightness to hold still, as it does once the exposure has
-settled, and starts over if the brightness moves away during it. A
-scene too dark to show anything is not scanned.
+for the AGC to stop changing the exposure and gain and for the
+brightness to hold still, and starts over if the brightness moves away
+during it. A scene too dark to show anything is not scanned.
 
 AfMode, AfTrigger, AfPause and LensPosition work as the control
 definitions describe. In continuous mode the algorithm keeps the
@@ -33,19 +33,19 @@ for infinity to 10 cm.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- src/ipa/simple/algorithms/af.cpp      | 473 ++++++++++++++++++++++++++
- src/ipa/simple/algorithms/af.h        |  99 ++++++
+ src/ipa/simple/algorithms/af.cpp      | 483 ++++++++++++++++++++++++++
+ src/ipa/simple/algorithms/af.h        | 101 ++++++
  src/ipa/simple/algorithms/meson.build |   1 +
- 3 files changed, 573 insertions(+)
+ 3 files changed, 585 insertions(+)
  create mode 100644 src/ipa/simple/algorithms/af.cpp
  create mode 100644 src/ipa/simple/algorithms/af.h
 
 diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
 new file mode 100644
-index 0000000..46003e4
+index 0000000..fb0907d
 --- /dev/null
 +++ b/src/ipa/simple/algorithms/af.cpp
-@@ -0,0 +1,473 @@
+@@ -0,0 +1,483 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/*
 + * Copyright (C) 2026, Bruno Gregório
@@ -84,7 +84,8 @@ index 0000000..46003e4
 + * where the previous set left the lens.
 + *
 + * Noise adds to the sharpness, and grows with the gain, so a scan waits for the
-+ * brightness to hold still, as it does once the exposure has settled, and
++ * AGC to stop changing the exposure and gain, which it does once it has
++ * settled or reached its limits, and for the brightness to hold still. It
 + * starts again if the brightness moves away during it. A scene too dark to
 + * show anything is not scanned at all.
 + *
@@ -171,6 +172,8 @@ index 0000000..46003e4
 +	scanRequested_ = mode_ == controls::AfModeContinuous;
 +	state_ = scanRequested_ ? controls::AfStateScanning : controls::AfStateIdle;
 +	lastBrightness_ = 0.0;
++	lastExposure_ = 0;
++	lastGain_ = 0.0;
 +	lightSteady_ = 0;
 +
 +	hasLens_ = it != lensControls.end();
@@ -285,7 +288,14 @@ index 0000000..46003e4
 +			<< "Lens at " << position_ << ", sharpness " << sharpness
 +			<< ", brightness " << brightness;
 +
-+		if (relativeChange(brightness, lastBrightness_) < kSteadyLight)
++		const auto &agc = context.activeState.agc;
++		bool exposureHeld = agc.exposure == lastExposure_ &&
++				    agc.again == lastGain_;
++		lastExposure_ = agc.exposure;
++		lastGain_ = agc.again;
++
++		if (exposureHeld &&
++		    relativeChange(brightness, lastBrightness_) < kSteadyLight)
 +			lightSteady_++;
 +		else
 +			lightSteady_ = 0;
@@ -521,10 +531,10 @@ index 0000000..46003e4
 +} /* namespace libcamera */
 diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
 new file mode 100644
-index 0000000..a2c0673
+index 0000000..187fffa
 --- /dev/null
 +++ b/src/ipa/simple/algorithms/af.h
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,101 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/*
 + * Copyright (C) 2026, Bruno Gregório
@@ -602,6 +612,8 @@ index 0000000..a2c0673
 +	bool pauseDeferred_ = false;
 +	bool scanRequested_ = false;
 +	double lastBrightness_ = 0.0;
++	int32_t lastExposure_ = 0;
++	double lastGain_ = 0.0;
 +	unsigned int lightSteady_ = 0;
 +	double scanBrightness_ = 0.0;
 +

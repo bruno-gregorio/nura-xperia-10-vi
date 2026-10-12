@@ -1,0 +1,37 @@
+# Maintainer: Bruno Gregório <accounts@bruno.pw>
+#
+# A Free Software smoke-test client for the Egis EC617 fingerprint trusted app
+# (egisap64) on the Xperia 10 VI, over the mainline qcomtee driver and
+# libqcomtee. It loads the phone's own signed TA through QTEE's QSEEComCompat
+# app loader (UID 122) and sends only the trivial echo command 0x01, to prove
+# a Linux client can reach the fingerprint TA. Bring-up tooling; it is the
+# first step of the fingerprint stack, not the stack itself.
+pkgname=egisfp-tee
+pkgver=0.1.0
+pkgrel=0
+pkgdesc="Smoke-test client that loads egisap64 over qcomtee and pings it"
+url="https://github.com/sonyxperiadev"
+arch="aarch64"
+license="BSD-3-Clause"
+makedepends="quic-teec-dev"
+depends="quic-teec"
+source="egisfp-load.c"
+# No TA is bundled; the test needs the phone's own firmware and QTEE.
+options="!check"
+builddir="$srcdir"
+
+build() {
+	# No pkg-config: qcomtee.pc has Requires.private=qcbor, but libqcomtee is
+	# built against libcbor, which it pulls in transitively via its SONAME.
+	${CC:-cc} $CFLAGS $CPPFLAGS \
+		-o egisfp-load "$srcdir"/egisfp-load.c \
+		-lqcomtee -lpthread $LDFLAGS
+}
+
+package() {
+	install -Dm755 egisfp-load "$pkgdir"/usr/bin/egisfp-load
+}
+
+sha512sums="
+3b76466168286634ca3f96c0f7667840bdb12b81ddc57ca7aade7a2275bc7a71ef6cb233c81bf66bc4f25ba48618b2a8808e2808ec98f1647c3c46906bba473a  egisfp-load.c
+"

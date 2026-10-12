@@ -70,3 +70,6 @@ arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable audio
 ASoC: dt-bindings: awinic,aw88395: Add the AW88263
 ASoC: codecs: Add the Awinic AW88263 amplifier driver
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: The top amplifier is an AW88263
+dt-bindings: dma: qcom,gpi: Document the SM6450 GPI DMA engine
+arm64: dts: qcom: sm6450: Add the QUP0 GPI DMA engine
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the bottom amplifier

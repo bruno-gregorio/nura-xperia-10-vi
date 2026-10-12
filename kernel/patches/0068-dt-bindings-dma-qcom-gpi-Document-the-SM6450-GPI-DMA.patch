@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 12:33:11 -0300
+Subject: [PATCH] dt-bindings: dma: qcom,gpi: Document the SM6450 GPI DMA
+ engine
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The SM6450 GPI DMA engine is compatible with the SM6350 one: its
+execution environment sits 0x10000 into the block.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ Documentation/devicetree/bindings/dma/qcom,gpi.yaml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/dma/qcom,gpi.yaml b/Documentation/devicetree/bindings/dma/qcom,gpi.yaml
+index bbe4da2a1..eb0edf29f 100644
+--- a/Documentation/devicetree/bindings/dma/qcom,gpi.yaml
++++ b/Documentation/devicetree/bindings/dma/qcom,gpi.yaml
+@@ -35,6 +35,7 @@ properties:
+               - qcom,sdx75-gpi-dma
+               - qcom,sm6115-gpi-dma
+               - qcom,sm6375-gpi-dma
++              - qcom,sm6450-gpi-dma
+               - qcom,sm8350-gpi-dma
+               - qcom,sm8450-gpi-dma
+               - qcom,sm8550-gpi-dma

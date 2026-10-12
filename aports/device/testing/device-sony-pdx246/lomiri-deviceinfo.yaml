@@ -1,0 +1,9 @@
+sony-pdx246:
+  Names:
+    - Sony Xperia 10 VI
+  PrettyName: Sony Xperia 10 VI
+  DeviceType: phone
+  # 24, not the 23 that 453 ppi would give: Mir's scale is this over 8, and
+  # Lomiri crashes unless that divides 1080x2520 cleanly (see the APKBUILD)
+  GridUnit: 24
+  PrimaryOrientation: Portrait

@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=6
+pkgrel=8
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -37,12 +37,14 @@ source="
 	hexagonrpcd-adsp-sensorspd.conf
 	kernel-cmdline.downstream.conf
 	kernel-cmdline.mainline.conf
+	lomiri-deviceinfo.yaml
 	modules-initfs.downstream
 	modules-initfs.mainline
 "
 subpackages="
 	$pkgname-kernel-downstream:kernel_downstream
 	$pkgname-kernel-mainline:kernel_mainline
+	$pkgname-lomiri:lomiri
 	$pkgname-openrc
 "
 
@@ -63,7 +65,9 @@ kernel_downstream() {
 # The firmware goes with mainline: it sits where our device tree's
 # firmware-name properties and drm/msm's catalog point. firmware-sony-pdx246
 # is built from files taken off the phone; see its APKBUILD. ath10k's
-# firmware-5.bin for the WLAN comes from linux-firmware.
+# firmware-5.bin for the WLAN comes from linux-firmware, and so do the
+# Bluetooth chip's rampatch and NVM, crbtfw32.tlv and crnv32u.bin, which
+# rounds 44 and 53 loaded; until pkgrel 7 nothing pulled them in.
 #
 # hexagonrpcd serves the ADSP's sensors domain its files. Our fork in
 # temp/hexagonrpcd, 0.4.0-r103, adds the sns_reg_version mapping this phone's
@@ -80,6 +84,7 @@ kernel_mainline() {
 		firmware-sony-pdx246-wlan
 		hexagonrpcd>=0.4.0-r103
 		linux-firmware-ath10k
+		linux-firmware-qca
 		linux-postmarketos-qcom-sm6450
 		"
 	devicepkg_subpackage_kernel $startdir $pkgname $subpkgname
@@ -92,11 +97,44 @@ kernel_mainline() {
 		-t "$subpkgdir"/usr/lib/udev/rules.d/
 }
 
+# Lomiri's scale. Lomiri, its UI toolkit and qtmir take it from GRID_UNIT_PX
+# alone, pixels to the grid unit, 8 when unset: round 87's screenshot had a
+# top panel 24 px tall. Our postmarketos-ui-lomiri sets it from this file
+# through device-info, as Ubuntu Touch's lomiri-session does. pmOS's wiki
+# rule, ppi * 0.05236, gives 23 for 453 ppi (Mir reports 61x141 mm), and
+# Android runs this panel at density 450, a scale of 2.81.
+#
+# But qtmir hands Mir a scale of GRID_UNIT_PX / 8 and then finds the output
+# to draw on by its size at that scale, truncated, where Mir rounds it; when
+# the two differ the screen gets no output and Lomiri dies on its first
+# frame (rounds 90 to 92, a null m_outputSurface in
+# PlatformScreen::makeCurrent). On 1080x2520 that rules out 17, 19, 22, 23
+# and 25, and 24 is a whole scale of 3. The key is deviceinfo_codename,
+# which /etc/profile.d/deviceinfo-converter.sh exports as
+# DEVICEINFO_DEVICE_NAME; Names is our device tree's model, for when that is
+# not set.
+lomiri() {
+	pkgdesc="Sony Xperia 10 VI: Lomiri's device configuration"
+	install_if="$pkgname=$pkgver-r$pkgrel postmarketos-ui-lomiri"
+	depends=""
+
+	install -Dm644 "$srcdir"/lomiri-deviceinfo.yaml \
+		"$subpkgdir"/etc/lomiri-deviceinfo/devices/sony-pdx246.yaml
+}
+
 # Starts hexagonrpcd for the sensors at boot, as Fairphone 5 does. Only with
 # the mainline kernel, which is the one with the files to serve.
+#
+# Also iio-sensor-proxy, the one thing that reads them: Qt's sensor plugins
+# and GNOME both go through it, and libssc gives it the accelerometer,
+# light, proximity and compass (round 84), all four by 31 s into a boot
+# with no help once the ADSP's sensors are up (round 92). The GNOME, Plasma
+# and Sxmo UI packages start it, postmarketos-ui-lomiri does not, so on
+# Lomiri nothing would. That belongs upstream in the UI package; until then
+# it is here.
 openrc() {
 	install_if="$pkgname-kernel-mainline=$pkgver-r$pkgrel openrc"
-	depends="hexagonrpcd-openrc openrc"
+	depends="hexagonrpcd-openrc iio-sensor-proxy-openrc openrc"
 
 	mkdir -p "$subpkgdir"
 }
@@ -108,6 +146,7 @@ sha512sums="
 d43fa56f8b8119ae57526c49ed704dfa2d16ac9ea9adbc78892dfb2dd04b15e246160a8cc8e3a0e8f1d39390f0865eb950a0b47b45f2f380844c2f2c1c0b1464  hexagonrpcd-adsp-sensorspd.conf
 e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e57738a425bd75dfe7e28985cc60756f010bfd70fdbff79bb4  kernel-cmdline.downstream.conf
 0de42370419287d3b492ee279ca01d0169ced9b143aa1a4e4d1f94de9437b7df5cc552e5d5388d8909c3fe9c7bc765902f9a883feccd5e87eb0dc46d409c6066  kernel-cmdline.mainline.conf
+f21a83a2d72f89825ffe640e3e2af53f4603995e1e9027e64970c277d02b52229c3fa8995de65a4516571048fb2763f9d74a5dd1dbcce0359d262252e4f66180  lomiri-deviceinfo.yaml
 603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs.downstream
 427a4881e9e9b169d05a96d681378c0dc91179cab6bd2e3e6865147507558f537d9558a03caf50962e4013709bcc54f6303fc01e2f8cd34443ba76564ee2505f  modules-initfs.mainline
 "

@@ -99,7 +99,9 @@ def run_pty(argv, timeout, stdin_path=None):
             os.close(f)
         os.execvp(argv[0], argv)
 
-    out = b""
+    # A bytearray, and a search over only what is new, because a pulled file
+    # comes through here too and can run to many megabytes.
+    out = bytearray()
     answered = 0
     seen = 0
     timed_out = False
@@ -118,10 +120,12 @@ def run_pty(argv, timeout, stdin_path=None):
         if not chunk:
             break
         out += chunk
+        if answered >= MAX_PROMPTS:
+            continue
         # Only a prompt that came after the last one answered counts, so
         # one prompt is never answered twice.
-        at = out.find(b"assword", seen)
-        if at >= 0 and answered < MAX_PROMPTS:
+        at = out.find(b"assword", max(seen, len(out) - len(chunk) - 7))
+        if at >= 0:
             os.write(fd, PASSWORD.encode() + b"\n")
             answered += 1
             seen = at + len(b"assword")

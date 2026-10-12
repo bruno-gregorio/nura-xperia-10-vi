@@ -24,10 +24,13 @@ else
 fi
 
 # Device packages are three levels down (device/testing/<pkg>), forks of
-# Alpine packages in temp/ two (temp/<pkg>), as in pmaports.
+# Alpine packages in temp/ two (temp/<pkg>), as in pmaports. Forks of
+# pmaports' own packages sit where those do, in main/<pkg>, and replace the
+# upstream copy in the checkout.
 {
 	find "$SRC/device" -mindepth 2 -maxdepth 2 -type d
 	[ ! -d "$SRC/temp" ] || find "$SRC/temp" -mindepth 1 -maxdepth 1 -type d
+	[ ! -d "$SRC/main" ] || find "$SRC/main" -mindepth 1 -maxdepth 1 -type d
 } | while read -r pkgdir; do
 	rel=${pkgdir#"$SRC"/}
 	[ -d "$a/$rel" ] || continue

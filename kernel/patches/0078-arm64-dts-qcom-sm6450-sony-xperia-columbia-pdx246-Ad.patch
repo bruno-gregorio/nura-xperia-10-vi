@@ -14,14 +14,14 @@ ones it gives the PM8010 that it lists as the PMIC's alternative.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 178 ++++++++++++++++++
- 1 file changed, 178 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 180 ++++++++++++++++++
+ 1 file changed, 180 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 711b06021..c038d4371 100644
+index 711b06021..b22b651ad 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -430,6 +430,85 @@ pm6150l_bob: bob {
+@@ -430,6 +430,87 @@ pm6150l_bob: bob {
  	};
  };
  
@@ -56,7 +56,8 @@ index 711b06021..c038d4371 100644
 +		port {
 +			cam_wide_out: endpoint {
 +				data-lanes = <1 2 3 4>;
-+				link-frequencies = /bits/ 64 <80000000 200000000>;
++				link-frequencies = /bits/ 64 <90000000 180000000
++							      360000000>;
 +			};
 +		};
 +	};
@@ -98,7 +99,8 @@ index 711b06021..c038d4371 100644
 +		port {
 +			cam_front_out: endpoint {
 +				data-lanes = <1 2 3 4>;
-+				link-frequencies = /bits/ 64 <80000000 200000000>;
++				link-frequencies = /bits/ 64 <90000000 180000000
++							      360000000>;
 +			};
 +		};
 +	};
@@ -107,7 +109,7 @@ index 711b06021..c038d4371 100644
  &gpi_dma0 {
  	status = "okay";
  };
-@@ -469,6 +548,70 @@ amp_top: audio-codec@34 {
+@@ -469,6 +550,70 @@ amp_top: audio-codec@34 {
  &i2c2 {
  	status = "okay";
  
@@ -178,7 +180,7 @@ index 711b06021..c038d4371 100644
  	/* Its twin on the bottom speaker, taking the stream's other channel. */
  	amp_bottom: audio-codec@34 {
  		compatible = "awinic,aw88263";
-@@ -569,6 +712,13 @@ panel_vddio_en: panel-vddio-en-state {
+@@ -569,6 +714,13 @@ panel_vddio_en: panel-vddio-en-state {
  };
  
  &pm6450_gpios {
@@ -192,7 +194,7 @@ index 711b06021..c038d4371 100644
  	vol_down_n: vol-down-n-state {
  		pins = "gpio1";
  		function = "normal";
-@@ -727,6 +877,34 @@ wcd937x_tx: codec@0,3 {
+@@ -727,6 +879,34 @@ wcd937x_tx: codec@0,3 {
  };
  
  &tlmm {

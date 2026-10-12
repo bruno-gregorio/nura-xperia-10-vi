@@ -16,7 +16,7 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 33 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index f42db2744..95c4a91c3 100644
+index b776c0c20..7f2044bb7 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -447,6 +447,36 @@ pm6150l_bob: bob {
@@ -64,18 +64,18 @@ index f42db2744..95c4a91c3 100644
  			};
  		};
  	};
-@@ -511,6 +542,7 @@ port {
- 			cam_wide_out: endpoint {
+@@ -512,6 +543,7 @@ cam_wide_out: endpoint {
  				data-lanes = <1 2 3 4>;
- 				link-frequencies = /bits/ 64 <80000000 200000000>;
+ 				link-frequencies = /bits/ 64 <90000000 180000000
+ 							      360000000>;
 +				remote-endpoint = <&camss_wide_in>;
  			};
  		};
  	};
-@@ -553,6 +585,7 @@ port {
- 			cam_front_out: endpoint {
+@@ -555,6 +587,7 @@ cam_front_out: endpoint {
  				data-lanes = <1 2 3 4>;
- 				link-frequencies = /bits/ 64 <80000000 200000000>;
+ 				link-frequencies = /bits/ 64 <90000000 180000000
+ 							      360000000>;
 +				remote-endpoint = <&camss_front_in>;
  			};
  		};

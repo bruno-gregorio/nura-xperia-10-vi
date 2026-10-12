@@ -12,12 +12,12 @@ existing CSID 340 and VFE 340 code.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- drivers/media/platform/qcom/camss/camss-vfe.c |   1 +
+ drivers/media/platform/qcom/camss/camss-vfe.c |   2 +
  drivers/media/platform/qcom/camss/camss.c     | 217 ++++++++++++++++++
- 2 files changed, 218 insertions(+)
+ 2 files changed, 219 insertions(+)
 
 diff --git a/drivers/media/platform/qcom/camss/camss-vfe.c b/drivers/media/platform/qcom/camss/camss-vfe.c
-index 20e0d6604..de69a05a3 100644
+index 20e0d6604..2d3d737c0 100644
 --- a/drivers/media/platform/qcom/camss/camss-vfe.c
 +++ b/drivers/media/platform/qcom/camss/camss-vfe.c
 @@ -341,6 +341,7 @@ static u32 vfe_src_pad_code(struct vfe_line *line, u32 sink_code,
@@ -28,6 +28,14 @@ index 20e0d6604..de69a05a3 100644
  	case CAMSS_7280:
  	case CAMSS_8x96:
  	case CAMSS_8250:
+@@ -1989,6 +1990,7 @@ static int vfe_bpl_align(struct vfe_device *vfe)
+ 	int ret = 8;
+ 
+ 	switch (vfe->camss->res->version) {
++	case CAMSS_6450:
+ 	case CAMSS_7280:
+ 	case CAMSS_8250:
+ 	case CAMSS_8280XP:
 diff --git a/drivers/media/platform/qcom/camss/camss.c b/drivers/media/platform/qcom/camss/camss.c
 index c1148f6ad..4e39a1457 100644
 --- a/drivers/media/platform/qcom/camss/camss.c

@@ -95,3 +95,9 @@ media: qcom: camss: vfe-340: Support TFE 640
 media: qcom: camss: Add support for SM6450
 arm64: dts: qcom: sm6450: Add the camera subsystem
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable the camera subsystem
+media: qcom: camss: vfe-340: Print the stride, not the client
+media: hi846: Fix hi846_write_reg_16 handling
+media: hi846: Fix link frequency handling
+media: hi846: Fix modes handling for different lane cases
+media: hi846: Add 6MP and 8MP modes support
+media: hi846: Get the clock before checking link frequencies against it

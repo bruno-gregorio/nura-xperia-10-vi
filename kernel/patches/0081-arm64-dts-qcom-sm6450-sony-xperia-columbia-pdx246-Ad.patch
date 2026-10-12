@@ -21,7 +21,7 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 76 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index c038d4371..a7b1481f4 100644
+index b22b651ad..78fabeda3 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -105,6 +105,23 @@ pmic_glink_hs_in: endpoint {
@@ -87,7 +87,7 @@ index c038d4371..a7b1481f4 100644
  &cci0_i2c1 {
  	clock-frequency = <400000>;
  
-@@ -592,10 +641,16 @@ cam_wide_vana_2p8: ldo4 {
+@@ -594,10 +643,16 @@ cam_wide_vana_2p8: ldo4 {
  				regulator-max-microvolt = <2800000>;
  			};
  
@@ -104,7 +104,7 @@ index c038d4371..a7b1481f4 100644
  			};
  
  			cam_front_vana_2p8: ldo6 {
-@@ -877,6 +932,13 @@ wcd937x_tx: codec@0,3 {
+@@ -879,6 +934,13 @@ wcd937x_tx: codec@0,3 {
  };
  
  &tlmm {
@@ -118,7 +118,7 @@ index c038d4371..a7b1481f4 100644
  	cam_mclk1_default: cam-mclk1-default-state {
  		pins = "gpio40";
  		function = "cam_mclk";
-@@ -891,6 +953,20 @@ cam_mclk3_default: cam-mclk3-default-state {
+@@ -893,6 +955,20 @@ cam_mclk3_default: cam-mclk3-default-state {
  		bias-disable;
  	};
  

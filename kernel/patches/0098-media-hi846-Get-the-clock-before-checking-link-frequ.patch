@@ -1,0 +1,52 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 14:46:51 -0300
+Subject: [PATCH] media: hi846: Get the clock before checking link frequencies
+ against it
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The link frequencies are now worked out from the external clock rate,
+but the probe checks them against the device tree before it gets the
+clock. clk_get_rate() on a NULL clock is 0, so every mode's frequency
+comes out as 0, none is found in the list, and the check passes
+whatever the device tree says.
+
+Get the clock first.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/media/i2c/hi846.c | 12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/media/i2c/hi846.c b/drivers/media/i2c/hi846.c
+index 0fc27545e..469fe725f 100644
+--- a/drivers/media/i2c/hi846.c
++++ b/drivers/media/i2c/hi846.c
+@@ -2207,6 +2207,12 @@ static int hi846_probe(struct i2c_client *client)
+ 	if (!hi846)
+ 		return -ENOMEM;
+ 
++	hi846->clock = devm_v4l2_sensor_clk_get(&client->dev, NULL);
++	if (IS_ERR(hi846->clock))
++		return dev_err_probe(&client->dev, PTR_ERR(hi846->clock),
++				     "failed to get clock: %pe\n",
++				     hi846->clock);
++
+ 	ret = hi846_parse_dt(hi846, &client->dev);
+ 	if (ret) {
+ 		dev_err(&client->dev, "failed to check HW configuration: %d",
+@@ -2214,12 +2220,6 @@ static int hi846_probe(struct i2c_client *client)
+ 		return ret;
+ 	}
+ 
+-	hi846->clock = devm_v4l2_sensor_clk_get(&client->dev, NULL);
+-	if (IS_ERR(hi846->clock))
+-		return dev_err_probe(&client->dev, PTR_ERR(hi846->clock),
+-				     "failed to get clock: %pe\n",
+-				     hi846->clock);
+-
+ 	for (i = 0; i < HI846_NUM_SUPPLIES; i++)
+ 		hi846->supplies[i].supply = hi846_supply_names[i];
+ 

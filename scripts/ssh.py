@@ -17,11 +17,12 @@ hands out, so the common case needs no arguments:
 With -f, the file is a plan's live commands, the way scripts/tsh.py takes
 them in the debug shell: every non-blank line that is not a comment is one
 command, run as root, each over its own connection and under a "$ " header.
-Three lines are not commands:
+Four lines are not commands:
 
     @hold                     hold the phone, see below
     @release                  let it go again
     @push local remote        copy a file over, executable, as root
+    @pull remote local        copy a file back, read as root
 
 The hold is the initramfs's. Its log hook and USB watchdog outlive the switch
 to the rootfs (scripts/bootlog.py, KEEP_SH), still in the initramfs's root,
@@ -35,6 +36,9 @@ password is a throwaway on a development phone and is in the docs already; it
 is a default rather than a secret.
 """
 import argparse
+import base64
+import binascii
+import hashlib
 import os
 import pty
 import select
@@ -67,8 +71,11 @@ MAX_PROMPTS = 2
 
 # Sets J to the initramfs's root as the jobs see it, and renews a hold that
 # is there. /pmkeep is a mount, so it outlives the switch, and the rootfs has
-# no such directory of its own.
-PREFIX = ('J=; for r in /proc/[0-9]*/root; do '
+# no such directory of its own. The jobs started early and their pids are
+# short; a glob sorts by name, so /proc/[0-9]* alone put round 85's 12603, a
+# job's passing child, before the jobs' 129, and it was gone by the touch.
+PREFIX = ('J=; for r in /proc/[0-9]/root /proc/[0-9][0-9]/root '
+          '/proc/[0-9][0-9][0-9]/root /proc/[0-9]*/root; do '
           '[ -e "$r/pmkeep/bin/busybox" ] && { J=$r; break; }; done; '
           '[ -z "$J" ] || [ ! -e "$J/pmhold" ] || touch "$J/pmhold"; ')
 HOLD = ('if [ -n "$J" ]; then touch "$J/pmhold" && echo "held through $J"; '
@@ -169,6 +176,36 @@ def push(local, remote, timeout):
     return f"{local} -> {remote}, {size} bytes", 0
 
 
+def pull(remote, local, timeout):
+    path = local if os.path.isabs(local) else os.path.join(ROOT, local)
+    tmp = "/tmp/.ssh-py-pull"
+    out, code = ssh(as_root(
+        f"install -m 600 -o {USER} {shlex.quote(remote)} {tmp}"
+        f" && sha256sum < {tmp}"), timeout)
+    if code:
+        return out, code
+    want = out.strip().split("\n")[-1].split(" ")[0]
+    # The bytes come back as base64, because the pty that answers ssh's
+    # password prompt would mangle them raw.
+    out, code = ssh(f"base64 {tmp}; rc=$?; rm -f {tmp}; exit $rc", timeout,
+                    tty=False)
+    if code:
+        return out, code
+    lines = [ln.strip() for ln in out.split("\n")]
+    try:
+        data = base64.b64decode("".join(ln for ln in lines if ln),
+                                validate=True)
+    except (binascii.Error, ValueError) as e:
+        return f"ssh.py: {remote} came back garbled: {e}", 1
+    if hashlib.sha256(data).hexdigest() != want:
+        return f"ssh.py: {remote} came back with the wrong checksum", 1
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path + ".tmp", "wb") as f:
+        f.write(data)
+    os.replace(path + ".tmp", path)
+    return f"{remote} -> {local}, {len(data)} bytes", 0
+
+
 def run_file(path, timeout):
     with open(path) as f:
         commands = [ln.rstrip("\n") for ln in f
@@ -179,6 +216,8 @@ def run_file(path, timeout):
         words = command.split()
         if words[0] == "@push" and len(words) == 3:
             out, code = push(words[1], words[2], timeout)
+        elif words[0] == "@pull" and len(words) == 3:
+            out, code = pull(words[1], words[2], timeout)
         elif words == ["@hold"]:
             # Early in a boot the link drops for a few seconds whenever the
             # ADSP starts or restarts, and a hold that missed leaves the

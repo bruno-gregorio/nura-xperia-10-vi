@@ -15,6 +15,17 @@ export LOMIRI_AS_SYSTEMD_UNIT=1
 export QML_NO_TOUCH_COMPRESSION=1
 # Fix font rendering on some Adreno GPUs
 export QT_ENABLE_GLYPH_CACHE_WORKAROUND=1
+# Scale by the device's grid unit, as lomiri-session does: Lomiri, its UI
+# toolkit and qtmir read only GRID_UNIT_PX, and lomiri-deviceinfo has the
+# value from the device's yaml, or the desktop's 8 px without one
+if [ -z "$GRID_UNIT_PX" ] && command -v device-info > /dev/null; then
+	GRID_UNIT_PX=$(device-info get GridUnit)
+fi
+case "$GRID_UNIT_PX" in
+''|*[!0-9]*) GRID_UNIT_PX=8 ;;
+esac
+export GRID_UNIT_PX
+export QT_WAYLAND_FORCE_DPI="${QT_WAYLAND_FORCE_DPI:-$((12 * GRID_UNIT_PX))}"
 
 # Enable Xwayland
 export MIR_SERVER_ENABLE_X11=1
@@ -32,6 +43,7 @@ xdg-user-dirs-update
 # Pass required env variables to dbus
 dbus-update-activation-environment MALIIT_FORCE_DBUS_CONNECTION=1
 dbus-update-activation-environment WAYLAND_DISPLAY
+dbus-update-activation-environment GRID_UNIT_PX QT_WAYLAND_FORCE_DPI
 
 # Device-specific adjustments
 . /usr/share/misc/source_deviceinfo

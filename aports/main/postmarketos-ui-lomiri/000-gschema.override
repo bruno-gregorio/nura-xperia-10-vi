@@ -17,3 +17,11 @@ show-distro-help=false
 [com.lomiri.Shell.Launcher]
 logo-picture-uri='file:///usr/share/pixmaps/postmarketos-logo-monochrome.svg'
 home-button-background-color='#009900'
+
+# Lomiri reads its wallpaper from these, not from org.gnome.desktop.background,
+# and their default is a file no package ships
+[com.lomiri.Shell]
+background-picture-uri='file:///usr/share/wallpapers/postmarketos/contents/images/2000x2000.png'
+
+[com.lomiri.Shell.Greeter]
+background-picture-uri='file:///usr/share/wallpapers/postmarketos/contents/images/2000x2000.png'

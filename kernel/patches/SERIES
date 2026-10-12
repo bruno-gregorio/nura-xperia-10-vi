@@ -107,3 +107,4 @@ arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the main camera's focu
 leds: flash: qcom: Fix the safety timer by one step
 leds: flash: qcom: Release every V4L2 flash device
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable the flash LED
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Link the flash LED to the main camera

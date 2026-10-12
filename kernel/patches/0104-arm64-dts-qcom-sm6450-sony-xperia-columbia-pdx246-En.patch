@@ -18,7 +18,7 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 19 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 882bda8d7..c8536b379 100644
+index 882bda8d7..e9eadff41 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -7,6 +7,7 @@
@@ -41,7 +41,7 @@ index 882bda8d7..c8536b379 100644
 +	 * 1.5 A of flash for 300 ms and 500 mA of torch, but its camera
 +	 * asks for 1.2 A at most and lights the torch at 300 mA.
 +	 */
-+	led-0 {
++	cam_flash: led-0 {
 +		function = LED_FUNCTION_FLASH;
 +		color = <LED_COLOR_ID_WHITE>;
 +		led-sources = <1>;

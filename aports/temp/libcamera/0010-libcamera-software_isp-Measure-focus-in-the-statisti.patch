@@ -1,0 +1,238 @@
+From ca27982ebbd6958ac5306d7c800883c1872a08d8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 15:33:35 -0300
+Subject: [PATCH 2/3] libcamera: software_isp: Measure focus in the statistics
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+An autofocus algorithm needs to know how sharp each frame is. Over the
+middle third of the statistics window, either way, sum the squared
+differences between each green pixel and the next green one along its
+line and diagonally on the next, with the sum and number of the pixels
+compared so that an algorithm can scale the measure by brightness. It is
+only gathered for 10-bit packed Bayer input for now, the format the
+sensors it was written for produce, and reads zero pixels compared
+otherwise.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../internal/software_isp/swisp_stats.h       | 14 ++++
+ .../internal/software_isp/swstats_cpu.h       | 11 +++
+ src/libcamera/software_isp/swstats_cpu.cpp    | 79 +++++++++++++++++++
+ 3 files changed, 104 insertions(+)
+
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index d9d0d9b..f9f4328 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -43,6 +43,20 @@ struct SwIspStats {
+ 	 * \brief A histogram of luminance values of all the sampled pixels
+ 	 */
+ 	Histogram yHistogram;
++	/**
++	 * \brief Sum of the squared differences between neighbouring green
++	 *        pixels in the focus window, which grows as the image sharpens
++	 */
++	uint64_t focus;
++	/**
++	 * \brief Sum of the green pixels compared for focus
++	 */
++	uint64_t focusSum;
++	/**
++	 * \brief Number of green pixels compared for focus, 0 if the input
++	 *        format has no focus statistics
++	 */
++	uint64_t focusCount;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/include/libcamera/internal/software_isp/swstats_cpu.h b/include/libcamera/internal/software_isp/swstats_cpu.h
+index 6fe60e6..3c1e963 100644
+--- a/include/libcamera/internal/software_isp/swstats_cpu.h
++++ b/include/libcamera/internal/software_isp/swstats_cpu.h
+@@ -11,6 +11,7 @@
+ 
+ #pragma once
+ 
++#include <array>
+ #include <stdint.h>
+ #include <vector>
+ 
+@@ -63,6 +64,10 @@ public:
+ 		if (frame % kStatPerNumFrames)
+ 			return;
+ 
++		if (focus_ && y >= static_cast<unsigned int>(focusWindow_.y) &&
++		    y < focusWindow_.y + focusWindow_.height)
++			(this->*focus_)(src, stats_[statsBufferIndex]);
++
+ 		if ((y & ySkipMask_) || y < static_cast<unsigned int>(window_.y) ||
+ 		    y >= (window_.y + window_.height))
+ 			return;
+@@ -102,6 +107,8 @@ private:
+ 	/* Bayer 12 bpp packed */
+ 	void statsBGGR12PLine0(const uint8_t *src[], SwIspStats &stats);
+ 	void statsGBRG12PLine0(const uint8_t *src[], SwIspStats &stats);
++	/* Focus, Bayer 10 bpp packed */
++	void focus10PLine0(const uint8_t *src[], SwIspStats &stats);
+ 
+ 	void processBayerFrame2(MappedFrameBuffer &in);
+ 	void processQuadBayerFrame(MappedFrameBuffer &in);
+@@ -117,6 +124,10 @@ private:
+ 
+ 	Rectangle window_;
+ 
++	statsProcessFn focus_ = nullptr;
++	Rectangle focusWindow_;
++	std::array<unsigned int, 2> focusGreen_;
++
+ 	Size patternSize_;
+ 
+ 	unsigned int xShift_;
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index 0d33594..2ec0ae2 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -151,6 +151,22 @@ namespace libcamera {
+  * \brief Statistics window, set by setWindow(), used every line
+  */
+ 
++/**
++ * \var SwStatsCpu::focus_
++ * \brief The function measuring focus on a pair of lines, or nullptr if the
++ * input format has none
++ */
++
++/**
++ * \var Rectangle SwStatsCpu::focusWindow_
++ * \brief Focus window, the middle third of window_ either way
++ */
++
++/**
++ * \var SwStatsCpu::focusGreen_
++ * \brief The offset of the first green pixel on even and odd lines
++ */
++
+ /**
+  * \var unsigned int SwStatsCpu::xShift_
+  * \brief The offset of x, applied to window_.x for bayer variants
+@@ -410,6 +426,36 @@ void SwStatsCpu::statsGBRG12PLine0(const uint8_t *src[], SwIspStats &stats)
+  *
+  * This may only be called after a successful setWindow() call.
+  */
++void SwStatsCpu::focus10PLine0(const uint8_t *src[], SwIspStats &stats)
++{
++	const unsigned int offset = focusWindow_.x * 5 / 4;
++	const uint8_t *src0 = src[1] + offset + focusGreen_[0];
++	const uint8_t *src1 = src[2] + offset + focusGreen_[1];
++	const unsigned int widthInBytes = focusWindow_.width * 5 / 4;
++	uint64_t energy = 0;
++	uint64_t sum = 0;
++
++	/*
++	 * Each 5 byte group holds four pixels, two of them green on either
++	 * line and each diagonally next to one on the other line. Compare each
++	 * green pixel with the next one along and with its diagonal neighbour.
++	 */
++	for (unsigned int x = 0; x < widthInBytes; x += 5) {
++		int a = src0[x];
++		int b = src0[x + 2];
++		int c = src1[x];
++		int d = src1[x + 2];
++
++		energy += (a - b) * (a - b) + (c - d) * (c - d) +
++			  (a - c) * (a - c) + (b - d) * (b - d);
++		sum += a + b + c + d;
++	}
++
++	stats.focus += energy;
++	stats.focusSum += sum;
++	stats.focusCount += widthInBytes / 5 * 4;
++}
++
+ void SwStatsCpu::startFrame(uint32_t frame)
+ {
+ 	if (frame % kStatPerNumFrames)
+@@ -421,6 +467,9 @@ void SwStatsCpu::startFrame(uint32_t frame)
+ 	for (auto &s : stats_) {
+ 		s.sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		s.yHistogram.fill(0);
++		s.focus = 0;
++		s.focusSum = 0;
++		s.focusCount = 0;
+ 	}
+ }
+ 
+@@ -438,10 +487,16 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 	if (valid) {
+ 		sharedStats_->sum_ = RGB<uint64_t>({ 0, 0, 0 });
+ 		sharedStats_->yHistogram.fill(0);
++		sharedStats_->focus = 0;
++		sharedStats_->focusSum = 0;
++		sharedStats_->focusCount = 0;
+ 		for (const auto &s : stats_) {
+ 			sharedStats_->sum_ += s.sum_;
+ 			for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++)
+ 				sharedStats_->yHistogram[j] += s.yHistogram[j];
++			sharedStats_->focus += s.focus;
++			sharedStats_->focusSum += s.focusSum;
++			sharedStats_->focusCount += s.focusCount;
+ 		}
+ 
+ 		sharedStats_->sum_ >>= sumShift_;
+@@ -498,6 +553,7 @@ int SwStatsCpu::configure(const StreamConfiguration &inputCfg, unsigned int stat
+ {
+ 	stride_ = inputCfg.stride;
+ 	stats_.resize(statsBufferCount);
++	focus_ = nullptr;
+ 
+ 	BayerFormat bayerFormat =
+ 		BayerFormat::fromPixelFormat(inputCfg.pixelFormat);
+@@ -550,6 +606,13 @@ int SwStatsCpu::configure(const StreamConfiguration &inputCfg, unsigned int stat
+ 		sumShift_ = 0;
+ 		processFrame_ = &SwStatsCpu::processBayerFrame2;
+ 
++		if (bitDepth == 10) {
++			bool greenFirst = bayerFormat.order == BayerFormat::GRBG ||
++					  bayerFormat.order == BayerFormat::GBRG;
++			focus_ = &SwStatsCpu::focus10PLine0;
++			focusGreen_ = { greenFirst ? 0u : 1u, greenFirst ? 1u : 0u };
++		}
++
+ 		switch (bayerFormat.order) {
+ 		case BayerFormat::BGGR:
+ 		case BayerFormat::GRBG:
+@@ -611,6 +674,11 @@ void SwStatsCpu::setWindow(const Rectangle &window)
+ 	window_.width = (window_.width > xShift_ ? window_.width - xShift_ : 0);
+ 	window_.width &= ~(patternSize_.width - 1);
+ 	window_.height &= ~(patternSize_.height - 1);
++
++	focusWindow_.width = (window_.width / 3) & ~(patternSize_.width - 1);
++	focusWindow_.height = (window_.height / 3) & ~(patternSize_.height - 1);
++	focusWindow_.x = (window_.x + focusWindow_.width) & ~(patternSize_.width - 1);
++	focusWindow_.y = (window_.y + focusWindow_.height) & ~(patternSize_.height - 1);
+ }
+ 
+ void SwStatsCpu::processBayerFrame2(MappedFrameBuffer &in)
+@@ -633,6 +701,17 @@ void SwStatsCpu::processBayerFrame2(MappedFrameBuffer &in)
+ 		(this->*stats0_)(linePointers, stats_[0]);
+ 		src += stride_ * 2;
+ 	}
++
++	if (!focus_)
++		return;
++
++	src = in.planes()[0].data() + focusWindow_.y * stride_;
++	for (unsigned int y = 0; y < focusWindow_.height; y += 2) {
++		linePointers[1] = src;
++		linePointers[2] = src + stride_;
++		(this->*focus_)(linePointers, stats_[0]);
++		src += stride_ * 2;
++	}
+ }
+ 
+ void SwStatsCpu::processQuadBayerFrame(MappedFrameBuffer &in)
+-- 
+2.55.0
+

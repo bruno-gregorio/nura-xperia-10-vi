@@ -1,15 +1,16 @@
 # Forked from Alpine for temporary downstream patches
 # Forked again from pmaports' temp/libcamera 0.7.2-r4 (9fec495) for the
 # Xperia 10 VI's cameras: the Sony IMX582's sensor properties and helper
-# (0007), a helper for the Hynix Hi-846 (0008), and an IMX582 tuning file
-# that, like imx519.yaml, borrows the IMX363's colour matrices. Drop this
-# fork once libcamera has both. pkgrel is pmaports' plus 100, plus one per
-# change here.
+# (0007), a helper for the Hynix Hi-846 (0008), a contrast detection
+# autofocus for the soft IPA (0009 to 0011), and an IMX582 tuning file
+# that, like imx519.yaml, borrows the IMX363's colour matrices and runs
+# the autofocus continuously. Drop this fork once libcamera has all of
+# them. pkgrel is pmaports' plus 100, plus one per change here.
 maintainer="Robert Mader <robert.mader@collabora.com>"
 pkgname=libcamera
 _pkgver=0.7.2
 pkgver=9999$_pkgver
-pkgrel=105
+pkgrel=106
 pkgdesc="Linux camera framework"
 url="https://libcamera.org/"
 arch="all"
@@ -73,6 +74,9 @@ source="https://gitlab.freedesktop.org/camera/libcamera/-/archive/v$_pkgver/libc
 	0006-libcamera-Add-quad-Bayer-CFA-layout-support.patch
 	0007-libcamera-camera_sensor-Add-Sony-IMX582-sensor-prope.patch
 	0008-ipa-libipa-camera_sensor_helper-Add-Hynix-Hi-846-hel.patch
+	0009-software_isp-Pass-lens-controls-between-the-pipeline.patch
+	0010-libcamera-software_isp-Measure-focus-in-the-statisti.patch
+	0011-ipa-simple-Add-a-contrast-detection-autofocus.patch
 	qcam.desktop
 	$_tuning_files
 	"
@@ -195,6 +199,9 @@ b317cdc96f61682ee0bf26dfb7c4d6441db9a9c5b93ab53528121a8cd44862b3d59cbaa3881bb083
 47277fedc943ad45391ba150f1c4ae70b7bd041fb162239996fe5430429c50fe27a1c5915c9de90cb714ec578c68c4ba5e4c25a3431e35e721fdd232368b703f  0006-libcamera-Add-quad-Bayer-CFA-layout-support.patch
 4b041ccfa99372a36debd899041f3bc2b6d76fb81fa77bc90577f7bf8abe74e115fdeadd7ec6524910d4068b9dd5ca801a6968731ed4861a5ebd711ec14e383f  0007-libcamera-camera_sensor-Add-Sony-IMX582-sensor-prope.patch
 faf4b577702f96b6b9b4db36755fe64366111666242e1c3dc6f1b92b30b9e9fbceb234c813428cdc4b5abf28abefadbac18fd261e1c488678a45dbdef25ed0dc  0008-ipa-libipa-camera_sensor_helper-Add-Hynix-Hi-846-hel.patch
+0fbde31fb6c8520130367c68619cffd5a09b72fbeec68464610d77bcf667986a3bd96214755f4f626735381caa9dd0a86cad2b138f437fbd430f1244cf2c1a63  0009-software_isp-Pass-lens-controls-between-the-pipeline.patch
+5c67cee552dc9ea77cbf6d266c3eb82d61dbc24cbe51e749b21688b6aa12d2a74e2f868efc33caa826fa16a8a6fe3a10bcb2170f2ccf026791e823a7fcbf754c  0010-libcamera-software_isp-Measure-focus-in-the-statisti.patch
+ea7e43d50683022a17e10351dda92f3c77669da67323742e3abec94a31ca4ee3c9892f16eec3b656e1f7257d2f9191873824b201e0b7b7e4146a0ff0f05c56c1  0011-ipa-simple-Add-a-contrast-detection-autofocus.patch
 22167a4eceb6d1b40b0b7c45fdf116c71684f5340de7f767535cb8e160ad9d2ae0f00cb3d461f73a344520a48a4641cf46226841d78bee06bfbfd2a91337f754  qcam.desktop
 2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  hi846.yaml
 4942edd551dcf51630246f71e600c17760d3574d5d45e5530d6cfeefe2c9ab1a812fbe220f8e89d92e19a499c592b2507c801ca4eb74cd15fcecb60bff5c650b  imx355.yaml
@@ -202,7 +209,7 @@ faf4b577702f96b6b9b4db36755fe64366111666242e1c3dc6f1b92b30b9e9fbceb234c813428cdc
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx371.yaml
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx376.yaml
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx519.yaml
-1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx582.yaml
+41ffee8609f9c5bbf3e800723318f8f9f411a3844e7d61e6b6da339b0a42b9e1d3298e65d9477cd07aac735f4571f9ec6b5885fe915d2c3d38ed51c912745880  imx582.yaml
 55dab9dcb9b1982143b9d63e4e51138c5bffd7c8f4a8e4e122750b3ad9d475446956bc297d9f564819ade4be75a575d06633a064e14f8ba3ef77986783c5f067  imx800.yaml
 55dab9dcb9b1982143b9d63e4e51138c5bffd7c8f4a8e4e122750b3ad9d475446956bc297d9f564819ade4be75a575d06633a064e14f8ba3ef77986783c5f067  imx858.yaml
 2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  s5k3l6xx.yaml

@@ -35,4 +35,14 @@ algorithms:
                 -0.02601, -0.51457,  1.54058 ]
   - Adjust:
   - Agc:
+  - Af:
+      # Apps that reach the camera through PipeWire cannot ask for a
+      # scan, so focus continuously.
+      mode: continuous
+      # A 4.71 mm f/1.8 lens that focuses from 10 cm (vendor module
+      # data). Where the AK7374 puts infinity and 10 cm is not
+      # calibrated, so its whole range stands for that. 0.3 dioptres is
+      # about the hyperfocal distance at the binned mode's pixel pitch.
+      macroDioptres: 10.0
+      defaultPosition: 0.3
 ...

@@ -4264,6 +4264,36 @@ as what it would have fixed.
     empty; it suspends only on a lid closing or a critical battery.
     repowerd still turns the display off when idle, and whether the panel
     comes back on the power key has not been tried.
+- **Lomiri in someone's hands: the keys, and Settings** — Verified
+  2026-10-12, 06:18 to 06:40, on the stay-up boot. The owner had Lomiri on
+  the phone and reported that the keys did nothing and that Settings would
+  not open. The terminal and the browser did open.
+  - **Verified:** the keys reach the kernel and Mir. Their interrupts
+    counted presses, `pmic_pwrkey` 20 then 22, `pmic_resin` 6 and
+    "Volume Down" 16, and Mir's evdev input opened all three devices and
+    the touchscreen.
+  - **Verified:** in this rootfs only repowerd's own binaries carry
+    `com.lomiri.SystemCompositor.PowerButton`. repowerd turns the screen
+    off and on when that name signals Press and Release, which on Ubuntu
+    Touch lomiri-system-compositor does; it is not installed here, so a
+    short press has nothing to act on. Lomiri's own `PhysicalKeysMapper`
+    handles only a 2 s press, which opens the power dialog.
+  - **Verified:** there is no sound card under this kernel, no
+    `/proc/asound`, and PulseAudio's only sink is `auto_null`. The volume
+    keys go to ayatana-indicator-sound's volume action, which has nothing
+    to change.
+  - **Verified:** Settings aborts as it starts, five times in the session
+    and once by hand, with "basic_string: construction from null is not
+    valid". The core's backtrace ends in `PrintingItem::PrintingItem` in
+    `libprinting-plugin.so`, which in lomiri-system-settings 1.4.0 does
+    `std::string(g_get_os_info("VARIANT_ID"))`; this rootfs's os-release
+    has no `VARIANT_ID`, so GLib returns NULL. Upstream fixed it on
+    2026-07-26 in 78b462ae, "Avoid undefined behavior when VARIANT_ID is
+    not set", after 1.4.0, and Alpine's 1.4.0-r2 carries no patch for it,
+    so every pmOS Lomiri on edge has it. The core is
+    `out/try-kernel/lss-core.gz`; `core_pattern` was put back after it.
+  - The owner then asked for a steadier UI to iterate on, Phosh or Plasma
+    Mobile, which ends the Lomiri work for now.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

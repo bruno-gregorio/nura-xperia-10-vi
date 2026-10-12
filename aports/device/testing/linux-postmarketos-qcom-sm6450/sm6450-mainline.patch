@@ -82,7 +82,7 @@ Base: v6.18.55
      drivers/media/i2c/Makefile                         |    1 +
      drivers/media/i2c/ak7375.c                         |   14 +
      drivers/media/i2c/hi846.c                          |  308 +-
-     drivers/media/i2c/imx582.c                         | 1172 +++++++
+     drivers/media/i2c/imx582.c                         | 1176 +++++++
      drivers/media/platform/qcom/camss/camss-csid-340.c |    2 +-
      .../platform/qcom/camss/camss-csiphy-3ph-1-0.c     |   95 +
      drivers/media/platform/qcom/camss/camss-vfe-340.c  |   36 +-
@@ -115,7 +115,7 @@ Base: v6.18.55
      sound/soc/codecs/aw88263.c                         |  936 +++++
      sound/soc/codecs/aw88263.h                         |  136 +
      sound/soc/qcom/sc8280xp.c                          |  103 +-
-     109 files changed, 20996 insertions(+), 130 deletions(-)
+     109 files changed, 21000 insertions(+), 130 deletions(-)
 
 diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
 index 18b5ed044..1500a8fdf 100644
@@ -17412,10 +17412,10 @@ index a3f77b843..469fe725f 100644
  		hi846->supplies[i].supply = hi846_supply_names[i];
 diff --git a/drivers/media/i2c/imx582.c b/drivers/media/i2c/imx582.c
 new file mode 100644
-index 000000000..f13f7d78a
+index 000000000..e804b627f
 --- /dev/null
 +++ b/drivers/media/i2c/imx582.c
-@@ -0,0 +1,1172 @@
+@@ -0,0 +1,1176 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Sony IMX582 sensor driver
@@ -17745,7 +17745,7 @@ index 000000000..f13f7d78a
 +	{ CCI_REG8(0x3e20), 0x02 },
 +};
 +
-+/* 4000x2256, 2x2 binned and cropped to 16:9, at 60 fps */
++/* 4000x2256, 2x2 binned and cropped to 16:9, at up to 60 fps */
 +static const struct cci_reg_sequence imx582_4000x2256_regs[] = {
 +	{ CCI_REG8(0x0342), 0x11 },
 +	{ CCI_REG8(0x0343), 0xf0 },
@@ -17781,7 +17781,7 @@ index 000000000..f13f7d78a
 +	{ CCI_REG8(0x3e20), 0x02 },
 +};
 +
-+/* 2000x1132, 4x4 binned and cropped to 16:9, at 120 fps */
++/* 2000x1132, 4x4 binned and cropped to 16:9, at up to 120 fps */
 +static const struct cci_reg_sequence imx582_2000x1132_regs[] = {
 +	{ CCI_REG8(0x0342), 0x0b },
 +	{ CCI_REG8(0x0343), 0x60 },
@@ -17824,7 +17824,11 @@ index 000000000..f13f7d78a
 +	struct v4l2_rect crop;
 +	/* Line length, in pixel clocks */
 +	u32 llp;
-+	/* Default frame length, in lines */
++	/*
++	 * Default frame length, in lines. Every mode starts at 30 fps, which
++	 * leaves room for a usable exposure; a shorter vertical blanking gives
++	 * the faster modes their full frame rate.
++	 */
 +	u32 fll_def;
 +	u32 vblank_min;
 +	u64 pixel_rate;
@@ -17851,7 +17855,7 @@ index 000000000..f13f7d78a
 +		.height = 2256,
 +		.crop = { 0, 744, 8000, 4512 },
 +		.llp = 4592,
-+		.fll_def = 2430,
++		.fll_def = 4860,
 +		.vblank_min = 155,
 +		.pixel_rate = 669600000,
 +		.link_freq_index = 1,
@@ -17863,7 +17867,7 @@ index 000000000..f13f7d78a
 +		.height = 1132,
 +		.crop = { 0, 736, 8000, 4528 },
 +		.llp = 2912,
-+		.fll_def = 1262,
++		.fll_def = 5055,
 +		.vblank_min = 97,
 +		.pixel_rate = 441600000,
 +		.link_freq_index = 2,

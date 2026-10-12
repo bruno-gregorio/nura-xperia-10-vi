@@ -8,9 +8,13 @@ Content-Transfer-Encoding: 8bit
 
 Add a driver for the Sony IMX582 in its binned modes, which read each
 group of same-colour pixels of its quad Bayer array as one and give an
-ordinary RGGB image: 4000x3000 at 30 fps, 4000x2256 at 60 fps and
-2000x1132 at 120 fps, in RAW10 over four lanes, from a 24 MHz clock. The
-register settings are those the Sony Xperia 10 VI programs.
+ordinary RGGB image: 4000x3000 at 30 fps, 4000x2256 at up to 60 fps and
+2000x1132 at up to 120 fps, in RAW10 over four lanes, from a 24 MHz
+clock. The register settings are those the Sony Xperia 10 VI programs.
+
+Every mode starts at 30 fps, as a frame of a 120th of a second leaves
+little room for the exposure; the vertical blanking can be shortened to
+reach the faster rates.
 
 The controls cover exposure, analogue and digital gain, vertical
 blanking, flips and the sensor's test patterns.
@@ -19,8 +23,8 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  drivers/media/i2c/Kconfig  |   10 +
  drivers/media/i2c/Makefile |    1 +
- drivers/media/i2c/imx582.c | 1172 ++++++++++++++++++++++++++++++++++++
- 3 files changed, 1183 insertions(+)
+ drivers/media/i2c/imx582.c | 1176 ++++++++++++++++++++++++++++++++++++
+ 3 files changed, 1187 insertions(+)
  create mode 100644 drivers/media/i2c/imx582.c
 
 diff --git a/drivers/media/i2c/Kconfig b/drivers/media/i2c/Kconfig
@@ -58,10 +62,10 @@ index 57cdd8dc9..b2323577f 100644
  obj-$(CONFIG_VIDEO_KS0127) += ks0127.o
 diff --git a/drivers/media/i2c/imx582.c b/drivers/media/i2c/imx582.c
 new file mode 100644
-index 000000000..f13f7d78a
+index 000000000..e804b627f
 --- /dev/null
 +++ b/drivers/media/i2c/imx582.c
-@@ -0,0 +1,1172 @@
+@@ -0,0 +1,1176 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Sony IMX582 sensor driver
@@ -391,7 +395,7 @@ index 000000000..f13f7d78a
 +	{ CCI_REG8(0x3e20), 0x02 },
 +};
 +
-+/* 4000x2256, 2x2 binned and cropped to 16:9, at 60 fps */
++/* 4000x2256, 2x2 binned and cropped to 16:9, at up to 60 fps */
 +static const struct cci_reg_sequence imx582_4000x2256_regs[] = {
 +	{ CCI_REG8(0x0342), 0x11 },
 +	{ CCI_REG8(0x0343), 0xf0 },
@@ -427,7 +431,7 @@ index 000000000..f13f7d78a
 +	{ CCI_REG8(0x3e20), 0x02 },
 +};
 +
-+/* 2000x1132, 4x4 binned and cropped to 16:9, at 120 fps */
++/* 2000x1132, 4x4 binned and cropped to 16:9, at up to 120 fps */
 +static const struct cci_reg_sequence imx582_2000x1132_regs[] = {
 +	{ CCI_REG8(0x0342), 0x0b },
 +	{ CCI_REG8(0x0343), 0x60 },
@@ -470,7 +474,11 @@ index 000000000..f13f7d78a
 +	struct v4l2_rect crop;
 +	/* Line length, in pixel clocks */
 +	u32 llp;
-+	/* Default frame length, in lines */
++	/*
++	 * Default frame length, in lines. Every mode starts at 30 fps, which
++	 * leaves room for a usable exposure; a shorter vertical blanking gives
++	 * the faster modes their full frame rate.
++	 */
 +	u32 fll_def;
 +	u32 vblank_min;
 +	u64 pixel_rate;
@@ -497,7 +505,7 @@ index 000000000..f13f7d78a
 +		.height = 2256,
 +		.crop = { 0, 744, 8000, 4512 },
 +		.llp = 4592,
-+		.fll_def = 2430,
++		.fll_def = 4860,
 +		.vblank_min = 155,
 +		.pixel_rate = 669600000,
 +		.link_freq_index = 1,
@@ -509,7 +517,7 @@ index 000000000..f13f7d78a
 +		.height = 1132,
 +		.crop = { 0, 736, 8000, 4528 },
 +		.llp = 2912,
-+		.fll_def = 1262,
++		.fll_def = 5055,
 +		.vblank_min = 97,
 +		.pixel_rate = 441600000,
 +		.link_freq_index = 2,

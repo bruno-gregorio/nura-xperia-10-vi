@@ -12,6 +12,9 @@
 #   shader squashed into one .mbn;
 # - out/firmware/mbn/: the ADSP, CDSP and WPSS images, squashed by
 #   scripts/pil-squash.py out of stock's modem partition;
+# - out/firmware/audio/aw88261_acf.bin: the speaker amplifier's settings,
+#   stock's /vendor/firmware/aw88261_acf.bin, dumped from the vendor image
+#   with debugfs -R "dump /firmware/aw88261_acf.bin ...";
 # - out/tools/ath10k/board-2-pdx246.bin: the WLAN board data that
 #   scripts/ath10k-board2.py packs from stock's bdwlan files, as board-2.bin;
 # - out/hexagonfs/stage/: what hexagonrpcd serves the ADSP's sensors
@@ -37,7 +40,7 @@ say() { echo "==> $*"; }
 [ -f "$DST/APKBUILD" ] || die "no $DST/APKBUILD"
 
 for f in gpu/a710_sqe.fw gpu/gmu_gen70000.bin gpu/a710_zap.mbn \
-	mbn/adsp.mbn mbn/cdsp.mbn mbn/wpss.mbn; do
+	mbn/adsp.mbn mbn/cdsp.mbn mbn/wpss.mbn audio/aw88261_acf.bin; do
 	[ -s "$ROOT/out/firmware/$f" ] || die "no out/firmware/$f"
 	cp -- "$ROOT/out/firmware/$f" "$DST/${f#*/}"
 done

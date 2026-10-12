@@ -22,7 +22,7 @@
 maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=firmware-sony-pdx246
 pkgver=1
-pkgrel=1
+pkgrel=2
 pkgdesc="Firmware for Sony Xperia 10 VI"
 url="https://postmarketos.org"
 arch="aarch64"
@@ -31,6 +31,7 @@ options="!check !strip !archcheck !tracedeps pmb:cross-native"
 subpackages="
 	$pkgname-adreno
 	$pkgname-adsp
+	$pkgname-audio
 	$pkgname-cdsp
 	$pkgname-hexagonfs
 	$pkgname-wlan
@@ -39,6 +40,7 @@ source="
 	a710_sqe.fw
 	a710_zap.mbn
 	adsp.mbn
+	aw88261_acf.bin
 	board-2.bin
 	cdsp.mbn
 	gmu_gen70000.bin
@@ -65,6 +67,12 @@ adsp() {
 	pkgdesc="Sony Xperia 10 VI ADSP firmware"
 
 	install -Dm644 "$srcdir"/adsp.mbn -t "$subpkgdir/$_fwdir"/
+}
+
+audio() {
+	pkgdesc="Sony Xperia 10 VI speaker amplifier settings"
+
+	install -Dm644 "$srcdir"/aw88261_acf.bin -t "$subpkgdir"/usr/lib/firmware/
 }
 
 cdsp() {
@@ -95,6 +103,7 @@ sha512sums="
 fa83104c7056e6fb127f49b692d82f161d13cd68ec2c105a0adbdd280a52ccfb56f4a01f4b73a514fb343773f7d57427f1912920cae29b43147a705a82d1479a  a710_sqe.fw
 44d655d24b96c32323d7dca00f3b41f1bfe6278fca36f0fa1d59045401a2ec70517ab9892c5d041f80ea3d7d702e18514dbaab605604d957cb4cccfbd4a9609f  a710_zap.mbn
 8c1f7ed2f1549165b4eb260df5a452198e374724295239d60a54d39f42804d6ead644e01f2a24612348a6568788d95c19eeb1c5979d97d3c3a5d51cbfc307213  adsp.mbn
+cc0136741bef9e0702fc7513357a4ebe617dffc94678badd7c6653e789dadea9e48babd73a23a7e7a2c0a844e8dee854ec2641d7c72fa8e2bccbcb5f6a3f2155  aw88261_acf.bin
 741b14e4fb2a336e99d1801bca064d4d0a13728c34dc735a16ffc53244adf054f42be43b6c6d359d64dda79e90fd7a2c9e24775db55763f926bdfd60e2e8f099  board-2.bin
 eca621a3310f51a31c85c83d9a0b23cf71624971507d3297104578b51ceafde6704be4b77cd16882ce7de570ea70fb92f3ae6b4922eb113b07075b4b13f38c11  cdsp.mbn
 aba0678425a75f124eead6f960b3703669719a7c95273d4938e32c98445d1c640bc9509298099ea203aefa052ebe3ceace340bc6532796591a5d48ae244cf665  gmu_gen70000.bin

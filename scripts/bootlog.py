@@ -469,11 +469,18 @@ pmbootlog_start
 #   from edge/main/aarch64/busybox-static-1.38.0-r7.apk on
 #   dl-cdn.alpinelinux.org, checked against that APKINDEX's checksum, saved
 #   as out/tools/busybox.static.
-# - mounts proc, sysfs and devtmpfs a second time, on top of the ones there.
-#   switch_root moves the mount it finds at each path, which is the top one,
-#   and the jobs keep the one underneath with everything mounted inside it,
-#   configfs and debugfs included. The new root gets them bare, as on a boot
-#   without an initramfs, and OpenRC mounts the rest itself.
+# - stacks a second mount on /proc, /sys and /dev. switch_root moves the
+#   mount it finds at each path, which is the top one, and the jobs keep the
+#   one underneath with everything mounted inside it, configfs and debugfs
+#   included. /proc gets a fresh proc, which is a superblock of its own, so
+#   the new root's is bare and OpenRC mounts the rest. sysfs and devtmpfs
+#   have one superblock each, and the kernel will not mount a superblock
+#   where it is already the top mount ("Refuse the same filesystem on the
+#   same mount point", do_add_mount() in fs/namespace.c): round 83's fresh
+#   ones failed with EBUSY, the switch took the only ones there were, and
+#   the jobs lost the card and the UDC with them. A bind has no such rule,
+#   so /sys and /dev get recursive binds of themselves, and the new root the
+#   same trees it would have had without this hook.
 #
 # The jobs' own files at the top of the initramfs, /pmwd.log, /pmwd.hold and
 # /pmhold among them, still go with the switch. Losing /pmwd.hold puts the
@@ -510,8 +517,8 @@ for d in /bin /sbin; do
 	"$b" mount --bind "$k/bin" "$d" && done="$done $d"
 done
 "$b" mount -t proc proc /proc && done="$done /proc"
-"$b" mount -t sysfs sysfs /sys && done="$done /sys"
-"$b" mount -t devtmpfs devtmpfs /dev && done="$done /dev"
+"$b" mount --rbind /sys /sys && done="$done /sys"
+"$b" mount --rbind /dev /dev && done="$done /dev"
 log "kept$done"
 """
 

@@ -14,10 +14,10 @@
 # and not a trip through fastboot. Chosen by the owner on 2026-10-05.
 #
 # How the bytes get across: there is no adb and no MTP in an initramfs, but
-# there is busybox wget, and the gadget already gives us an IP link. So the
-# host serves the image over HTTP on the USB interface only - not on the LAN -
-# and the phone pulls it straight into dd. Nothing is staged on the phone,
-# which matters because the rootfs is larger than the phone's RAM.
+# there is busybox nc, and the gadget already gives us an IP link. So the
+# phone listens on its USB address and pipes what arrives straight into dd,
+# and the host pushes the image to it. Nothing is staged on the phone, which
+# matters because the rootfs is larger than the phone's RAM.
 #
 # The write runs detached under setsid with its output in a file, and this
 # script polls that file over short telnet connections. scripts/telnet.py
@@ -193,9 +193,10 @@ ip -o addr show | grep -q " $HOST_IP/" \
 HELD=0
 RENEWER=
 cleanup() {
+	# set -e holds in here too, and wait gives the killed loop's 143.
 	if [ -n "$RENEWER" ]; then
-		kill "$RENEWER" 2>/dev/null
-		wait "$RENEWER" 2>/dev/null
+		kill "$RENEWER" 2>/dev/null || true
+		wait "$RENEWER" 2>/dev/null || true
 	fi
 	if [ "$HELD" = 1 ]; then
 		remote 'rm -f /pmhold' >/dev/null 2>&1
@@ -288,10 +289,13 @@ esac
 # one long stream with no shell in it. So it is renewed from here every two
 # minutes for as long as this runs. Only an existing hold is renewed, so a
 # renewal that lands after cleanup has released it cannot bring it back.
+# Its output goes nowhere: the sleep it is in when cleanup kills it lives on
+# for up to two minutes, and holding our stdout open it held up whoever reads
+# it to the end, scripts/tsh.py's @host among them.
 ( while :; do
 	sleep 120
 	remote '[ ! -e /pmhold ] || touch /pmhold' >/dev/null 2>&1
-done ) &
+done ) >/dev/null 2>&1 &
 RENEWER=$!
 
 if [ "$WHOLE_DISK" != 1 ] && [ "$KEEP_TABLE" != 1 ]; then

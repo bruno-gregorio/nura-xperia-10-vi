@@ -3904,6 +3904,32 @@ as what it would have fixed.
     restart of the ADSP through sysfs re-arms the window, as rounds 79 and
     80 showed, at the cost of a few seconds without the charger's and
     USB-C's link to the ADSP.
+- **Round 81: what the image will run works, and the window closes before
+  35 s** — Verified 2026-10-11, 22:16 to 22:28. Plan 20261011r ran the
+  hexagonrpcd we package, temp/hexagonrpcd 0.4.0-r103, which cannot
+  write, on the hexagonfs tree we package and nothing else. First it ran at
+  once at the bring-up. Then a restart had it 35 s late. Then device pkgrel
+  6's `hexagonrpcd-adsp-fresh` ran with hexagonrpcd right after it, as the
+  service's `start_pre` will on a real boot, with the ADSP up for 102 s by
+  then. The transcript is `out/try-kernel/live-r81.txt`.
+  - **Verified:** at once, the packaged hexagonrpcd gave the 32 sensors,
+    and `ssccli` read 187 accelerometer samples in 8 s. So write support
+    is not needed. Each boot of the sensors domain does log 1320 failed
+    attempts to open `temp.json` beside the registry for writing.
+  - **Verified:** 35 s late gave the five sensors. So the window closes
+    between 25 s and 35 s.
+  - **Verified:** the helper found the ADSP up since 215 s at 317 s and
+    restarted it, and the ADSP was ready again at 318 s. hexagonrpcd
+    attached on its first try, and the 32 sensors came back, with 188
+    accelerometer samples in 8 s. Run again 7 s after the restart, the
+    helper left the ADSP alone.
+  - **Verified:** the restart cost one failed UCSI write, as in rounds 79
+    and 80, and the live shell came through it.
+  - **Reasoned:** so device pkgrel 6 should give the sensors on a real
+    boot whether OpenRC is early or late. If it is early, the helper does
+    nothing. If it is late, the helper restarts the ADSP at the cost of a
+    few seconds without its charger and USB-C link. That boot has not
+    happened yet.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -4837,6 +4863,7 @@ port boots" above. What is left starts from there.
    kernel side, and the Mesa fork builds. The ADSP and the CDSP boot, and
    their FastRPC devices attach. The sensors work: 32 of them, read through
    libssc, as long as hexagonrpcd attaches within 25 s or so of the ADSP
-   booting (rounds 78 to 80). The firmware is packaged, and device pkgrel
-   5 starts hexagonrpcd at boot. What is left is the image itself, and
-   making sure hexagonrpcd is early enough in it.
+   booting (rounds 78 to 81). The firmware is packaged. Device pkgrel 5
+   starts hexagonrpcd at boot, and pkgrel 6 restarts the ADSP first if it
+   has been up too long, which round 81 tried in the debug shell. What is
+   left is the image itself.

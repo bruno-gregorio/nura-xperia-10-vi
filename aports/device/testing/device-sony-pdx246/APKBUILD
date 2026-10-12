@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=10
+pkgrel=11
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -40,6 +40,8 @@ source="
 	lomiri-deviceinfo.yaml
 	modules-initfs.downstream
 	modules-initfs.mainline
+	ucm-HiFi.conf
+	ucm-Sony-Xperia-10-VI.conf
 "
 subpackages="
 	$pkgname-kernel-downstream:kernel_downstream
@@ -81,6 +83,14 @@ kernel_downstream() {
 # firmware-sony-pdx246-audio, and the ADSP's audio graph, our AudioReach
 # topology, which the sound card asks for by its model name.
 #
+# And a UCM configuration, which is how PipeWire and PulseAudio learn the
+# card's routes; without one they see a card of bare PCMs with every path
+# off. alsa-lib looks it up by the card's driver name and long name, sm6450
+# and Sony-Xperia-10-VI, under conf.d, which upstream alsa-ucm-conf fills
+# with links into Qualcomm/. Ours includes the WCD937x and RX macro
+# sequences alsa-ucm-conf already has, hence the dependency. It belongs
+# upstream in alsa-ucm-conf; until then it is here.
+#
 # hexagonrpcd serves the ADSP's sensors domain its files. Our fork in
 # temp/hexagonrpcd, 0.4.0-r103, adds the sns_reg_version mapping this phone's
 # domain asks for, hence the version. The domain also wants hexagonrpcd early,
@@ -89,6 +99,7 @@ kernel_downstream() {
 kernel_mainline() {
 	pkgdesc="Our own 6.18 mainline kernel, see docs/06-mainline.md"
 	depends="
+		alsa-ucm-conf
 		firmware-sony-pdx246-adreno
 		firmware-sony-pdx246-adsp
 		firmware-sony-pdx246-audio
@@ -110,6 +121,15 @@ kernel_mainline() {
 		-t "$subpkgdir"/usr/libexec/$pkgname/
 	install -Dm644 "$srcdir"/81-libssc-sony-pdx246.rules \
 		-t "$subpkgdir"/usr/lib/udev/rules.d/
+
+	local ucm=/usr/share/alsa/ucm2
+	install -Dm644 "$srcdir"/ucm-Sony-Xperia-10-VI.conf \
+		"$subpkgdir"$ucm/Qualcomm/sm6450/Sony-Xperia-10-VI/Sony-Xperia-10-VI.conf
+	install -Dm644 "$srcdir"/ucm-HiFi.conf \
+		"$subpkgdir"$ucm/Qualcomm/sm6450/Sony-Xperia-10-VI/HiFi.conf
+	mkdir -p "$subpkgdir"$ucm/conf.d/sm6450
+	ln -s ../../Qualcomm/sm6450/Sony-Xperia-10-VI/Sony-Xperia-10-VI.conf \
+		"$subpkgdir"$ucm/conf.d/sm6450/Sony-Xperia-10-VI.conf
 }
 
 # Lomiri's scale. Lomiri, its UI toolkit and qtmir take it from GRID_UNIT_PX
@@ -164,4 +184,6 @@ e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e5
 f21a83a2d72f89825ffe640e3e2af53f4603995e1e9027e64970c277d02b52229c3fa8995de65a4516571048fb2763f9d74a5dd1dbcce0359d262252e4f66180  lomiri-deviceinfo.yaml
 603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs.downstream
 427a4881e9e9b169d05a96d681378c0dc91179cab6bd2e3e6865147507558f537d9558a03caf50962e4013709bcc54f6303fc01e2f8cd34443ba76564ee2505f  modules-initfs.mainline
+0042cd13d6b89d06db9e207584fa5cd62a17b4a528b2dcb3d22f9e0284e5decc69a2828fb48819eb89a837565e706751879eea5fb40ca1f19844027dfac3e0af  ucm-HiFi.conf
+4f99974030450905657e17f8ad1a3e49b9d7cbfe2c88421e7833ce3e4c3281ae5c5f6eb229d51dd4b2031711e25841ed00d832d67d7a59b7a5ca46487187aa1a  ucm-Sony-Xperia-10-VI.conf
 "

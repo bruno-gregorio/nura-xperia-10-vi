@@ -1,8 +1,13 @@
 # Status
 
-Last updated: 2026-10-05. **The device has never been booted with any of
-this.** Every claim below carries its confidence and the basis for it, because
-that is the only thing standing between this port and a bricked phone.
+Last updated: 2026-10-11. **The phone has run this port, but never a full
+system on our own kernel.** The downstream 5.10 kernel booted pmOS to a login
+on 2026-10-05 (see "The port boots"). The 6.18 mainline kernel has run in
+about eighty rounds since, none of them past the initramfs' debug shell. They
+brought up USB, the display, touch, the GPU, the DSPs and the sensors, but none
+went on into the rootfs' init. Every claim below carries its confidence and the
+basis for it, because that is the only thing standing between this port and a
+bricked phone.
 
 ## Confidence levels
 
@@ -3563,7 +3568,8 @@ as what it would have fixed.
     720". Its message says the registers were captured from the Android
     driver's command streams, so it has not been tried on drm/msm.
     `aports/temp/mesa` forks Alpine's 26.2.4-r1 with that entry backported.
-    It is not built yet.
+    It was not built yet then. It has built since, as 26.2.4-r101, and has
+    not run on the phone.
   - **Verified:** the DSPs gave round 70's results again. The CDSP was up at
     193.05 s and the ADSP at 193.22 s. All three FastRPC devices appeared,
     and both capability queries and both root attaches succeeded, with no
@@ -3814,6 +3820,90 @@ as what it would have fixed.
     sscrpcd run within moments of the ADSP booting. In recovery, and in
     every round so far, the daemon attached half a minute or more later.
     Round 78 tests this.
+- **Round 78: the sensors work, when hexagonrpcd comes at once** — Verified
+  2026-10-11, 21:28 to 21:38. Plan 20261011o staged hexagonrpcd and its
+  tree before the DSP bring-up and started it from a detached launcher,
+  `out/tools/hrpcd-early.sh`, as soon as `/dev/fastrpc-adsp` appeared.
+  Kernel pkgrel 22, same command line as round 77. The transcript is
+  `out/try-kernel/live-r78.txt`.
+  - **Verified:** the device appeared at 104.95 s and hexagonrpcd started
+    at 104.97 s. In round 76 it started 38 s after the ADSP came up.
+  - **Verified:** the sensor core published 32 sensors, at once and still a
+    minute later. Among them are `interrupt`, `resampler`, `diag_sensor`,
+    `accel`, `gyro`, `mag`, `proximity`, `ambient_light`,
+    `sensor_temperature` and `motion_detect`, and the virtual ones built on
+    them, such as `game_rv`, `rotv`, `gravity`, `tilt` and `pedometer`.
+  - **Verified:** hexagonrpcd's traffic was the same as before: 1821 lines,
+    no error.
+  - **Verified:** `ssccli` read every physical sensor it knows:
+    - accelerometer, 245 samples in 15 s, about X 1.05, Y 0.15,
+      Z 9.77 m/s², so gravity along the screen's normal;
+    - gyroscope, 193 samples in 8 s, all within 0.008 of zero;
+    - magnetometer, 79 samples in 8 s, about X −203, Y −245, Z −378 µT;
+    - proximity, one event, far;
+    - light, one event, 0 lux.
+  - **Reasoned:** the phone lay still and face up, which fits the
+    accelerometer and the gyroscope. The magnetometer's field is about ten
+    times the earth's, which fits the uncalibrated `mag` sensor's hard-iron
+    offset; `mag_cal` is published too. Light and proximity have not been
+    checked against a hand or a lamp.
+  - **Verified:** `ssccli` warns that the firmware's mount matrix is all
+    zero and falls back to identity. The registry's `orient` groups already
+    map each chip's axes onto the device's, bmi26x for example with x as
+    +y, y as −x and z as +z.
+  - **Reasoned:** so the samples come out in Android's device frame, and
+    whether iio-sensor-proxy needs a mount matrix on top is best seen at
+    the phone, by turning it.
+  - **Verified, against the timing hypothesis:** it holds. With hexagonrpcd
+    there at once, mainline gets what stock Android gets. With it half a
+    minute late, neither our kernel nor stock recovery does. How wide the
+    window is decides whether OpenRC's service is early enough on a real
+    boot. Round 79 measures it.
+- **Round 79: hexagonrpcd may come at least 25 s late, and a restart
+  recovers** — Verified 2026-10-11, 21:41 to 21:53. Plan 20261011p booted
+  the ADSP three times in one round. The bring-up used hexagonrpcd 10 s
+  after `/dev/fastrpc-adsp`. Then `out/tools/adsp-cycle.sh` restarted the
+  ADSP through its remoteproc's sysfs state twice, once with hexagonrpcd at
+  once and once 25 s late. The transcript is `out/try-kernel/live-r79.txt`.
+  - **Verified:** all three boots gave the 32 sensors. After the last one,
+    `ssccli` read 187 accelerometer samples in 8 s.
+  - **Verified:** the restart works on mainline. `stop` took the ADSP
+    offline in about 0.1 s, and `start` had it running again within 0.2 s,
+    with `/dev/fastrpc-adsp` back. While the ADSP was down, `ucsi_glink`
+    logged one failed write. The USB link and the live shell came through
+    both restarts.
+  - **Verified:** right after a restart, hexagonrpcd's first start, 10 ms
+    after the device appeared, failed with "No session available" in the
+    kernel log and "Device or resource busy" from hexagonrpcd. The
+    launcher's retry 0.5 s later attached.
+  - **Reasoned:** so the window is at least 25 s. Rounds 75 to 77 started
+    hexagonrpcd 87 s, 38 s and 38 s after the ADSP, but each of them had
+    also run `fastrpc-probe`'s attach to the ADSP's root domain first. The
+    cause is the longer delay or that attach. Round 80 separates the two.
+- **Round 80: the window closes between 25 s and 40 s, and the attach is
+  not the cause** — Verified 2026-10-11, 21:53 to 22:07. Plan 20261011q
+  booted the ADSP three times again. The bring-up had hexagonrpcd 40 s late
+  and no `fastrpc-probe` before it. The first restart ran `fastrpc-probe`'s
+  attach to the root domain and hexagonrpcd 2 s later; the second had
+  hexagonrpcd 90 s late. The transcript is `out/try-kernel/live-r80.txt`.
+  - **Verified:** 40 s late gave the five sensors of rounds 76 and 77, and
+    so did 90 s late. The attach and then hexagonrpcd 2 s later gave the
+    32 sensors.
+  - **Verified:** hexagonrpcd's traffic is the same whether the sensors
+    come or not. Each boot of the sensors domain added 1657 lines to its
+    log on top of the first boot's 1821, in rounds 79 and 80 alike. So the
+    domain asks for the same files in the same order either way.
+  - **Reasoned:** so the window is somewhere between 25 s and 40 s after
+    the ADSP boots. It is not hexagonrpcd missing a request. Most likely
+    the drivers for the physical sensors give up waiting for the registry
+    before it arrives, and the core publishes what is left. The firmware
+    log that would say so is out of reach, as in recovery.
+  - **Reasoned, for a real boot:** OpenRC must start hexagonrpcd within
+    about 25 s of the ADSP's boot, and udev boots the ADSP early in
+    sysinit, when it loads `qcom_q6v5_pas`. If it is later than that, a
+    restart of the ADSP through sysfs re-arms the window, as rounds 79 and
+    80 showed, at the cost of a few seconds without the charger's and
+    USB-C's link to the ADSP.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -4493,8 +4583,11 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   support targets the mainline `msm` uAPI, so expect software rendering there.
   On the mainline kernel it is drm/msm's GPU side. Pkgrel 19 taught it the
   A710, the firmware is collected from `vendor_b`, and the nodes are WIP
-  on `sm6450-gpu` (see "The GPU"). Round 66 panicked at boot with them,
-  and which probe did it is open.
+  on `sm6450-gpu` (see "The GPU"). Round 66 panicked at boot with them.
+  Rounds 67 to 72 found why and fixed it, and in round 72 the GPU ran
+  `msm-submit`'s jobs. Userspace needs Mesa's A710 entry, which no Mesa
+  release has; `temp/mesa` backports it and builds, and nothing has drawn
+  with it yet.
 - **Modem, Wi-Fi, audio, camera.** On mainline, the four remote
   processors they run on are in pkgrel 15's series. Round 34 probed
   them, and rounds 37, 52 and 57 booted the ADSP, which took the USB link
@@ -4739,3 +4832,11 @@ port boots" above. What is left starts from there.
    - then a pmOS image that boots past the debug shell into Lomiri, with
      the firmware packaged. `postmarketos-ui-lomiri` is OpenRC only, so
      that image is an OpenRC one.
+
+   Where that stands on 2026-10-11, at round 80. The GPU runs jobs on the
+   kernel side, and the Mesa fork builds. The ADSP and the CDSP boot, and
+   their FastRPC devices attach. The sensors work: 32 of them, read through
+   libssc, as long as hexagonrpcd attaches within 25 s or so of the ADSP
+   booting (rounds 78 to 80). The firmware is packaged, and device pkgrel
+   5 starts hexagonrpcd at boot. What is left is the image itself, and
+   making sure hexagonrpcd is early enough in it.

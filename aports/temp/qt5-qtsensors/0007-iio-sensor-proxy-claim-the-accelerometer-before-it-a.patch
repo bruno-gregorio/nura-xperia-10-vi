@@ -1,0 +1,60 @@
+From ddf2ecc918a42ec2a295808d99b679a483cbc898 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 01:22:38 -0300
+Subject: [PATCH] iio-sensor-proxy: claim the accelerometer before it appears
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+IIOSensorProxyOrientationSensor::start() claimed the accelerometer only
+if iio-sensor-proxy reported HasAccelerometer already, and otherwise
+stopped the sensor for good. iio-sensor-proxy finds sensors as they
+appear, and an accelerometer can come up well after the session that
+wants it: on a phone whose sensors sit behind a DSP, iio-sensor-proxy
+has it some ten seconds after the compositor has started its
+orientation sensor. Such a session never rotates.
+
+iio-sensor-proxy accepts a claim for an accelerometer it does not have,
+keeps the client, and starts the sensor when one appears, sending the
+orientation as a property change, which updateProperties() already
+handles. So claim whenever the service is running. Until a reading
+comes the orientation is "undefined", as it is between a claim and the
+first reading today.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../iiosensorproxyorientationsensor.cpp        | 18 ++++++++++--------
+ 1 file changed, 10 insertions(+), 8 deletions(-)
+
+diff --git a/src/plugins/sensors/iio-sensor-proxy/iiosensorproxyorientationsensor.cpp b/src/plugins/sensors/iio-sensor-proxy/iiosensorproxyorientationsensor.cpp
+index 86ebb35..b9c260e 100644
+--- a/src/plugins/sensors/iio-sensor-proxy/iiosensorproxyorientationsensor.cpp
++++ b/src/plugins/sensors/iio-sensor-proxy/iiosensorproxyorientationsensor.cpp
+@@ -62,14 +62,16 @@ IIOSensorProxyOrientationSensor::~IIOSensorProxyOrientationSensor()
+ void IIOSensorProxyOrientationSensor::start()
+ {
+     if (isServiceRunning()) {
+-        if (m_sensorProxyInterface->hasAccelerometer()) {
+-            QDBusPendingReply<> reply = m_sensorProxyInterface->ClaimAccelerometer();
+-            reply.waitForFinished();
+-            if (!reply.isError()) {
+-                QString orientation = m_sensorProxyInterface->accelerometerOrientation();
+-                updateOrientation(orientation);
+-                return;
+-            }
++        // iio-sensor-proxy takes a claim for an accelerometer it does not
++        // have yet and starts it once one appears, so claim whether or not
++        // HasAccelerometer is true now; the orientation then arrives as a
++        // property change.
++        QDBusPendingReply<> reply = m_sensorProxyInterface->ClaimAccelerometer();
++        reply.waitForFinished();
++        if (!reply.isError()) {
++            QString orientation = m_sensorProxyInterface->accelerometerOrientation();
++            updateOrientation(orientation);
++            return;
+         }
+     }
+     sensorStopped();
+-- 
+2.55.0
+

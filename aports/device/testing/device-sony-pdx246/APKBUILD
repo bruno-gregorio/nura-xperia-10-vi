@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=9
+pkgrel=10
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -77,6 +77,10 @@ kernel_downstream() {
 # soc-qcom-qbootctl: qbootctl marks the slot good in the UFS GPT, and this
 # port does not write the UFS.
 #
+# The audio needs two files of its own: the speaker amplifier's settings,
+# firmware-sony-pdx246-audio, and the ADSP's audio graph, our AudioReach
+# topology, which the sound card asks for by its model name.
+#
 # hexagonrpcd serves the ADSP's sensors domain its files. Our fork in
 # temp/hexagonrpcd, 0.4.0-r103, adds the sns_reg_version mapping this phone's
 # domain asks for, hence the version. The domain also wants hexagonrpcd early,
@@ -87,6 +91,8 @@ kernel_mainline() {
 	depends="
 		firmware-sony-pdx246-adreno
 		firmware-sony-pdx246-adsp
+		firmware-sony-pdx246-audio
+		firmware-sony-pdx246-audioreach-topology
 		firmware-sony-pdx246-cdsp
 		firmware-sony-pdx246-hexagonfs
 		firmware-sony-pdx246-wlan

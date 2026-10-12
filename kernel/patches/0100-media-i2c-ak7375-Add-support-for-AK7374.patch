@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 15:16:38 -0300
+Subject: [PATCH] media: i2c: ak7375: Add support for AK7374
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The AK7374 takes its position in registers 0x00 and 0x01 like the AK7375,
+but as 10 bits left-aligned in the 16, and is made active by writing 0 to
+the control register at 0x02. That is all the vendor camera stack of the
+Sony Xperia 10 VI writes to it, and it waits 10 ms after power-up before
+doing so.
+
+No public datasheet describes a standby mode, so leave it out, as for
+the AK7345: suspend parks the lens and removes power.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/media/i2c/ak7375.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/drivers/media/i2c/ak7375.c b/drivers/media/i2c/ak7375.c
+index 9a2432cea..761111bbe 100644
+--- a/drivers/media/i2c/ak7375.c
++++ b/drivers/media/i2c/ak7375.c
+@@ -51,6 +51,19 @@ static const struct ak73xx_chipdef ak7345_cdef = {
+ 	.power_delay_us	= 20000,
+ };
+ 
++static const struct ak73xx_chipdef ak7374_cdef = {
++	.reg_position	= 0x0,
++	.reg_cont	= 0x2,
++	.shift_pos	= 6,	/* 10 bits position values, need to << 6 */
++	.mode_active	= 0x0,
++	.has_standby	= false,
++	.focus_pos_max	= 1023,
++	.focus_steps	= 1,
++	.ctrl_steps	= 16,
++	.ctrl_delay_us	= 1000,
++	.power_delay_us	= 10000,
++};
++
+ static const struct ak73xx_chipdef ak7375_cdef = {
+ 	.reg_position	= 0x0,
+ 	.reg_cont	= 0x2,
+@@ -330,6 +343,7 @@ static int __maybe_unused ak7375_vcm_resume(struct device *dev)
+ 
+ static const struct of_device_id ak7375_of_table[] = {
+ 	{ .compatible = "asahi-kasei,ak7345", .data = &ak7345_cdef, },
++	{ .compatible = "asahi-kasei,ak7374", .data = &ak7374_cdef, },
+ 	{ .compatible = "asahi-kasei,ak7375", .data = &ak7375_cdef, },
+ 	{ /* sentinel */ }
+ };

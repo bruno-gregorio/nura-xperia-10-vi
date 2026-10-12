@@ -22,10 +22,10 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 6 insertions(+), 5 deletions(-)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 78fabeda3..b776c0c20 100644
+index 30044701a..69d14945d 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -600,12 +600,13 @@ &i2c2 {
+@@ -601,12 +601,13 @@ &i2c2 {
  	status = "okay";
  
  	/*
@@ -42,7 +42,7 @@ index 78fabeda3..b776c0c20 100644
  
  		reset-gpios = <&pm6450_gpios 3 GPIO_ACTIVE_LOW>;
  
-@@ -628,13 +629,13 @@ cam_hi846_vdig_1p2: ldo1 {
+@@ -629,13 +630,13 @@ cam_hi846_vdig_1p2: ldo1 {
  			cam_main_vdig_1p1: ldo2 {
  				regulator-name = "cam_main_vdig_1p1";
  				regulator-min-microvolt = <1100000>;

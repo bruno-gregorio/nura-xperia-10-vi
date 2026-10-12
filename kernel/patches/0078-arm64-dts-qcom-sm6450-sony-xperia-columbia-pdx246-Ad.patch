@@ -14,14 +14,14 @@ ones it gives the PM8010 that it lists as the PMIC's alternative.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 180 ++++++++++++++++++
- 1 file changed, 180 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 181 ++++++++++++++++++
+ 1 file changed, 181 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 711b06021..b22b651ad 100644
+index 711b06021..a8b55eae4 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -430,6 +430,87 @@ pm6150l_bob: bob {
+@@ -430,6 +430,88 @@ pm6150l_bob: bob {
  	};
  };
  
@@ -51,7 +51,7 @@ index 711b06021..b22b651ad 100644
 +		pinctrl-names = "default";
 +
 +		orientation = <1>;
-+		rotation = <90>;
++		rotation = <270>;
 +
 +		port {
 +			cam_wide_out: endpoint {
@@ -89,12 +89,13 @@ index 711b06021..b22b651ad 100644
 +		pinctrl-names = "default";
 +
 +		/*
-+		 * Stock turns this sensor's image the other way round from the
-+		 * ultra-wide's and calls it 270 degrees; the driver here reads
-+		 * both out the same way.
++		 * Stock reads this sensor out turned 180 degrees from the
++		 * ultra-wide, GRBG where that one is GBRG, and so reports the
++		 * opposite angle for it. The driver here reads both out the
++		 * same way, so both take the same correction.
 +		 */
 +		orientation = <0>;
-+		rotation = <90>;
++		rotation = <270>;
 +
 +		port {
 +			cam_front_out: endpoint {
@@ -109,7 +110,7 @@ index 711b06021..b22b651ad 100644
  &gpi_dma0 {
  	status = "okay";
  };
-@@ -469,6 +550,70 @@ amp_top: audio-codec@34 {
+@@ -469,6 +551,70 @@ amp_top: audio-codec@34 {
  &i2c2 {
  	status = "okay";
  
@@ -180,7 +181,7 @@ index 711b06021..b22b651ad 100644
  	/* Its twin on the bottom speaker, taking the stream's other channel. */
  	amp_bottom: audio-codec@34 {
  		compatible = "awinic,aw88263";
-@@ -569,6 +714,13 @@ panel_vddio_en: panel-vddio-en-state {
+@@ -569,6 +715,13 @@ panel_vddio_en: panel-vddio-en-state {
  };
  
  &pm6450_gpios {
@@ -194,7 +195,7 @@ index 711b06021..b22b651ad 100644
  	vol_down_n: vol-down-n-state {
  		pins = "gpio1";
  		function = "normal";
-@@ -727,6 +879,34 @@ wcd937x_tx: codec@0,3 {
+@@ -727,6 +880,34 @@ wcd937x_tx: codec@0,3 {
  };
  
  &tlmm {

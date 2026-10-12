@@ -1,0 +1,233 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 14:19:17 -0300
+Subject: [PATCH] regulator: wl2868c: Support the ET5907 second source
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When nothing answers at the WL2868C's address and the node gives a
+second one, look for an ET5907 there. It has the same LDOs and inputs,
+but enables them through register 0x03 without a system enable, sets
+them from register 0x04 on, and steps by 6 mV on LDO1 and LDO2 and by
+10 mV on the others. Its ID register is 0x01, which reads 0x00.
+
+No datasheet for the ET5907 is public; the layout is that of the vendor
+driver for the boards that carry it.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/regulator/wl2868c-regulator.c | 136 ++++++++++++++++++++------
+ 1 file changed, 105 insertions(+), 31 deletions(-)
+
+diff --git a/drivers/regulator/wl2868c-regulator.c b/drivers/regulator/wl2868c-regulator.c
+index fdc202c8e..8ee7cbd44 100644
+--- a/drivers/regulator/wl2868c-regulator.c
++++ b/drivers/regulator/wl2868c-regulator.c
+@@ -6,6 +6,10 @@
+  * VIN12, and LDO3 to LDO7 for the analog and I/O rails, from their own
+  * inputs. Every output steps by 8 mV, and register 0x0e holds the system
+  * enable in bit 7 and one enable bit per LDO below it.
++ *
++ * Some boards carry an ET5907 in its place, at another address: the same
++ * seven LDOs, but enabled through register 0x03 with no system enable,
++ * set from register 0x04 on, and stepping by 6 mV and 10 mV.
+  */
+ 
+ #include <linux/bits.h>
+@@ -15,6 +19,7 @@
+ #include <linux/i2c.h>
+ #include <linux/module.h>
+ #include <linux/mod_devicetable.h>
++#include <linux/of.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/driver.h>
+ 
+@@ -26,6 +31,13 @@
+ 
+ #define WL2868C_ID			0x82
+ 
++#define ET5907_DEVICE_ID		0x01
++#define ET5907_LDO_EN			0x03
++#define ET5907_LDO_VOUT(n)		(0x04 + (n))
++#define ET5907_MAX_REGISTER		0x1e
++
++#define ET5907_ID			0x00
++
+ enum wl2868c_regulator_ids {
+ 	WL2868C_LDO1,
+ 	WL2868C_LDO2,
+@@ -51,7 +63,7 @@ static const struct regulator_ops wl2868c_ops = {
+  * The enable time is the datasheet's turn-on delay plus its soft start,
+  * 25 us and 60 us for LDO1 and LDO2, 25 us and 80 us for the others.
+  */
+-#define WL2868C_LDO(_id, _supply, _min, _n, _mask, _time)		\
++#define WL2868C_LDO(_chip, _id, _supply, _min, _step, _n, _mask, _time)	\
+ 	[WL2868C_LDO ## _id] = {					\
+ 		.name = "ldo" #_id,					\
+ 		.of_match = "ldo" #_id,					\
+@@ -62,23 +74,37 @@ static const struct regulator_ops wl2868c_ops = {
+ 		.owner = THIS_MODULE,					\
+ 		.ops = &wl2868c_ops,					\
+ 		.min_uV = _min,						\
+-		.uV_step = 8000,					\
++		.uV_step = _step,					\
+ 		.n_voltages = _n,					\
+-		.vsel_reg = WL2868C_LDO_VOUT(WL2868C_LDO ## _id),	\
++		.vsel_reg = _chip ## _LDO_VOUT(WL2868C_LDO ## _id),	\
+ 		.vsel_mask = _mask,					\
+-		.enable_reg = WL2868C_LDO_EN,				\
++		.enable_reg = _chip ## _LDO_EN,				\
+ 		.enable_mask = BIT(WL2868C_LDO ## _id),			\
+ 		.enable_time = _time,					\
+ 	}
+ 
+ static const struct regulator_desc wl2868c_regulators[] = {
+-	WL2868C_LDO(1, "vin12", 496000, 128, 0x7f, 85),
+-	WL2868C_LDO(2, "vin12", 496000, 128, 0x7f, 85),
+-	WL2868C_LDO(3, "vin34", 1504000, 256, 0xff, 105),
+-	WL2868C_LDO(4, "vin34", 1504000, 256, 0xff, 105),
+-	WL2868C_LDO(5, "vin5", 1504000, 256, 0xff, 105),
+-	WL2868C_LDO(6, "vin6", 1504000, 256, 0xff, 105),
+-	WL2868C_LDO(7, "vin7", 1504000, 256, 0xff, 105),
++	WL2868C_LDO(WL2868C, 1, "vin12", 496000, 8000, 128, 0x7f, 85),
++	WL2868C_LDO(WL2868C, 2, "vin12", 496000, 8000, 128, 0x7f, 85),
++	WL2868C_LDO(WL2868C, 3, "vin34", 1504000, 8000, 256, 0xff, 105),
++	WL2868C_LDO(WL2868C, 4, "vin34", 1504000, 8000, 256, 0xff, 105),
++	WL2868C_LDO(WL2868C, 5, "vin5", 1504000, 8000, 256, 0xff, 105),
++	WL2868C_LDO(WL2868C, 6, "vin6", 1504000, 8000, 256, 0xff, 105),
++	WL2868C_LDO(WL2868C, 7, "vin7", 1504000, 8000, 256, 0xff, 105),
++};
++
++/*
++ * No datasheet for the ET5907 is public: the ranges are those of the vendor
++ * driver for the boards that carry it, and the enable time a generous guess.
++ */
++static const struct regulator_desc et5907_regulators[] = {
++	WL2868C_LDO(ET5907, 1, "vin12", 600000, 6000, 201, 0xff, 500),
++	WL2868C_LDO(ET5907, 2, "vin12", 600000, 6000, 201, 0xff, 500),
++	WL2868C_LDO(ET5907, 3, "vin34", 1200000, 10000, 256, 0xff, 500),
++	WL2868C_LDO(ET5907, 4, "vin34", 1200000, 10000, 256, 0xff, 500),
++	WL2868C_LDO(ET5907, 5, "vin5", 1200000, 10000, 256, 0xff, 500),
++	WL2868C_LDO(ET5907, 6, "vin6", 1200000, 10000, 256, 0xff, 500),
++	WL2868C_LDO(ET5907, 7, "vin7", 1200000, 10000, 256, 0xff, 500),
+ };
+ 
+ static const struct regmap_config wl2868c_regmap_config = {
+@@ -87,14 +113,68 @@ static const struct regmap_config wl2868c_regmap_config = {
+ 	.max_register = WL2868C_MAX_REGISTER,
+ };
+ 
++static const struct regmap_config et5907_regmap_config = {
++	.reg_bits = 8,
++	.val_bits = 8,
++	.max_register = ET5907_MAX_REGISTER,
++};
++
++/*
++ * Find which of the two chips the board carries: the WL2868C at the node's
++ * address, or an ET5907 at the second address the node gives, if any.
++ */
++static int wl2868c_detect(struct i2c_client *client,
++			  const struct regulator_desc **descs,
++			  struct regmap **regmap)
++{
++	struct device *dev = &client->dev;
++	struct i2c_client *second;
++	u32 addr;
++	int id;
++
++	id = i2c_smbus_read_byte_data(client, WL2868C_DEVICE_ID);
++	if (id == WL2868C_ID) {
++		*descs = wl2868c_regulators;
++		*regmap = devm_regmap_init_i2c(client, &wl2868c_regmap_config);
++		return PTR_ERR_OR_ZERO(*regmap);
++	}
++	if (id >= 0)
++		return dev_err_probe(dev, -ENODEV,
++				     "unknown device ID 0x%02x\n", id);
++
++	if (of_property_read_u32_index(dev->of_node, "reg", 1, &addr))
++		return dev_err_probe(dev, id, "failed to read device ID\n");
++
++	second = devm_i2c_new_dummy_device(dev, client->adapter, addr);
++	if (IS_ERR(second))
++		return dev_err_probe(dev, PTR_ERR(second),
++				     "failed to add the client at 0x%02x\n",
++				     addr);
++
++	id = i2c_smbus_read_byte_data(second, ET5907_DEVICE_ID);
++	if (id < 0)
++		return dev_err_probe(dev, id,
++				     "no answer at 0x%02x or 0x%02x\n",
++				     client->addr, addr);
++	if (id != ET5907_ID)
++		return dev_err_probe(dev, -ENODEV,
++				     "unknown device ID 0x%02x at 0x%02x\n",
++				     id, addr);
++
++	dev_info(dev, "ET5907 at 0x%02x\n", addr);
++	*descs = et5907_regulators;
++	*regmap = devm_regmap_init_i2c(second, &et5907_regmap_config);
++	return PTR_ERR_OR_ZERO(*regmap);
++}
++
+ static int wl2868c_probe(struct i2c_client *client)
+ {
+ 	struct device *dev = &client->dev;
++	const struct regulator_desc *descs;
+ 	struct regulator_config config = { };
+ 	struct regulator_dev *rdev;
+ 	struct gpio_desc *reset;
+ 	struct regmap *regmap;
+-	unsigned int id;
+ 	int i, ret;
+ 
+ 	ret = devm_regulator_get_enable_optional(dev, "vsys");
+@@ -116,33 +196,27 @@ static int wl2868c_probe(struct i2c_client *client)
+ 		usleep_range(1000, 2000);
+ 	}
+ 
+-	regmap = devm_regmap_init_i2c(client, &wl2868c_regmap_config);
+-	if (IS_ERR(regmap))
+-		return dev_err_probe(dev, PTR_ERR(regmap),
+-				     "failed to init regmap\n");
+-
+-	ret = regmap_read(regmap, WL2868C_DEVICE_ID, &id);
++	ret = wl2868c_detect(client, &descs, &regmap);
+ 	if (ret)
+-		return dev_err_probe(dev, ret, "failed to read device ID\n");
+-	if (id != WL2868C_ID)
+-		return dev_err_probe(dev, -ENODEV,
+-				     "unknown device ID 0x%02x\n", id);
+-
+-	/* The LDO enables only act while the system enable is set. */
+-	ret = regmap_set_bits(regmap, WL2868C_LDO_EN, WL2868C_SYS_EN);
+-	if (ret)
+-		return dev_err_probe(dev, ret, "failed to set system enable\n");
++		return ret;
++
++	/* The WL2868C's LDO enables only act while the system enable is set. */
++	if (descs == wl2868c_regulators) {
++		ret = regmap_set_bits(regmap, WL2868C_LDO_EN, WL2868C_SYS_EN);
++		if (ret)
++			return dev_err_probe(dev, ret,
++					     "failed to set system enable\n");
++	}
+ 
+ 	config.dev = dev;
+ 	config.regmap = regmap;
+ 
+-	for (i = 0; i < ARRAY_SIZE(wl2868c_regulators); i++) {
+-		rdev = devm_regulator_register(dev, &wl2868c_regulators[i],
+-					       &config);
++	for (i = 0; i < WL2868C_NUM_REGULATORS; i++) {
++		rdev = devm_regulator_register(dev, &descs[i], &config);
+ 		if (IS_ERR(rdev))
+ 			return dev_err_probe(dev, PTR_ERR(rdev),
+ 					     "failed to register %s\n",
+-					     wl2868c_regulators[i].name);
++					     descs[i].name);
+ 	}
+ 
+ 	return 0;

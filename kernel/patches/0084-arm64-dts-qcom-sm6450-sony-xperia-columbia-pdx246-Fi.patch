@@ -1,0 +1,60 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 14:19:17 -0300
+Subject: [PATCH] arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Find
+ the camera PMIC on either address
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Some units carry an ET5907 at 0x35 instead of the WL2868C at 0x2f; give
+the node both addresses.
+
+The main camera's 1.1 V and 2.9 V rails are not steps of either chip:
+the WL2868C makes 1.104 V and 2.904 V, the ET5907 1.104 V and 2.9 V,
+which is what the vendor driver rounds the stock requests up to. Give
+those rails the range that holds both, which the regulator core narrows
+to the one step the chip on the board has.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts   | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index a7b1481f4..f42db2744 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -598,12 +598,13 @@ &i2c2 {
+ 	status = "okay";
+ 
+ 	/*
+-	 * The cameras' supplies. Their inputs are not in the stock tree; these
+-	 * are the ones it gives the PM8010 this chip replaced.
++	 * The cameras' supplies, a WL2868C or, on some units, an ET5907 at
++	 * 0x35. Their inputs are not in the stock tree; these are the ones it
++	 * gives the PM8010 these chips replaced.
+ 	 */
+ 	pmic@2f {
+ 		compatible = "willsemi,wl2868c";
+-		reg = <0x2f>;
++		reg = <0x2f>, <0x35>;
+ 
+ 		reset-gpios = <&pm6450_gpios 3 GPIO_ACTIVE_LOW>;
+ 
+@@ -626,13 +627,13 @@ cam_hi846_vdig_1p2: ldo1 {
+ 			cam_main_vdig_1p1: ldo2 {
+ 				regulator-name = "cam_main_vdig_1p1";
+ 				regulator-min-microvolt = <1100000>;
+-				regulator-max-microvolt = <1100000>;
++				regulator-max-microvolt = <1104000>;
+ 			};
+ 
+ 			cam_main_vana_2p9: ldo3 {
+ 				regulator-name = "cam_main_vana_2p9";
+ 				regulator-min-microvolt = <2900000>;
+-				regulator-max-microvolt = <2900000>;
++				regulator-max-microvolt = <2904000>;
+ 			};
+ 
+ 			cam_wide_vana_2p8: ldo4 {

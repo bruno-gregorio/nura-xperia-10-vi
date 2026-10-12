@@ -16,7 +16,7 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
  1 file changed, 2 insertions(+)
 
 diff --git a/Documentation/devicetree/bindings/i2c/qcom,i2c-cci.yaml b/Documentation/devicetree/bindings/i2c/qcom,i2c-cci.yaml
-index 9bc99d736..1040ba4ad 100644
+index 9bc99d736..c95d5405c 100644
 --- a/Documentation/devicetree/bindings/i2c/qcom,i2c-cci.yaml
 +++ b/Documentation/devicetree/bindings/i2c/qcom,i2c-cci.yaml
 @@ -32,6 +32,7 @@ properties:
@@ -27,11 +27,11 @@ index 9bc99d736..1040ba4ad 100644
                - qcom,sm8250-cci
                - qcom,sm8450-cci
                - qcom,sm8550-cci
-@@ -243,6 +244,7 @@ allOf:
-           contains:
+@@ -185,6 +186,7 @@ allOf:
              enum:
-               - qcom,sa8775p-cci
+               - qcom,sdm845-cci
+               - qcom,sm6350-cci
 +              - qcom,sm6450-cci
-               - qcom,sm8550-cci
-               - qcom,sm8650-cci
-               - qcom,x1e80100-cci
+     then:
+       properties:
+         clocks:

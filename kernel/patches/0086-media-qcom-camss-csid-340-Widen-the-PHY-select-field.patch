@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 14:20:03 -0300
+Subject: [PATCH] media: qcom: camss: csid-340: Widen the PHY select field
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The PHY select field of CSI2_RX_CFG0 is three bits wide, bits 20 to 22,
+as the vendor driver's csi2_rx_phy_num_mask of 0x7 says for both the
+CSID 530 and the CSID 640. Two bits were enough for the two PHYs of the
+QCM2290, but not for the fourth PHY of the SM6450, which is selected
+with 4.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/media/platform/qcom/camss/camss-csid-340.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-csid-340.c b/drivers/media/platform/qcom/camss/camss-csid-340.c
+index 023198574..199cf4a94 100644
+--- a/drivers/media/platform/qcom/camss/camss-csid-340.c
++++ b/drivers/media/platform/qcom/camss/camss-csid-340.c
+@@ -32,7 +32,7 @@
+ #define CSID_CSI2_RX_CFG0					(0x100)
+ #define		CSI2_RX_CFG0_NUM_ACTIVE_LANES_MASK	GENMASK(1, 0)
+ #define		CSI2_RX_CFG0_DLX_INPUT_SEL_MASK		GENMASK(17, 4)
+-#define		CSI2_RX_CFG0_PHY_NUM_SEL_MASK		GENMASK(21, 20)
++#define		CSI2_RX_CFG0_PHY_NUM_SEL_MASK		GENMASK(22, 20)
+ #define		CSI2_RX_CFG0_PHY_NUM_SEL_BASE_IDX	1
+ #define		CSI2_RX_CFG0_PHY_TYPE_SEL		BIT(24)
+ 

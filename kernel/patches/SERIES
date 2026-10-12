@@ -84,3 +84,14 @@ arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the Hi-846 cameras
 media: dt-bindings: Add Sony IMX582
 media: i2c: Add Sony IMX582 sensor driver
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the main camera
+regulator: dt-bindings: wl2868c: Describe the ET5907 second source
+regulator: wl2868c: Support the ET5907 second source
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Find the camera PMIC on either address
+media: dt-bindings: Add qcom,sm6450-camss
+media: qcom: camss: csid-340: Widen the PHY select field
+media: qcom: camss: Add CAMSS_6450 enum
+media: qcom: camss: csiphy-3ph: Add Gen2 v1.2.3 two-phase MIPI CSI-2 DPHY support
+media: qcom: camss: vfe-340: Support TFE 640
+media: qcom: camss: Add support for SM6450
+arm64: dts: qcom: sm6450: Add the camera subsystem
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable the camera subsystem

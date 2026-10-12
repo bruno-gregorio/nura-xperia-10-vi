@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 14:20:03 -0300
+Subject: [PATCH] media: qcom: camss: vfe-340: Support TFE 640
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The TFE 640 of the SM6450 keeps the TFE 530's registers where they were
+relative to its top block, but moves the bus write masters from 0xa00 to
+0x1800 past it and makes them 128 bits wide, so RDI frames are packed as
+PLAIN128 rather than PLAIN64. Each RDI also has a module enable of its
+own that has to be set for frames to reach the bus, and the write
+masters a bandwidth limit, which the vendor driver sets to 0xf.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../media/platform/qcom/camss/camss-vfe-340.c | 34 +++++++++++++++++--
+ 1 file changed, 32 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/media/platform/qcom/camss/camss-vfe-340.c b/drivers/media/platform/qcom/camss/camss-vfe-340.c
+index d129b0d3a..88b99e1ea 100644
+--- a/drivers/media/platform/qcom/camss/camss-vfe-340.c
++++ b/drivers/media/platform/qcom/camss/camss-vfe-340.c
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /*
+  * Qualcomm MSM Camera Subsystem - VFE (Video Front End) Module 340 (TFE)
++ * and 640 (TFE)
+  *
+  * Copyright (c) 2025 Qualcomm Innovation Center, Inc. All rights reserved.
+  */
+@@ -14,6 +15,13 @@
+ #include "camss.h"
+ #include "camss-vfe.h"
+ 
++/*
++ * TFE 640 keeps the registers of TFE 530 where they were relative to the top
++ * block, which vfe->base points at on both, but moves the bus write masters
++ * and makes them 128 bits wide.
++ */
++#define IS_TFE_640(vfe)	((vfe)->camss->res->version == CAMSS_6450)
++
+ #define TFE_GLOBAL_RESET_CMD				(0x014)
+ #define		TFE_GLOBAL_RESET_CMD_CORE	BIT(0)
+ 
+@@ -30,7 +38,10 @@
+ 
+ #define TFE_IRQ_STATUS_0				(0x04c)
+ 
+-#define BUS_REG(a)					(0xa00 + (a))
++#define TFE_640_RDI_MODULE_CFG(n)			(0x660 + (n) * 0x200)
++#define		TFE_640_RDI_MODULE_CFG_EN	BIT(0)
++
++#define BUS_REG(a)	((IS_TFE_640(vfe) ? 0x1800 : 0xa00) + (a))
+ 
+ #define TFE_BUS_IRQ_MASK_0				BUS_REG(0x18)
+ #define		TFE_BUS_IRQ_MASK_RUP_DONE_MASK	GENMASK(3, 0)
+@@ -63,7 +74,10 @@
+ #define TFE_BUS_IMAGE_CFG_2(c)				BUS_REG(0x214 + (c) * 0x100)
+ #define		TFE_BUS_IMAGE_CFG_2_DEFAULT	0xffff
+ #define TFE_BUS_PACKER_CFG(c)				BUS_REG(0x218 + (c) * 0x100)
++#define		TFE_BUS_PACKER_CFG_FMT_PLAIN128	0x0
+ #define		TFE_BUS_PACKER_CFG_FMT_PLAIN64	0xa
++#define TFE_BUS_BW_LIMIT(c)				BUS_REG(0x21c + (c) * 0x100)
++#define		TFE_BUS_BW_LIMIT_DEFAULT	0xf
+ #define TFE_BUS_IRQ_SUBSAMPLE_CFG_0(c)			BUS_REG(0x230 + (c) * 0x100)
+ #define TFE_BUS_IRQ_SUBSAMPLE_CFG_1(c)			BUS_REG(0x234 + (c) * 0x100)
+ #define TFE_BUS_FRAMEDROP_CFG_0(c)			BUS_REG(0x238 + (c) * 0x100)
+@@ -256,7 +270,15 @@ static void vfe_wm_start(struct vfe_device *vfe, u8 wm, struct vfe_line *line)
+ 	writel_relaxed(0u, vfe->base + TFE_BUS_IMAGE_CFG_1(client));
+ 	writel_relaxed(TFE_BUS_IMAGE_CFG_2_DEFAULT, vfe->base + TFE_BUS_IMAGE_CFG_2(client));
+ 	writel_relaxed(stride * pix->height, vfe->base + TFE_BUS_FRAME_INCR(client));
+-	writel_relaxed(TFE_BUS_PACKER_CFG_FMT_PLAIN64, vfe->base + TFE_BUS_PACKER_CFG(client));
++
++	if (IS_TFE_640(vfe)) {
++		writel_relaxed(TFE_BUS_BW_LIMIT_DEFAULT, vfe->base + TFE_BUS_BW_LIMIT(client));
++		writel_relaxed(TFE_BUS_PACKER_CFG_FMT_PLAIN128,
++			       vfe->base + TFE_BUS_PACKER_CFG(client));
++	} else {
++		writel_relaxed(TFE_BUS_PACKER_CFG_FMT_PLAIN64,
++			       vfe->base + TFE_BUS_PACKER_CFG(client));
++	}
+ 
+ 	/* No dropped frames, one irq per frame */
+ 	writel_relaxed(0, vfe->base + TFE_BUS_FRAMEDROP_CFG_0(client));
+@@ -266,6 +288,11 @@ static void vfe_wm_start(struct vfe_device *vfe, u8 wm, struct vfe_line *line)
+ 
+ 	vfe_enable_irq(vfe);
+ 
++	/* Turn on the output of the RDI module on TFE 640 */
++	if (IS_TFE_640(vfe) && wm <= VFE_LINE_RDI2)
++		writel_relaxed(TFE_640_RDI_MODULE_CFG_EN,
++			       vfe->base + TFE_640_RDI_MODULE_CFG(wm - VFE_LINE_RDI0));
++
+ 	writel(TFE_BUS_CLIENT_CFG_EN | TFE_BUS_CLIENT_CFG_MODE_FRAME,
+ 	       vfe->base + TFE_BUS_CLIENT_CFG(client));
+ 
+@@ -279,6 +306,9 @@ static void vfe_wm_stop(struct vfe_device *vfe, u8 wm)
+ 
+ 	writel(0, vfe->base + TFE_BUS_CLIENT_CFG(client));
+ 
++	if (IS_TFE_640(vfe) && wm <= VFE_LINE_RDI2)
++		writel(0, vfe->base + TFE_640_RDI_MODULE_CFG(wm - VFE_LINE_RDI0));
++
+ 	dev_dbg(vfe->camss->dev, "VFE%u: Stopped client %u\n", vfe->id, client);
+ }
+ 

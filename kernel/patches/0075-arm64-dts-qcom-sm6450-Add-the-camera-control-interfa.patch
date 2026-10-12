@@ -11,11 +11,11 @@ SM6450 has two CCI controllers with two masters each, on GPIOs 49 to
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- arch/arm64/boot/dts/qcom/sm6450.dtsi | 135 +++++++++++++++++++++++++++
- 1 file changed, 135 insertions(+)
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 147 +++++++++++++++++++++++++++
+ 1 file changed, 147 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
-index fc34f5d57..48f6a765f 100644
+index fc34f5d57..9a32266ed 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
 +++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
 @@ -4,6 +4,7 @@
@@ -26,7 +26,7 @@ index fc34f5d57..48f6a765f 100644
  #include <dt-bindings/clock/qcom,sm6450-dispcc.h>
  #include <dt-bindings/clock/qcom,sm6450-gcc.h>
  #include <dt-bindings/clock/qcom,sm6450-gpucc.h>
-@@ -1771,6 +1772,76 @@ usb_1_dwc3_hs: endpoint {
+@@ -1771,6 +1772,88 @@ usb_1_dwc3_hs: endpoint {
  			};
  		};
  
@@ -36,11 +36,17 @@ index fc34f5d57..48f6a765f 100644
 +			interrupts = <GIC_SPI 460 IRQ_TYPE_EDGE_RISING>;
 +			power-domains = <&camcc CAM_CC_CAMSS_TOP_GDSC>;
 +			clocks = <&camcc CAM_CC_CAMNOC_AXI_CLK>,
++				 <&camcc CAM_CC_SOC_AHB_CLK>,
++				 <&camcc CAM_CC_SLOW_AHB_CLK_SRC>,
 +				 <&camcc CAM_CC_CPAS_AHB_CLK>,
-+				 <&camcc CAM_CC_CCI_0_CLK>;
++				 <&camcc CAM_CC_CCI_0_CLK>,
++				 <&camcc CAM_CC_CCI_0_CLK_SRC>;
 +			clock-names = "camnoc_axi",
++				      "soc_ahb",
++				      "slow_ahb_src",
 +				      "cpas_ahb",
-+				      "cci";
++				      "cci",
++				      "cci_src";
 +			assigned-clocks = <&camcc CAM_CC_CCI_0_CLK>;
 +			assigned-clock-rates = <37500000>;
 +			pinctrl-0 = <&cci0_0_default &cci0_1_default>;
@@ -71,11 +77,17 @@ index fc34f5d57..48f6a765f 100644
 +			interrupts = <GIC_SPI 271 IRQ_TYPE_EDGE_RISING>;
 +			power-domains = <&camcc CAM_CC_CAMSS_TOP_GDSC>;
 +			clocks = <&camcc CAM_CC_CAMNOC_AXI_CLK>,
++				 <&camcc CAM_CC_SOC_AHB_CLK>,
++				 <&camcc CAM_CC_SLOW_AHB_CLK_SRC>,
 +				 <&camcc CAM_CC_CPAS_AHB_CLK>,
-+				 <&camcc CAM_CC_CCI_1_CLK>;
++				 <&camcc CAM_CC_CCI_1_CLK>,
++				 <&camcc CAM_CC_CCI_1_CLK_SRC>;
 +			clock-names = "camnoc_axi",
++				      "soc_ahb",
++				      "slow_ahb_src",
 +				      "cpas_ahb",
-+				      "cci";
++				      "cci",
++				      "cci_src";
 +			assigned-clocks = <&camcc CAM_CC_CCI_1_CLK>;
 +			assigned-clock-rates = <37500000>;
 +			pinctrl-0 = <&cci1_0_default &cci1_1_default>;
@@ -103,7 +115,7 @@ index fc34f5d57..48f6a765f 100644
  		camcc: clock-controller@ade0000 {
  			compatible = "qcom,sm6450-camcc";
  			reg = <0x0 0x0ade0000 0x0 0x20000>;
-@@ -2120,6 +2191,70 @@ tlmm: pinctrl@f100000 {
+@@ -2120,6 +2203,70 @@ tlmm: pinctrl@f100000 {
  			gpio-reserved-ranges = <38 1>;
  			wakeup-parent = <&pdc>;
  

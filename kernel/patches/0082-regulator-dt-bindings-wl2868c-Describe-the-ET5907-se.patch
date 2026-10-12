@@ -1,0 +1,54 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 14:19:16 -0300
+Subject: [PATCH] regulator: dt-bindings: wl2868c: Describe the ET5907 second
+ source
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Boards built around the WL2868C are also built with an ET5907 in its
+place, at its own address and with the same seven LDOs and inputs. The
+board cannot tell which it got, so let the node give both addresses and
+leave finding the chip to the driver.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../bindings/regulator/willsemi,wl2868c.yaml         | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/Documentation/devicetree/bindings/regulator/willsemi,wl2868c.yaml b/Documentation/devicetree/bindings/regulator/willsemi,wl2868c.yaml
+index 8fcdd2196..40b868ad6 100644
+--- a/Documentation/devicetree/bindings/regulator/willsemi,wl2868c.yaml
++++ b/Documentation/devicetree/bindings/regulator/willsemi,wl2868c.yaml
+@@ -15,12 +15,20 @@ description:
+   and give 0.496 V to 1.512 V, LDO3 to LDO7 run from VIN34, VIN5, VIN6 and
+   VIN7 and give 1.504 V to 3.544 V, all in 8 mV steps.
+ 
++  Some boards are built with an ET5907 in its place, at another address,
++  which has the same seven LDOs and inputs but programs them differently.
++
+ properties:
+   compatible:
+     const: willsemi,wl2868c
+ 
+   reg:
+-    maxItems: 1
++    minItems: 1
++    items:
++      - description: The WL2868C's address.
++      - description:
++          The address of the ET5907 that may sit in its place, on a board
++          built with either.
+ 
+   interrupts:
+     maxItems: 1
+@@ -75,7 +83,7 @@ examples:
+ 
+         pmic@2f {
+             compatible = "willsemi,wl2868c";
+-            reg = <0x2f>;
++            reg = <0x2f>, <0x35>;
+             reset-gpios = <&pm6450_gpios 3 GPIO_ACTIVE_LOW>;
+ 
+             regulators {

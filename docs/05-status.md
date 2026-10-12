@@ -4003,6 +4003,214 @@ as what it would have fixed.
     the image does not have. `hfd-service`, Lomiri's haptics, makes binder
     calls for an Android HAL that is not there and fails them, which is
     harmless. The clock reads 1970, as there is no RTC driver yet.
+- **Round 84: the loop holds a booted system, and the sensors reach
+  iio-sensor-proxy** — Verified 2026-10-11, 23:31 to 23:40. A second full boot with the keep hook's
+  binds. The transcript is `out/try-kernel/live-r84.txt`.
+  - **Verified:** the hook logged "kept /bin /sbin /proc /sys /dev", and
+    from the booted system the jobs' root has `sys/class/udc/a600000.usb`
+    and `dev/mmcblk0`. The hold was still there at 175 s, and the USB
+    watchdog had logged "configured, holding for 600 s" at 151 s. The card
+    dump has seven records past 20 s of uptime, where round 83's stopped at
+    the switch.
+  - **Verified:** iio-sensor-proxy, started by hand, found the
+    accelerometer, the light sensor, the proximity sensor and the compass
+    through its libssc backend, and `monitor-sensor` read all four. No
+    runlevel starts it: `postmarketos-ui-lomiri` enables sensorfw and not
+    iio-sensor-proxy, while Lomiri, which is Qt 5, has only QtSensors'
+    `iio-sensor-proxy`, `generic` and `linuxsys` backends, so its rotation
+    has nothing to read. sensorfw here is set up for IIO sensors, which
+    this phone does not have; its users are repowerd's proximity and light.
+  - **Verified, and misread at the time:** at 19 s of uptime the panel
+    was still scanning out the framebuffer "allocated by [fbcon]", the
+    kernel console's, and Mir's DRM client had spent 1 ms on the GPU.
+    This entry first took that as Lomiri not reaching the panel. It was
+    only early: Lomiri's QML loads at 21 to 22 s, and Mir sets the CRTC on
+    its first frame. Round 86 found Lomiri on the plane at 76 s.
+  - **Verified:** `/lib/firmware/qca` does not exist, which is why
+    Bluetooth has no patch.
+- **Round 85: kmscube on the panel, and two lessons for the loop** —
+  Verified 2026-10-11, 23:40 to 23:48. The transcript is
+  `out/try-kernel/live-r85.txt`.
+  - **Verified:** with tinydm stopped, kmscube from the card drew on the
+    command-mode DSI panel at 59.7 fps, both through the legacy page flip
+    and with `-A`, atomic.
+  - **Verified, and confounded:** its first display reading was at 19 s
+    again, so it saw fbcon's buffer, as round 84 did. It then restarted
+    tinydm with `rc-service` from the ssh session. The Lomiri that came
+    back was outside seat0's session and never became DRM master, so what
+    it showed says nothing about a normal boot. tinydm is not restarted
+    from ssh any more.
+  - **Verified:** one hold renewal failed with "touch:
+    /proc/12603/root/pmhold: No such file". `/proc/[0-9]*` sorts by name,
+    and a job's short-lived child came before the jobs' own pid 129.
+    `ssh.py` now tries one-, two- and three-digit pids first.
+- **Round 86: Lomiri is on the panel** — Verified 2026-10-11, 23:51 to
+  23:58. The same image, read at 76 s instead of 19 s. The transcript is
+  `out/try-kernel/live-r86.txt`.
+  - **Verified:** the primary plane scans out fb 63, "allocated by
+    QSGRenderThread", which is Lomiri's Qt scene graph. It is 1080x2520
+    XR24 with modifier 0, linear, pitch 4352. Read again at 84 s, it had
+    moved between fb 62 and 63, so Lomiri was redrawing.
+  - **Verified:** Mir is DRM master through the file elogind's
+    `TakeDevice` gave it: the same `drm_file` id in `clients`, with master
+    set. tty1 is in `KD_GRAPHICS` and `VT_PROCESS`, release signal 35 and
+    acquire 36, so the VT is Mir's.
+  - **Verified:** the backlight `ae94000.dsi.0` is at 100 of 1023, with
+    `bl_power` 0.
+  - **Verified:** the greeter logs TypeErrors because the
+    `LightDM.IntegratedLightDM` QML module is not installed, and
+    `/usr/share/backgrounds/lomiri-default-background.png` is missing.
+    Neither stops the shell.
+- **Round 87: the loop sees the screen** — Verified 2026-10-11, 23:58 to
+  2026-10-12, 00:06. The transcript is `out/try-kernel/live-r87.txt`.
+  - **Verified:** `scripts/kms-shot.py` reads the scanout buffer through
+    `GETFB2` and a dma-buf, read only, and `ssh.py`'s `@pull` brought three
+    PNGs back with matching checksums: `out/try-kernel/shot-r87-45s.png`,
+    `shot-r87-45s-half.png` and `shot-r87-100s.png`. This reads memory, not
+    registers, and needs no DRM master.
+  - **Verified, by looking:** at 45 s and at 100 s Lomiri shows its top
+    panel, with the network, sound, battery and clock indicators, over a
+    dark background. The panel is a few pixels tall, which is the
+    desktop's scale: with no device yaml, lomiri-deviceinfo falls back to
+    GridUnit 8. Mir reports the panel as 61x141 mm, about 453 ppi.
+- **Rounds 88 and 89: device pkgrel 7** — Verified 2026-10-12, 00:07 to
+  00:23. Round 88 put make-rootfs-img.sh's image of 00:03, UUID cf20d29d,
+  into the card's p1 (fsck 0, resize 0); round 89 booted it. The
+  transcript is `out/try-kernel/live-r89.txt`.
+  - **Verified:** Bluetooth comes up. With linux-firmware-qca installed,
+    hci0 downloaded `qca/crbtfw32.tlv` at 8.4 s and `qca/crnv32u.bin` at
+    11.1 s, and logged "QCA setup on UART is completed" at 11.4 s. The
+    kernel reads the `.zst` files, `CONFIG_FW_LOADER_COMPRESS_ZSTD=y`.
+    Pairing has not been tried.
+  - **Verified:** iio-sensor-proxy starts at boot, from the default
+    runlevel, about 2 s before tinydm. `monitor-sensor` found it on the
+    bus, but printed nothing after that: its output went into a pipe and
+    was still buffered when `timeout` killed it. Which sensors it has at
+    boot is for a later round to read off its D-Bus properties.
+  - **Verified:** `sony-pdx246.yaml` is in `/etc/lomiri-deviceinfo/devices`
+    and Lomiri's environment has `DEVICEINFO_DEVICE_NAME=sony-pdx246`. But
+    the scale did not change: Lomiri logged "min=2gu(16px)", 8 px to the
+    grid unit, and the screenshots match round 87's. Lomiri, its toolkit
+    and qtmir read the grid unit only from `GRID_UNIT_PX`, and in the image
+    only the `device-info` tool calls lomiri-deviceinfo's `gridUnit()`.
+    lomiri-session's start script exports `GRID_UNIT_PX=$(device-info get
+    GridUnit)`; pmOS's `start_lomiri.sh` does not, and scales only the
+    PinePhone, with `QT_SCALE_FACTOR=2`. pmaports issue 2411, open since
+    2023, reports that a grid unit other than 8 crashed Lomiri then.
+  - **Verified:** the wallpaper is missing for a reason that is not ours.
+    Lomiri 0.6.2 takes it from AccountsService's
+    `com.lomiri.shell.AccountsService` BackgroundFile, then from
+    `com.lomiri.Shell`'s `background-picture-uri`, then from
+    `/usr/share/backgrounds/lomiri-default-background.png`, which no Alpine
+    package ships. postmarketos-ui-lomiri's override sets only GNOME's
+    `org.gnome.desktop.background`, which this Lomiri does not read.
+  - **Verified:** the greeter's TypeErrors come from Alpine's lomiri
+    package, which is built with `0004-Disable-lightdm-integration.patch`,
+    so every pmOS Lomiri logs them.
+- **Rounds 90 to 92: Lomiri's scale, its wallpaper, and the sensors at
+  boot** — Verified 2026-10-12, 00:24 to 00:55, on round 88's image. Each
+  test restarted Lomiri with an environment file in
+  `/etc/tinydm.d/env-wayland.d`, which tinydm-run-session sources, through
+  `out/try-kernel/lomiri-env-try.sh`. The transcripts are
+  `out/try-kernel/live-r90.txt` to `live-r92.txt`.
+  - **Verified:** killing `lomiri` alone is a fair restart. supervise-daemon,
+    started at boot, respawns autologin, and the new Lomiri is on seat0
+    and DRM master. Round 91 restarted with no overrides first as the
+    control, and it came back as boot's did, "min=2gu(16px)". Restarted
+    sessions lack the indicator icons a fresh boot has.
+  - **Verified:** `GRID_UNIT_PX=16` scales the shell: "min=2gu(32px)", and
+    in the screenshot `out/try-kernel/shot-r91-gu16.png` the top panel is
+    about 48 px tall, three grid units, where round 87's was a few pixels.
+    It is empty, as restarted sessions' are. `QT_SCALE_FACTOR=3` runs but
+    does not scale the shell,
+    because the UI toolkit divides the grid unit by the device pixel
+    ratio: "min=2gu(5.3px)". `GRID_UNIT_PX=23` (round 90) and 17 (round 92)
+    crash Lomiri about 2 s after Mir starts, "Fatal signal received", and
+    supervise-daemon gives up after five respawns.
+  - **Verified, from a core dump:** round 92 set `core_pattern` and brought
+    the first core back, `out/try-kernel/lomiri-core-r92.gz`, and gdb read it
+    against the rootfs. The thread is QSGRenderThread, in
+    `PlatformScreen::makeCurrent()` in qtmir, from `QOpenGLContext::makeCurrent`
+    in Qt Quick's render loop. The function loads `m_outputSurface`, at
+    offset 128, and it is null.
+  - **Verified, against the sources:** why it is null. qtmir sets Mir's
+    output scale to `GRID_UNIT_PX / 8` (`displayconfigurationpolicy.cpp`).
+    With Mir 2.20 or later it then pairs each Mir display sink with a screen
+    by comparing rectangles, and that pairing is what sets
+    `m_outputSurface` (`ScreensModel`, `screensmodel.cpp`). The sink's size
+    is Mir's `extents_of()`, `roundf(width / scale)`. The screen's is the
+    mode's size divided by the scale and converted to `int`, which
+    truncates. When the two differ no sink matches, the screen gets no
+    surface, and the first frame dereferences null. On 1080x2520 that is
+    every grid unit where 1080 or 2520 over the scale has a fraction of a
+    half or more: 17, 19, 22, 23, 25, 27, 28, 29 and 31 between 14 and 32.
+    14, 15, 16, 18, 20, 21, 24, 26, 30 and 32 divide cleanly enough. This is the
+    Alpine qtmir, 0.7.2_git20260702, built from sunweaver's
+    `debian-upstream` branch at `38f16631`; qtmir's `main` still has only
+    the Mir 1 path, which compares unscaled sizes. Reasoned: the fix is
+    one rounding call, and it is upstream's to take.
+  - **Verified:** Lomiri shows the pmOS wallpaper when `com.lomiri.Shell`'s
+    `background-picture-uri` names
+    `/usr/share/wallpapers/postmarketos/contents/images/2000x2000.png`
+    (round 91, `shot-r91-gu16.png`). That file is
+    postmarketos-artwork-wallpapers', which postmarketos-ui-lomiri
+    already recommends.
+  - **Verified:** iio-sensor-proxy needs no help at boot. Polled every 3 s
+    from 21 s, it had no sensors at 21 s, the proximity sensor at 27 s, and
+    the accelerometer and light sensor at 32 s, without restarting; the
+    compass was there when read later. Round 89 had read it too early.
+    Five udev "add" events on the FastRPC devices afterwards changed
+    nothing. Its `AccelerometerOrientation` stayed "undefined" the whole
+    time. iio-sensor-proxy 3.9 polls a sensor only while a client has
+    claimed it, and starts one claimed before it appeared as soon as it
+    does, so nothing had claimed the accelerometer, Lomiri included.
+  - **What went into the packages.** Both fixes needed changes in
+    package form, which went into round 93's image:
+    our fork of postmarketos-ui-lomiri exports `GRID_UNIT_PX` from
+    `device-info get GridUnit` the way lomiri-session does, and sets
+    Lomiri's wallpaper keys; and device pkgrel 8's yaml says 24. Of the
+    grid units that work, 21 and 24 are the nearest to pmOS's rule of
+    ppi * 0.05236, which gives 23, and to Android's density of 450 on this
+    panel, a scale of 2.81. 24 is a whole scale of 3, which also suits
+    Wayland clients.
+- **Rounds 93 and 94: Lomiri at its own scale** — Verified 2026-10-12,
+  01:04 to 01:20. Round 93 put make-rootfs-img.sh's image of 01:02, UUID
+  facbb8a8, with device pkgrel 8 and postmarketos-ui-lomiri 5-r1, into the
+  card's p1 (fsck 0, resize 0); round 94 booted it. The transcript is
+  `out/try-kernel/live-r94.txt`.
+  - **Verified:** Lomiri came up at 22 s with `GRID_UNIT_PX=24` and
+    `QT_WAYLAND_FORCE_DPI=288` in its environment, from start_lomiri and
+    `device-info`, with no override file. It was the same process at 46 s
+    and at 100 s. The screenshots `out/try-kernel/shot-r94-45s.png` and
+    `shot-r94-100s.png` show the pmOS wallpaper and a top panel at phone
+    size with the network, sound and battery indicators and a clock that
+    moved from 00:00 to 00:01.
+  - **Verified, from qtmir's own log:** round 92's explanation holds. With
+    `QT_LOGGING_RULES` turning on `qtmir.screens`, a restart at grid unit
+    21 logged "Comparing sink physical geom QRect(0,0 411x960) to screen
+    physical geom QRect(0,0 411x960)", set the screen's output surface and
+    ran, although its scale of 2.625 is not whole. One at 22 logged
+    "QRect(0,0 393x916)" against "QRect(0,0 392x916)", set none, and
+    crashed. Both of tinydm's logs, the last two sessions, show the same,
+    and tinydm then stopped.
+  - **Verified:** rotation works in a restarted session and not in the one
+    from boot. After the restart at 21, qtmir logged
+    "OrientationSensor::readingChanged"; at boot it never did, and
+    iio-sensor-proxy's orientation was still "undefined" at 47 s, with all
+    four sensors present. Lomiri has QtSensors' `generic`,
+    `iio-sensor-proxy` and `linuxsys` backends loaded and no
+    `Sensors.conf`.
+  - **Verified, against the sources:** why. qtmir starts its
+    QOrientationSensor when the compositor starts, 19 s into this boot.
+    Qt 5.15's iio-sensor-proxy backend
+    (`iiosensorproxyorientationsensor.cpp`) sends `ClaimAccelerometer`
+    only if `HasAccelerometer` is already true, and otherwise stops the
+    sensor for good. The accelerometer reaches iio-sensor-proxy at about
+    32 s. iio-sensor-proxy itself takes a claim for a sensor it does not
+    have yet and starts it when it appears, so the fix is to claim anyway,
+    in qt5-qtsensors. qtmir would also start the sensor again on repowerd's
+    `DisplayPowerStateChange`, so turning the screen off and on again may
+    bring rotation in the meantime. Reasoned, not tried.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -4765,7 +4973,8 @@ each entry says how much of it held.
   bound all of it, and since round 48 the panel sends TE and answers a
   read, on pkgrel 16's own tree too in round 55. It lights: the owner
   saw the debug shell's terminal and keyboard on it (see "The panel
-  lights"). The panel driver is a backport of a
+  lights"), and Lomiri on it, through Mir's KMS platform (rounds 86 and
+  87). The panel driver is a backport of a
   posting that is not merged yet. The downstream kernel's panel driver is in the
   out-of-tree `sm6450-modules` repository, which this port does not build
   and the mainline kernel will never use - not depending on Android vendor
@@ -4785,8 +4994,9 @@ each entry says how much of it held.
   on `sm6450-gpu` (see "The GPU"). Round 66 panicked at boot with them.
   Rounds 67 to 72 found why and fixed it, and in round 72 the GPU ran
   `msm-submit`'s jobs. Userspace needs Mesa's A710 entry, which no Mesa
-  release has; `temp/mesa` backports it and builds, and nothing has drawn
-  with it yet.
+  release has; `temp/mesa` backports it. With it, freedreno reports FD710
+  (round 82), kmscube draws at the panel's 60 Hz (round 85), and Lomiri
+  renders through it (rounds 86 and 87).
 - **Modem, Wi-Fi, audio, camera.** On mainline, the four remote
   processors they run on are in pkgrel 15's series. Round 34 probed
   them, and rounds 37, 52 and 57 booted the ADSP, which took the USB link
@@ -5046,3 +5256,17 @@ port boots" above. What is left starts from there.
    the sensors services started and sshd answering at 20 s. What is left
    here: a look at the screen, the sensors as Lomiri sees them, Bluetooth's
    firmware, and a clock.
+
+   Where that stands on 2026-10-12, at round 94. The loop takes
+   screenshots (round 87). Bluetooth's firmware is packaged and hci0 comes
+   up (round 89). iio-sensor-proxy starts at boot and has all four sensors
+   by 32 s (round 92). Lomiri boots at its own scale, a grid unit of 24, on
+   the pmOS wallpaper (round 94), through our fork of
+   postmarketos-ui-lomiri and device pkgrel 8. What is left here:
+   - rotation in the session from boot, which needs Qt 5's iio-sensor-proxy
+     backend to claim the accelerometer before it exists (see "Rounds 93
+     and 94");
+   - a clock, which needs an RTC driver that only reads;
+   - and upstream, with the owner's consent: qtmir's rounding (rounds 92
+     and 94), `GRID_UNIT_PX` and the wallpaper in postmarketos-ui-lomiri
+     (pmaports issue 2411), and iio-sensor-proxy for Lomiri.

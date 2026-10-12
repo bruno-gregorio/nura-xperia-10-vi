@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=4
+pkgrel=5
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -29,8 +29,10 @@ depends="
 	postmarketos-base
 "
 makedepends="devicepkg-dev"
+install="$pkgname-openrc.post-install $pkgname-openrc.post-upgrade"
 source="
 	deviceinfo
+	hexagonrpcd-adsp-sensorspd.conf
 	kernel-cmdline.downstream.conf
 	kernel-cmdline.mainline.conf
 	modules-initfs.downstream
@@ -39,6 +41,7 @@ source="
 subpackages="
 	$pkgname-kernel-downstream:kernel_downstream
 	$pkgname-kernel-mainline:kernel_mainline
+	$pkgname-openrc
 "
 
 build() {
@@ -55,16 +58,46 @@ kernel_downstream() {
 	devicepkg_subpackage_kernel $startdir $pkgname $subpkgname
 }
 
+# The firmware goes with mainline: it sits where our device tree's
+# firmware-name properties and drm/msm's catalog point. firmware-sony-pdx246
+# is built from files taken off the phone; see its APKBUILD. ath10k's
+# firmware-5.bin for the WLAN comes from linux-firmware.
+#
+# hexagonrpcd serves the ADSP's sensors domain its files. Our fork in
+# temp/hexagonrpcd, 0.4.0-r103, adds the sns_reg_version mapping this phone's
+# domain asks for, hence the version.
 kernel_mainline() {
-	pkgdesc="Our own 6.18 mainline kernel - SD card and USB only, see docs/06-mainline.md"
-	depends="linux-postmarketos-qcom-sm6450"
+	pkgdesc="Our own 6.18 mainline kernel, see docs/06-mainline.md"
+	depends="
+		firmware-sony-pdx246-adreno
+		firmware-sony-pdx246-adsp
+		firmware-sony-pdx246-cdsp
+		firmware-sony-pdx246-hexagonfs
+		firmware-sony-pdx246-wlan
+		hexagonrpcd>=0.4.0-r103
+		linux-firmware-ath10k
+		linux-postmarketos-qcom-sm6450
+		"
 	devicepkg_subpackage_kernel $startdir $pkgname $subpkgname
+
+	install -Dm644 "$srcdir"/hexagonrpcd-adsp-sensorspd.conf \
+		-t "$subpkgdir"/usr/share/hexagonrpcd/
+}
+
+# Starts hexagonrpcd for the sensors at boot, as Fairphone 5 does. Only with
+# the mainline kernel, which is the one with the files to serve.
+openrc() {
+	install_if="$pkgname-kernel-mainline=$pkgver-r$pkgrel openrc"
+	depends="hexagonrpcd-openrc openrc"
+
+	mkdir -p "$subpkgdir"
 }
 
 sha512sums="
-b5273f0baa014c7df3d3210cc7309328ff60deedc54fbd27701eb6775bc2b35920d8f973bbcc03d16c82560346699b972802ff9b92358cc53dd31cb5a5a9a337  deviceinfo
+00687770c23f11cad6a889a544a32f18e02913689019b1752af2b8c290061f3707a46dc7aece1d64a47728a620f874117c091318efbd0a8001abde3dc6e9f189  deviceinfo
+55c1cba12257cc1827cff23de0285945773bae063c3c25c8a113c18aed2fc6f4ba6f476c33f28b88610d5c34ec006c5825a53e2e586bdee1ba84b855b0ee6a9f  hexagonrpcd-adsp-sensorspd.conf
 e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e57738a425bd75dfe7e28985cc60756f010bfd70fdbff79bb4  kernel-cmdline.downstream.conf
 0de42370419287d3b492ee279ca01d0169ced9b143aa1a4e4d1f94de9437b7df5cc552e5d5388d8909c3fe9c7bc765902f9a883feccd5e87eb0dc46d409c6066  kernel-cmdline.mainline.conf
 603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs.downstream
-5e545a1ad72e7e1459f24c17dd299ab17576c4f1f2b1553d54542990de15442e733104f220d532c53501d1ee509dffbd644e7ee36b8b803f10f239a5b2b179ce  modules-initfs.mainline
+427a4881e9e9b169d05a96d681378c0dc91179cab6bd2e3e6865147507558f537d9558a03caf50962e4013709bcc54f6303fc01e2f8cd34443ba76564ee2505f  modules-initfs.mainline
 "

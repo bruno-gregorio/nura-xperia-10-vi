@@ -19,8 +19,20 @@
 # If something here ever stops being builtin, it belongs in this file rather
 # than in the config.
 #
-# The one exception is the touchscreen, whose driver the config builds as a
-# module. Without it here the initramfs' on-screen keyboard, buffyboard in
-# the debug shell or unl0kr for an encrypted rootfs, has no touch input.
-# Touch through it was verified at the phone on 2026-10-11.
+# There are two exceptions.
+#
+# The touchscreen, whose driver the config builds as a module. Without it
+# here the initramfs' on-screen keyboard, buffyboard in the debug shell or
+# unl0kr for an encrypted rootfs, has no touch input. Touch through it was
+# verified at the phone on 2026-10-11.
+#
+# The graphics clock controller, which provides the GDSCs the GPU and its
+# SMMU sit in. drm/msm is built in, so the GPU probes early and defers until
+# this module appears - but only until the driver core's deferred-probe
+# timeout, ten seconds after late_initcall. After that genpd answers
+# -ETIMEDOUT instead of -EPROBE_DEFER, the SMMU's and the GPU's probes fail
+# for good, and loading the module later binds only the clock controller.
+# Round 71 hit exactly that; status doc, rounds 71 and 72. From the
+# initramfs it loads within a few seconds of boot.
 edt-ft5x06
+gpucc-sm6450

@@ -4238,6 +4238,32 @@ as what it would have fixed.
   - **Verified:** KDE's `kde/5.15` branch of qtsensors and Qt 6's `dev`
     have the same check in `IIOSensorProxyOrientationSensor::start()`, so
     the patch is upstream's to take in Qt 6 first.
+- **The stay-up boot: Lomiri left running for someone to hold** —
+  Verified 2026-10-12, 06:16 to 06:17. `STAYUP=1 scripts/try-kernel.sh`
+  flashed slot a with round 96's command line and an init with neither the
+  USB watchdog nor the log hook, so nothing in the boot resets the phone,
+  and left it up on the card's image 69f7660e. The transcript is
+  `out/try-kernel/live-stayup.txt`.
+  - **Verified:** the gadget appeared 16 s after the reboot and sshd
+    answered 10 s later. Lomiri was running at 16.9 s of uptime and was the
+    same process at 47 s.
+  - **Verified, by looking:** at 45 s the panel shows Lomiri's first-run
+    tutorial over the shell, "Long swipe from the left edge to open the
+    Application Drawer", with the launcher and the top panel:
+    `out/try-kernel/shot-stayup.png`. The clock reads 00:0x, because there
+    is no RTC driver yet and no network to set the time from.
+  - **Verified:** the input devices are `pmic_pwrkey`, `pmic_resin`,
+    `gpio-keys` and "generic ft5x06 (48)": the power key, both volume keys
+    and the touchscreen.
+  - **Verified:** `/sys/power` has `state` and `wake_lock` and no
+    `autosleep`, and the battery manager reports the battery Full at 100.
+  - **Reasoned:** the phone does not suspend when the screen blanks.
+    repowerd's main branch tries libsuspend first, whose backends need an
+    `autosleep` file, or a `state` file with no `wake_lock`. Neither is
+    there, so it falls back to logind, whose `allow_automatic_suspend` is
+    empty; it suspends only on a lid closing or a critical battery.
+    repowerd still turns the display off when idle, and whether the panel
+    comes back on the power key has not been tried.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

@@ -65,13 +65,32 @@ phone_state() {
 	fi
 }
 
+# Whether the phone answers on a TCP port; the host has no nc.
+port_open() {
+	timeout 5 python3 -I -c 'import socket, sys
+socket.create_connection((sys.argv[1], int(sys.argv[2])), 3).close()' \
+		172.16.42.1 "$1" >/dev/null 2>&1
+}
+
 # Ask a boot of ours that is up on the network gadget to reset now, rather
 # than wait out the watchdog's window. Each reset is an attempt the
 # bootloader counts, so seven of them land on the stock slot.
+#
+# The debug shell answers on telnet. A boot that went on into the rootfs
+# has no telnetd but has sshd, and nothing in it marks the slot good, so
+# every one of its attempts boots the whole system again and needs the same
+# push. Only the port that answers is tried: sshd takes a while to come up,
+# and the watchdog in the initramfs covers an attempt that never gets there.
 kick_gadget() {
-	printf '%s\n' 'echo b > /proc/sysrq-trigger' 'reboot -f -n' \
-		| timeout 20 python3 "$ROOT/scripts/telnet.py" 172.16.42.1 23 \
+	if port_open 23; then
+		printf '%s\n' 'echo b > /proc/sysrq-trigger' 'reboot -f -n' \
+			| timeout 20 python3 "$ROOT/scripts/telnet.py" 172.16.42.1 23 \
+				>/dev/null 2>&1 || true
+	elif port_open 22; then
+		PMOS_TIMEOUT=25 timeout 30 python3 "$ROOT/scripts/ssh.py" \
+			"sudo sh -c 'sync; echo b > /proc/sysrq-trigger'" \
 			>/dev/null 2>&1 || true
+	fi
 }
 
 # The bootloader's counters, read while the phone is in fastboot. A round

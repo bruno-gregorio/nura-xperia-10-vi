@@ -317,6 +317,12 @@ build_vendor_boot() {
 	# lists, and CMDLINE_DEL takes globs, so replacing a value is
 	# CMDLINE_DEL='panic=*' CMDLINE_ADD='panic=5'. Anything that turns out to
 	# matter goes into kernel-cmdline.mainline.conf before it is believed.
+	#
+	# FULLBOOT=1 takes pmos.debug-shell off, so the boot goes on through
+	# switch_root into the rootfs; see run_live_ssh.
+	if [ "${FULLBOOT:-0}" = "1" ]; then
+		CMDLINE_DEL="pmos.debug-shell ${CMDLINE_DEL:-}"
+	fi
 	if [ -n "${CMDLINE_ADD:-}" ] || [ -n "${CMDLINE_DEL:-}" ]; then
 		say "patching the command line in the vendor_boot header"
 		set --
@@ -475,7 +481,9 @@ cmd_try() {
 		echo "RESULT: the initramfs got USB up. That is a live link into a"
 		echo "  boot that would otherwise only be visible as elapsed time."
 		echo
-		if cmd_harvest && [ -n "${LIVE:-}" ]; then
+		if [ "${FULLBOOT:-0}" = "1" ]; then
+			run_live_ssh || true
+		elif cmd_harvest && [ -n "${LIVE:-}" ]; then
 			run_live
 		fi
 	elif [ "$got" = "_$spare" ]; then
@@ -637,6 +645,64 @@ run_live() {
 	python3 "$ROOT/scripts/tsh.py" -t "${LIVE_STEP:-120}" -f "$LIVE" \
 		> "$out" 2>&1 < /dev/null
 	echo "   tsh exited $? - the transcript is $out"
+	tail -15 "$out"
+}
+
+# FULLBOOT=1 is a round that boots the whole system: no debug shell, so no
+# telnetd and nothing to harvest from, and the plan's LIVE commands run in
+# the rootfs over ssh instead, as root, through scripts/ssh.py. Without LIVE
+# it runs fullboot_cmds. The initramfs's log hook and USB watchdog go on
+# running past switch_root (bootlog.py, KEEP_SH) and reset the phone as
+# before unless it is held, so every command file starts with ssh.py's
+# @hold. The hold is the same lease as tsh.py's, renewed by every command,
+# and the queue's kick_gadget ends it after the round with a reset.
+# SSH_WAIT bounds the wait for sshd, which has to come well inside the log
+# hook's BACKUP_S of uptime.
+port_open() {
+	timeout 5 python3 -I -c 'import socket, sys
+socket.create_connection((sys.argv[1], int(sys.argv[2])), 3).close()' \
+		172.16.42.1 "$1" >/dev/null 2>&1
+}
+
+fullboot_cmds() {
+	printf '%s\n' \
+		'uname -a; cut -d" " -f1 /proc/uptime; cat /proc/cmdline' \
+		'cat "$J/pmwd.log"; ls "$J"' \
+		'rc-status -a' \
+		'dmesg | grep -E "pdx246|hexagonrpcd|switch|Run /|OpenRC|msm|adreno|a6xx|drm|firmware|Call trace|BUG|WARNING" | tail -120' \
+		'ps -eo pid,ppid,comm 2>/dev/null || ps -o pid,ppid,comm' \
+		'ls -la /dev/dri /dev/fastrpc-* 2>&1; cat /sys/class/drm/*/status 2>/dev/null' \
+		'tail -60 /var/log/tinydm.log 2>/dev/null; ls -la /var/log/ /home/user/.local/state/tinydm 2>&1 | head -30' \
+		'dmesg | tail -60'
+}
+
+run_live_ssh() {
+	out=${LIVE_OUT:-$ROOT/out/live.txt}
+	limit=${SSH_WAIT:-360}
+	say "FULLBOOT=1: waiting up to $limit s for sshd on the phone"
+	i=0
+	until port_open 22; do
+		i=$((i + 5))
+		if [ "$i" -ge "$limit" ]; then
+			echo "   no sshd after $limit s; the card log says why"
+			return 1
+		fi
+		sleep 5
+	done
+	echo "   sshd answers after about $i s"
+	cmds=$(mktemp "$WORK/.fullboot.XXXXXX")
+	{
+		echo '@hold'
+		if [ -n "${LIVE:-}" ]; then cat "$LIVE"; else fullboot_cmds; fi
+	} > "$cmds"
+	# Anything shaped like a serial number goes before it reaches the
+	# transcript. The status comes out of the pipe through a file.
+	{
+		python3 "$ROOT/scripts/ssh.py" -t "${LIVE_STEP:-120}" -f "$cmds" < /dev/null 2>&1
+		echo $? > "$cmds.rc"
+	} | sed -E 's/[0-9A-Z]{12,}/<r>/g' > "$out"
+	echo "   ssh.py exited $(cat "$cmds.rc" 2>/dev/null) - the transcript is $out"
+	rm -f "$cmds" "$cmds.rc"
 	tail -15 "$out"
 }
 

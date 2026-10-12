@@ -444,8 +444,93 @@ pmbootlog_start
     "@HOLD_S@", str(CONFIGURED_HOLD_S)).replace(
     "@HOLD_FN@", HOLD_SH.strip("\n"))
 
+# The log hook and the USB watchdog are background jobs of /init, and on a
+# boot that goes on into the rootfs they outlive it: init_2nd.sh kills only
+# udevd, syslogd, unudhcpd and every "sh", and they are "init". Their root
+# stays the initramfs, and switch_root, util-linux's, takes two things away
+# from it. It moves /dev, /proc and /sys into the new root, and it deletes
+# everything on the initramfs that is not a mount of its own: busybox, the
+# musl loader, and /bin, /sbin and /lib, which are symlinks into /usr on
+# this initramfs. From then on every command the jobs run that is not an
+# ash builtin fails, and so does every read of /proc or /sys and every write
+# to the card. The log stops at the switch, the watchdog can no longer
+# reset, and the log hook's backup resets when its counting happens to run
+# out.
+#
+# So, last thing before the switch, this hook:
+# - puts a static busybox and a link for each applet on a tmpfs, and turns
+#   /bin and /sbin into directories with that mounted on them. The jobs name
+#   /bin/busybox, and /bin is on their PATH after /usr/bin, which the switch
+#   deletes. /usr/bin itself is left alone: the rest of init_2nd.sh needs
+#   its tools, switch_root among them. A static busybox needs no loader, so
+#   /lib can go; the image's own busybox is dynamic. This one is Alpine's
+#   busybox-static, the same version as the initramfs' own, and goes into
+#   the ramdisk as KEEP_BB. out/ is not in git: it is bin/busybox.static
+#   from edge/main/aarch64/busybox-static-1.38.0-r7.apk on
+#   dl-cdn.alpinelinux.org, checked against that APKINDEX's checksum, saved
+#   as out/tools/busybox.static.
+# - mounts proc, sysfs and devtmpfs a second time, on top of the ones there.
+#   switch_root moves the mount it finds at each path, which is the top one,
+#   and the jobs keep the one underneath with everything mounted inside it,
+#   configfs and debugfs included. The new root gets them bare, as on a boot
+#   without an initramfs, and OpenRC mounts the rest itself.
+#
+# The jobs' own files at the top of the initramfs, /pmwd.log, /pmwd.hold and
+# /pmhold among them, still go with the switch. Losing /pmwd.hold puts the
+# log hook's backup back at BACKUP_S of uptime, so a host that wants the
+# booted system for longer holds it as it would the initramfs, through the
+# jobs' root: /proc/<pid>/root/pmhold, for a pid whose root has /pmkeep.
+KEEP_HOOK = "hooks-cleanup/99-pdx246-keep.sh"
+KEEP_BB = "pmkeep-busybox"
+KEEP_BB_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "..", "out", "tools", "busybox.static")
+KEEP_SH = r"""#!/bin/sh
+# pdx246: keep the log hook's and the USB watchdog's tools, /proc, /sys and
+# /dev across switch_root; see scripts/bootlog.py, KEEP_SH.
+k=/pmkeep
+log() {
+	echo "pdx246 keep: $*" > /dev/kmsg
+	echo "keep: $*" >> /pmwd.log
+}
+[ -x /@KEEP_BB@ ] || { log "no /@KEEP_BB@"; exit 0; }
+mkdir -p "$k" && mount -t tmpfs -o mode=0755,size=8m pmkeep "$k" \
+	|| { log "no tmpfs"; exit 0; }
+mkdir -p "$k/bin"
+cp /@KEEP_BB@ "$k/bin/busybox" || { log "no copy"; exit 0; }
+b="$k/bin/busybox"
+"$b" --install -s "$k/bin" || { log "no applets"; exit 0; }
+done=""
+for d in /bin /sbin; do
+	# A symlink is a file, which switch_root deletes; a directory with a
+	# mount on it stays. For the moment in between, the jobs find their
+	# commands through /usr/bin, all but /bin/busybox itself.
+	if [ -L "$d" ]; then
+		"$b" rm "$d" && "$b" mkdir "$d" || continue
+	fi
+	"$b" mount --bind "$k/bin" "$d" && done="$done $d"
+done
+"$b" mount -t proc proc /proc && done="$done /proc"
+"$b" mount -t sysfs sysfs /sys && done="$done /sys"
+"$b" mount -t devtmpfs devtmpfs /dev && done="$done /dev"
+log "kept$done"
+"""
 
 # ---------------------------------------------------------------- cpio newc
+
+def rd_unpack(blob):
+    """The vendor ramdisk's cpio, from gzip or from zstd.
+
+    postmarketos-mkinitfs 2.12 writes zstd where the versions before it
+    wrote gzip. Both kernels take either, and what this writes back is
+    always gzip.
+    """
+    if blob[:2] == b"\x1f\x8b":
+        return gzip.decompress(blob)
+    if blob[:4] == b"\x28\xb5\x2f\xfd":
+        from compression import zstd  # Python 3.14
+        return zstd.decompress(blob)
+    sys.exit(f"error: the vendor ramdisk is neither gzip nor zstd ({blob[:4].hex()})")
+
 
 def cpio_parse(buf):
     """Split a newc archive into (header_fields, name, data) tuples."""
@@ -508,7 +593,7 @@ def install(src, dst):
     d = open(src, "rb").read()
     s = sections(d)
     o_rd, vr = s["ramdisk"]
-    raw = gzip.decompress(d[o_rd:o_rd + vr])
+    raw = rd_unpack(d[o_rd:o_rd + vr])
     entries = cpio_parse(raw)
 
     names = {e[1] for e in entries}
@@ -516,7 +601,8 @@ def install(src, dst):
         sys.exit("error: no /init in the vendor ramdisk - wrong image?")
 
     # Drop any previous install so this is idempotent.
-    entries = [e for e in entries if e[1] != "bootlog.sh"]
+    entries = [e for e in entries
+               if e[1] not in ("bootlog.sh", KEEP_HOOK, KEEP_BB)]
 
     init = next(e for e in entries if e[1] == "init")
     text = init[2].decode()
@@ -544,6 +630,19 @@ def install(src, dst):
     mode = 0o100755
     entries.append([[0, mode, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
                     "bootlog.sh", BOOTLOG_SH.encode()])
+    # The same mode, under the directory init_2nd.sh runs last of all before
+    # switch_root. It is only reached on a boot that goes on into the rootfs.
+    if not any(e[1] == KEEP_HOOK.split("/")[0] for e in entries):
+        sys.exit("error: no /hooks-cleanup in the vendor ramdisk")
+    if os.path.isfile(KEEP_BB_SRC):
+        entries.append([[0, mode, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+                        KEEP_HOOK,
+                        KEEP_SH.replace("@KEEP_BB@", KEEP_BB).encode()])
+        entries.append([[0, mode, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+                        KEEP_BB, open(KEEP_BB_SRC, "rb").read()])
+    else:
+        print(f"  warning: no {KEEP_BB_SRC}, so the log hook and the"
+              " watchdog stop at switch_root")
 
     newrd = gzip.compress(cpio_build(entries), 6)
 
@@ -703,7 +802,7 @@ def _replace_init(src, dst, text, what):
     d = open(src, "rb").read()
     s = sections(d)
     o_rd, vr = s["ramdisk"]
-    entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
+    entries = cpio_parse(rd_unpack(d[o_rd:o_rd + vr]))
 
     init = next((e for e in entries if e[1] == "init"), None)
     if init is None:
@@ -1366,7 +1465,7 @@ def usbquirk(src, dst):
     d = open(src, "rb").read()
     s = sections(d)
     o_rd, vr = s["ramdisk"]
-    entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
+    entries = cpio_parse(rd_unpack(d[o_rd:o_rd + vr]))
 
     # Both stages get the quirk, because which one runs depends on
     # deviceinfo_create_initfs_extra. With it false - the default - mkinitfs
@@ -1460,7 +1559,7 @@ def marks(src, dst, table, base, scale, pscale=1):
     d = open(src, "rb").read()
     s = sections(d)
     o_rd, vr = s["ramdisk"]
-    entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
+    entries = cpio_parse(rd_unpack(d[o_rd:o_rd + vr]))
 
     k = 0
     rows = []
@@ -1586,7 +1685,7 @@ def stage(src, dst, skip=""):
     d = open(src, "rb").read()
     s = sections(d)
     o_rd, vr = s["ramdisk"]
-    entries = cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))
+    entries = cpio_parse(rd_unpack(d[o_rd:o_rd + vr]))
 
     init = next((e for e in entries if e[1] == "init"), None)
     if init is None:
@@ -1672,7 +1771,7 @@ def stage_map(src, skip=""):
     d = open(src, "rb").read()
     s = sections(d)
     o_rd, vr = s["ramdisk"]
-    names = {e[1]: e[2] for e in cpio_parse(gzip.decompress(d[o_rd:o_rd + vr]))}
+    names = {e[1]: e[2] for e in cpio_parse(rd_unpack(d[o_rd:o_rd + vr]))}
     key = next((k for k in names if k.endswith("modules/initramfs.load")), None)
     if key is None:
         sys.exit("error: no initramfs.load in that image")

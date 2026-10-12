@@ -3,6 +3,8 @@
 #
 #   ./scripts/sdcard-install.sh            # look, change nothing
 #   ./scripts/sdcard-install.sh --yes      # actually write
+#   ./scripts/sdcard-install.sh --keep-table --yes
+#                                          # into the p1 already there
 #
 # The phone must be sitting in an initramfs shell with USB up, i.e. telnet
 # 172.16.42.1:23 answers. scripts/try-kernel.sh gets it there.
@@ -29,9 +31,15 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PHONE_IP=172.16.42.1          # the gadget, per unudhcpd in the initramfs
 HOST_IP=172.16.42.2           # us, on the USB interface
 NCPORT=9000                   # the phone listens here; see "send the image"
-DEV=/dev/mmcblk1              # the SD card; UFS is sda/sdb/sdc, never touched
+DEV=                          # the SD card, found on the phone if not given;
+                              # UFS is sda/sdb/sdc, never touched
 IMG="$ROOT/.pmb/work/chroot_native/home/pmos/rootfs/sony-pdx246.img"
+# The card's raw log region starts here, scripts/bootlog.py's CARD_REGION,
+# and no partition may reach it. A new table's p1 ends at PART_END_MIB.
+LOG_REGION_BYTES=$(( 32 * 1024 * 1024 * 1024 ))
+PART_END_MIB=16384
 WHOLE_DISK=0
+KEEP_TABLE=0
 ASSUME_YES=0
 VERIFY=0
 TIMEOUT=1200
@@ -43,10 +51,15 @@ usage() {
 	sed -n '2,/^set -eu/p' "$0" | sed 's/^# \{0,1\}//; /^set -eu/d'
 	cat <<-EOF
 	Options:
-	  --device PATH   block device on the phone (default $DEV)
+	  --device PATH   block device on the phone (default: the one whose
+	                  device/type is SD - mmcblk0 on mainline, mmcblk1 on
+	                  the downstream kernel)
 	  --image PATH    image to write (default the pmbootstrap rootfs)
 	  --port N        TCP port the phone listens on (default $NCPORT)
 	  --whole-disk    write the filesystem to the whole card, no partition table
+	                  (this covers the log region; not for the log hook's card)
+	  --keep-table    write into the p1 already on the card, which has to end
+	                  before the log region and hold the image
 	  --verify        read the card back and compare checksums (slow)
 	  --timeout N     seconds to allow for the write (default $TIMEOUT)
 	  --yes           do it; without this the script only looks
@@ -59,6 +72,7 @@ while [ $# -gt 0 ]; do
 	--image) IMG="$2"; shift 2 ;;
 	--port) NCPORT="$2"; shift 2 ;;
 	--whole-disk) WHOLE_DISK=1; shift ;;
+	--keep-table) KEEP_TABLE=1; shift ;;
 	--verify) VERIFY=1; shift ;;
 	--timeout) TIMEOUT="$2"; shift 2 ;;
 	--yes) ASSUME_YES=1; shift ;;
@@ -68,16 +82,7 @@ while [ $# -gt 0 ]; do
 done
 
 # --- guards ----------------------------------------------------------------
-# Only the SD card. The UFS LUNs carry the bootloader, the modem and Android,
-# and this script has no business naming them.
-case "$DEV" in
-/dev/mmcblk[0-9]) ;;
-/dev/sd* | /dev/ufs* | /dev/nvme*)
-	die "$DEV is not the SD card - UFS holds the bootloader and Android" ;;
-*) die "refusing $DEV: only /dev/mmcblkN is allowed here" ;;
-esac
-BASE=${DEV#/dev/}
-
+[ "$WHOLE_DISK$KEEP_TABLE" != 11 ] || die "--whole-disk and --keep-table exclude each other"
 [ -f "$IMG" ] || die "no image at $IMG - run scripts/make-rootfs-img.sh first"
 [ -r "$IMG" ] || die "$IMG is not readable as $(id -un)"
 IMG_SIZE=$(stat -c %s "$IMG")
@@ -153,6 +158,26 @@ done
        an initramfs shell? scripts/try-kernel.sh gets it there."
 say "shell is up, kernel $kver"
 
+# Which mmcblk is the card depends on the kernel: the downstream one names it
+# mmcblk1, mainline mmcblk0. The SD card is the one whose type says so.
+if [ -z "$DEV" ]; then
+	found=$(remote 'T=SDTYPE; for b in /sys/block/mmcblk[0-9]; do echo "${T}=${b##*/}=$(cat $b/device/type 2>/dev/null)"; done' \
+		| sed -n 's/^SDTYPE=\(mmcblk[0-9]\)=SD$/\1/p')
+	[ "$(echo "$found" | grep -c .)" = 1 ] \
+		|| die "found '$(echo $found)' as SD cards on the phone, not exactly one; name it with --device"
+	DEV=/dev/$found
+	say "the SD card is $DEV"
+fi
+# Only the SD card. The UFS LUNs carry the bootloader, the modem and Android,
+# and this script has no business naming them.
+case "$DEV" in
+/dev/mmcblk[0-9]) ;;
+/dev/sd* | /dev/ufs* | /dev/nvme*)
+	die "$DEV is not the SD card - UFS holds the bootloader and Android" ;;
+*) die "refusing $DEV: only /dev/mmcblkN is allowed here" ;;
+esac
+BASE=${DEV#/dev/}
+
 # The host end of the USB link has to exist, or the phone has nothing to fetch
 # from. NetworkManager configures it by DHCP from the phone's unudhcpd.
 ip -o addr show | grep -q " $HOST_IP/" \
@@ -175,6 +200,8 @@ cleanup() {
 	if [ "$HELD" = 1 ]; then
 		remote 'rm -f /pmhold' >/dev/null 2>&1
 		echo "==> released /pmhold; the phone's reset timer is live again"
+	elif [ "$HELD" = 2 ]; then
+		echo "==> left /pmhold as it was found, for whoever made it"
 	fi
 	return 0
 }
@@ -185,11 +212,15 @@ info=$(remote "
 T=SD
 echo \"\${T}SECTORS=\$(cat /sys/block/$BASE/size 2>/dev/null)\"
 echo \"\${T}REMOVABLE=\$(cat /sys/block/$BASE/removable 2>/dev/null)\"
+echo \"\${T}P1START=\$(cat /sys/block/$BASE/${BASE}p1/start 2>/dev/null)\"
+echo \"\${T}P1SIZE=\$(cat /sys/block/$BASE/${BASE}p1/size 2>/dev/null)\"
 echo \"\${T}PARTS_FOLLOW\"
 grep -E ' ($BASE|${BASE}p[0-9][0-9]*)\$' /proc/partitions
 ")
 sectors=$(echo "$info" | sed -n 's/^SDSECTORS=\([0-9][0-9]*\)$/\1/p' | head -1)
 removable=$(echo "$info" | sed -n 's/^SDREMOVABLE=\([0-9]\)$/\1/p' | head -1)
+p1start=$(echo "$info" | sed -n 's/^SDP1START=\([0-9][0-9]*\)$/\1/p' | head -1)
+p1size=$(echo "$info" | sed -n 's/^SDP1SIZE=\([0-9][0-9]*\)$/\1/p' | head -1)
 parts=$(echo "$info" | sed -n '/^SDPARTS_FOLLOW$/,$p' | sed '1d' \
 	| grep -E "[0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+$BASE" || true)
 [ -n "$sectors" ] || die "the phone has no $DEV - is an SD card inserted?"
@@ -206,9 +237,22 @@ echo "${parts:-(nothing)}" | sed 's/^/      /'
 if [ "$WHOLE_DISK" = 1 ]; then
 	TARGET="$DEV"
 	layout="the whole card as one ext4 filesystem, no partition table"
+elif [ "$KEEP_TABLE" = 1 ]; then
+	TARGET="${DEV}p1"
+	[ -n "$p1start" ] && [ -n "$p1size" ] || die "the card has no ${BASE}p1 to keep"
+	p1end=$(( (p1start + p1size) * 512 ))
+	[ "$p1end" -le "$LOG_REGION_BYTES" ] \
+		|| die "${BASE}p1 ends at byte $p1end, inside the log region at $LOG_REGION_BYTES"
+	[ $(( p1size * 512 )) -ge "$IMG_SIZE" ] \
+		|| die "${BASE}p1 holds $(( p1size * 512 )) bytes, the image needs $IMG_SIZE"
+	layout="the partition table as it is, the filesystem into $TARGET ($(( p1size / 2048 )) MiB)"
 else
 	TARGET="${DEV}p1"
-	layout="a GPT with one partition, $TARGET, holding the filesystem"
+	[ "$dev_bytes" -ge $(( PART_END_MIB * 1048576 )) ] \
+		|| die "the card is smaller than the $PART_END_MIB MiB partition"
+	[ "$IMG_SIZE" -le $(( (PART_END_MIB - 1) * 1048576 )) ] \
+		|| die "the image does not fit a $PART_END_MIB MiB partition"
+	layout="a new GPT with one partition, $TARGET, from 1 MiB to $PART_END_MIB MiB"
 fi
 
 echo
@@ -216,7 +260,12 @@ say "plan"
 echo "    $layout"
 echo "    the phone listens on $PHONE_IP:$NCPORT and we push the image to it"
 echo "    it writes what arrives straight to $TARGET with dd"
-echo "    the initramfs then finds it by UUID and resize2fs grows it to fill"
+if [ "$WHOLE_DISK" = 1 ]; then
+	echo "    the initramfs then grows it to fill the card, if its clock lets it"
+else
+	echo "    then, with the phone's clock set from ours, e2fsck and resize2fs"
+	echo "    grow it to fill $TARGET"
+fi
 if [ "$ASSUME_YES" != 1 ]; then
 	echo
 	say "stopping here: this would erase $DEV. Re-run with --yes to do it."
@@ -226,8 +275,14 @@ fi
 # --- hold, then partition ---------------------------------------------------
 trap cleanup EXIT INT TERM
 say "holding off the phone's reset timer"
-remote 'touch /pmhold' >/dev/null 2>&1 || true
-HELD=1
+# A hold someone else made, a live session's, stays theirs to release.
+case "$(remote 'H=HOLD; [ -e /pmhold ] && echo "${H}_THERE"')" in
+*HOLD_THERE*) HELD=2 ;;
+*)
+	remote 'touch /pmhold' >/dev/null 2>&1 || true
+	HELD=1
+	;;
+esac
 # On the phone the hold is a lease (scripts/bootlog.py, HOLD_SH) that lapses
 # unless it is touched again within fifteen minutes, and the push below is
 # one long stream with no shell in it. So it is renewed from here every two
@@ -239,13 +294,13 @@ HELD=1
 done ) &
 RENEWER=$!
 
-if [ "$WHOLE_DISK" != 1 ]; then
+if [ "$WHOLE_DISK" != 1 ] && [ "$KEEP_TABLE" != 1 ]; then
 	say "writing a GPT with one partition"
 	# parted is a real binary in the initramfs, not a busybox applet. The
 	# 1MiB start keeps the partition aligned to the card's erase block.
 	out=$(remote_job "parted -s $DEV mklabel gpt
 echo mklabel_rc=\$?
-parted -s $DEV mkpart pmOS_root ext4 1MiB 100%
+parted -s $DEV mkpart pmOS_root ext4 1MiB ${PART_END_MIB}MiB
 echo mkpart_rc=\$?
 i=0
 while [ \$i -lt 50 ]; do
@@ -369,6 +424,28 @@ if [ -n "$want_uuid" ]; then
 	fi
 fi
 
+# --- grow it ----------------------------------------------------------------
+# Not left to the initramfs, which tries on every boot: mainline has no RTC
+# driver yet, so the phone's clock starts at 1970, the filesystem looks last
+# checked in the future, and resize2fs declines without a word on screen.
+# The clock comes from the host first, and e2fsck -f before resize2fs, which
+# insists on one.
+if [ "$WHOLE_DISK" != 1 ]; then
+	say "growing the filesystem to fill $TARGET"
+	out=$(remote_job "date -s @$(date +%s) >/dev/null; echo date_rc=\$?
+e2fsck -fy $TARGET > /tmp/fsck.out 2>&1; echo fsck_rc=\$?
+tail -3 /tmp/fsck.out
+resize2fs $TARGET > /tmp/resize.out 2>&1; echo resize_rc=\$?
+tail -3 /tmp/resize.out" 900)
+	echo "$out" | sed 's/^/    /'
+	case "$(echo "$out" | sed -n 's/^fsck_rc=//p' | head -1)" in
+	0 | 1) ;;
+	*) die "e2fsck on $TARGET did not come back clean" ;;
+	esac
+	[ "$(echo "$out" | sed -n 's/^resize_rc=//p' | head -1)" = 0 ] \
+		|| say "resize2fs failed; the filesystem keeps the image's size"
+fi
+
 if [ "$VERIFY" = 1 ]; then
 	say "reading the card back to compare (this takes a while)"
 	host_sum=$(md5sum < "$IMG" | cut -d' ' -f1)
@@ -381,6 +458,6 @@ if [ "$VERIFY" = 1 ]; then
 fi
 
 echo
-say "done. The flashed command line already carries this filesystem's UUID,"
-echo "    so stage 2 has a root to find. HANDOFF=1 STAGE=1 is the round that"
-echo "    gets there; from a stock debug shell, 'pmos_continue_boot'."
+say "done. Stage 2 finds this filesystem by the UUID on the command line if"
+echo "    it names one, and by its label, pmOS_root, if not. FULLBOOT=1 is the"
+echo "    round that gets there; from a debug shell, 'pmos_continue_boot'."

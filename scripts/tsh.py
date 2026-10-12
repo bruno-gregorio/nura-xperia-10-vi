@@ -27,6 +27,15 @@ base64 chunks through the same shell, decodes it there with busybox base64
 and makes it executable. The shell has no other way in: no scp before
 switch_root, and nothing listening on the host for wget to fetch from.
 
+And a line
+
+    @host 1800 scripts/sdcard-install.sh --keep-table --yes
+
+runs a command on the host instead, from the project directory and for at
+most the given number of seconds, with this session left open and idle. It
+is for what the host has to drive while the phone sits in this shell; the
+phone's hold is the command's to keep meanwhile.
+
 This is the same channel as scripts/ssh.py, one stage earlier: the telnetd
 that pmos.debug-shell starts on 172.16.42.1:23, before switch_root.
 """
@@ -35,7 +44,9 @@ import argparse
 import base64
 import os
 import re
+import signal
 import socket
+import subprocess
 import sys
 import time
 
@@ -120,6 +131,36 @@ def push(sock, buf, local, remote, timeout):
     return f"{local} -> {remote}, {len(data)} bytes", 0, buf
 
 
+def host(seconds, command):
+    """Run command on the host; return (output, status).
+
+    In a process group of its own, and the whole group is stopped with a
+    TERM at the time limit: scripts/sdcard-install.sh keeps the phone held
+    from a background loop, and only its trap, which a TERM runs, stops
+    that loop and lets the hold go.
+    """
+    p = subprocess.Popen(["sh", "-c", command], cwd=ROOT,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                         stderr=subprocess.STDOUT, start_new_session=True)
+    try:
+        out, _ = p.communicate(timeout=seconds)
+        return out.decode("utf-8", "replace").rstrip("\n"), p.returncode
+    except subprocess.TimeoutExpired:
+        pass
+    for sig, wait in ((signal.SIGTERM, 15), (signal.SIGKILL, 5)):
+        try:
+            os.killpg(p.pid, sig)
+        except ProcessLookupError:
+            break
+        try:
+            out, _ = p.communicate(timeout=wait)
+            break
+        except subprocess.TimeoutExpired:
+            out = b""
+    text = out.decode("utf-8", "replace").rstrip("\n")
+    return text + f"\ntsh: the host command ran past {seconds:.0f} s", 124
+
+
 # Terminal control sequences: busybox ls colours its output on a pty, and
 # none of it means anything in a transcript.
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
@@ -185,6 +226,14 @@ def main():
         words = command.split()
         try:
             _, _, buf = run(sock, buf, RENEW, args.timeout)
+            if (words[0] == "@host" and len(words) >= 3
+                    and words[1].isdigit()):
+                text, status = host(float(words[1]),
+                                    command.split(None, 2)[2])
+                print(text, flush=True)
+                if status:
+                    print(f"[exit {status}]", flush=True)
+                continue
             if words[0] == "@push" and len(words) == 3:
                 text, status, buf = push(sock, buf, words[1], words[2],
                                          args.timeout)

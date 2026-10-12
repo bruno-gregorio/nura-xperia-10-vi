@@ -26,7 +26,8 @@ fi
 # Device packages are three levels down (device/testing/<pkg>), forks of
 # Alpine packages in temp/ two (temp/<pkg>), as in pmaports. Forks of
 # pmaports' own packages sit where those do, in main/<pkg>, and replace the
-# upstream copy in the checkout.
+# upstream copy in the checkout; packages of our own that neither has sit
+# in main/<pkg> too.
 {
 	find "$SRC/device" -mindepth 2 -maxdepth 2 -type d
 	[ ! -d "$SRC/temp" ] || find "$SRC/temp" -mindepth 1 -maxdepth 1 -type d

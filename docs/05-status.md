@@ -4294,6 +4294,57 @@ as what it would have fixed.
     `out/try-kernel/lss-core.gz`; `core_pattern` was put back after it.
   - The owner then asked for a steadier UI to iterate on, Phosh or Plasma
     Mobile, which ends the Lomiri work for now.
+- **Phosh, from a clean install, in someone's hands** — Verified
+  2026-10-12, 06:32 to 06:45: round 97, then a stay-up boot.
+  - **The change:** the owner wanted a steadier UI to iterate on, so the
+    rootfs is a fresh `pmbootstrap install` with `ui = phosh`,
+    `service_manager = openrc` and `extra_packages =
+    kmscube,mesa-utils,strace,python3,libssc`, plus grim. Plasma Mobile was
+    the other choice; its UI package supports only systemd. On OpenRC,
+    postmarketos-ui-phosh 33 starts greetd with the phrog greeter, and its
+    on-screen keyboard is stevia.
+    - The install pulled newer binaries than our pmaports checkout has:
+      postmarketos-base 78, postmarketos-mkinitfs 2.12.0 and boot-deploy
+      0.25.0. The initramfs reports version 3.12.5-r0.
+    - Our own packages are as before: kernel 6.18.55-r22, mesa
+      26.2.4-r101, hexagonrpcd 0.4.0-r103 and device-sony-pdx246 0.1-r8.
+      Alpine supplies phosh 0.57.0-r3, phoc 0.57.0-r1 and greetd
+      0.10.3-r12.
+  - **Verified, round 97:** a debug-shell round wrote the image, filesystem
+    UUID 07b8a001, into the card's p1. The card read the UUID back, with
+    `fsck_rc=0` and `resize_rc=0`.
+  - **Verified, the stay-up boot:** it started at 06:40:41.
+    - The gadget came up in the initramfs, and sshd answered about 10 s
+      later.
+    - At 24 s, phrog's phoc was running under the greetd user, with
+      hexagonrpcd's sensors domain and iio-sensor-proxy already started.
+    - At about 45 s the owner logged in through phrog: `phoc` and
+      `gnome-session --session=phosh` running as `user`.
+    - At 240 s, a grim screenshot of that session showed Settings open on
+      its Sound page, with stevia up. The page's output device was
+      "Dummy Output": there is still no sound card.
+  - **Verified, the GPU:**
+    - The first loads of `qcom/a710_sqe.fw`, at 2.1 s and 7.6 s, failed
+      with -2, because the initramfs carries no GPU firmware.
+    - It loaded from the rootfs at 18.9 s, with GMU firmware 4.0.7, before
+      phoc started.
+    - kms-shot.py can no longer read the screen: phoc's framebuffer has a
+      non-linear modifier. Reasoned: that buffer is compressed output from
+      the GPU, which means phoc renders with it. grim works when it is given
+      the session's `XDG_RUNTIME_DIR`, `/run/user/10000`.
+  - **Not explained:** drm/msm logs `dpu_crtc_get_vblank_counter` "no
+    encoder found for crtc 0". It appeared at 22 s and then about once a
+    minute, at 123 s, 181 s and 240 s. Guess: something asks for a vblank
+    count on a CRTC with no encoder attached, for example while the panel
+    is off.
+  - **Not established:** the owner reported "the pmos debug screen with an
+    error message about the gpu" during these runs. Reasoned: the debug
+    screen is round 97's debug shell, on screen from 06:35 to 06:40, and
+    the GPU message is the failed `a710_sqe.fw` load. But the cmdline names
+    no `tty0` console, so where that message would have reached the screen
+    is not shown. A photo of the screen would settle it.
+  - The phone was left up on slot a, logged in. As with any stay-up boot,
+    each further boot of that slot uses one of the bootloader's attempts.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

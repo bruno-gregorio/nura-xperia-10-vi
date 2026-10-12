@@ -3747,6 +3747,73 @@ as what it would have fixed.
   - Kernel pkgrel 22 adds the entry and the node to `sm6450.dtsi`, with a
     driver of our own, `drivers/soc/qcom/smp2p_sleepstate.c`. It is built
     in, so the bit is set at boot, before the ADSP starts.
+- **Round 77: the sleepstate entry brings the remote processor state sensor,
+  and nothing more** — Verified 2026-10-11, 20:58 to 21:10. Plan 20261011n
+  booted kernel pkgrel 22 and repeated round 76's probes, then ran
+  `ssccli`. The transcript is `out/try-kernel/live-r77.txt`.
+  - **Verified:** `qcom-smp2p-sleepstate` bound at boot.
+  - **Verified:** before hexagonrpcd the core published four sensors,
+    `remote_proc_state` now among them. After hexagonrpcd, and a minute
+    later, it published five, with `registry`.
+  - **Verified:** still no `interrupt`, `resampler`,
+    `data_acquisition_engine` or physical sensor. `ssccli` found no
+    accelerometer, proximity, light, magnetometer or gyroscope, and took no
+    measurements.
+  - **Verified:** hexagonrpcd behaved as in rounds 75 and 76: 1821 lines,
+    no error, 352 opens, 241 writes and 150 renames. It was never asked for
+    a local interface it lacks.
+  - **Verified, against round 77's hypothesis:** the missing entry held up
+    the remote processor state sensor and nothing else. The entry and its
+    driver stay, since stock has them.
+- **Stock recovery, with stock's own daemons, publishes the same five
+  sensors** — Verified 2026-10-11, 21:12 to 21:25, in stock recovery on
+  the vendor kernel 5.10.246, right after round 77. Nothing was written to
+  a partition. vendor and vendor_dlkm were mounted read-only without
+  journal replay, and so was the modem partition. userdata was hidden
+  under a tmpfs, and persist's sensor directory was a RAM copy of
+  `out/hexagonfs/persist-sensors`. The script is
+  `out/try-kernel/stock-sscrpcd.sh` and its output
+  `out/try-kernel/stock-sscrpcd.txt`. strace and logcat are in
+  `out/try-kernel/stock-sscrpcd/`.
+  - **Verified:** without a daemon, recovery's sensor core publishes the
+    four sensors ours does with pkgrel 22: `remote_proc_state`,
+    `async_com_port`, `timer` and `ext_svc`. Recovery loads
+    `smp2p_sleepstate`.
+  - **Verified:** stock's `/vendor/bin/sscrpcd sensorspd` could not attach
+    at first. Recovery runs no pd-mapper, so the vendor FastRPC driver never
+    learns that `msm/adsp/sensor_pd` is up and refuses the static domain
+    with ENOTCONN. sscrpcd retried about 700 times in 90 s.
+  - **Verified:** once stock's `/vendor/bin/pd-mapper` ran, the kernel
+    logged `msm/adsp/sensor_pd (sensors_pdr_adsprpc) is up for PDR on
+    lpass`. sscrpcd attached, and the domain read its configs and rewrote
+    the registry, as it does with hexagonrpcd.
+  - **Verified:** 45 s later the core published five sensors, the same
+    five as round 77: `registry`, `remote_proc_state`, `async_com_port`,
+    `timer` and `ext_svc`. No interrupt sensor and no physical sensor.
+  - **Verified:** sscrpcd loaded no skeleton library on the application
+    side. `libsns_registry_skel.so` was not loaded.
+  - **Verified:** recovery runs the ADSP on `adsp2.mdt`, the only ADSP
+    image in the modem partition and the one our `adsp.mbn` is squashed
+    from.
+  - **Verified:** our in-kernel pd-mapper serves the same domains as
+    stock's JSON files in the modem partition. Those are the ADSP's root,
+    audio, charger and sensor domains on instance 74, with `avs/audio` on
+    the audio domain, the CDSP's root domain on 76 and the modem's on 180
+    with `gps/gps_service`. Mainline adds `tms/servreg` to every domain, as
+    the JSON files list it.
+  - **Verified:** the modules a normal boot loads from vendor_dlkm and
+    recovery does not cover audio, IPA and rmnet, video, camera, WLAN and
+    Sony's battery extension. None is a sensor driver.
+  - **Verified:** recovery's ADSP offers no diag service over QRTR, so the
+    sensor core's own log is out of reach. That log would include
+    `sns_sensor.c:Initialization failed for sensor %x`.
+  - **Reasoned:** so hexagonrpcd is not what keeps the physical sensors
+    away. Stock's own daemon, on stock's own kernel, gets no further. The
+    difference lies in something Android does that recovery and our
+    rounds do not. The likeliest is timing. On Android, pd-mapper and
+    sscrpcd run within moments of the ADSP booting. In recovery, and in
+    every round so far, the daemon attached half a minute or more later.
+    Round 78 tests this.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...

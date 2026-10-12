@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Pengyu Luo <mitltlatltl@gmail.com>
-Date: Sun, 12 Jul 2026 07:58:02 -0400
+Date: Mon, 31 Aug 2026 00:00:21 +0800
 Subject: [PATCH] media: hi846: Fix hi846_write_reg_16 handling
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -17,7 +17,7 @@ Fix this by resetting *err to 0 only when it is positive.
 
 Fixes: 04fc06f6dc15 ("media: hi846: fix usage of pm_runtime_get_if_in_use()")
 Signed-off-by: Pengyu Luo <mitltlatltl@gmail.com>
-Link: https://lore.kernel.org/r/20260712115553.92564-1-mitltlatltl@gmail.com
+Link: https://ratatoskr.run/lkml/2026/08/17479790
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  drivers/media/i2c/hi846.c | 2 ++

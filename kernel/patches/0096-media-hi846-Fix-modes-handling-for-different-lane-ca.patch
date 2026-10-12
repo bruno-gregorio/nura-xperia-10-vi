@@ -1,47 +1,53 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Pengyu Luo <mitltlatltl@gmail.com>
-Date: Sun, 12 Jul 2026 07:53:55 -0400
+Date: Mon, 31 Aug 2026 00:00:23 +0800
 Subject: [PATCH] media: hi846: Fix modes handling for different lane cases
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 When using 4-lane, v4l2_find_nearest_size may return an unsupported
-mode, 640x480 mode, use v4l2_find_nearest_size_conditional() to fix
-it.
+mode, 640x480 mode, use v4l2_find_nearest_size_conditional() to filter
+out it.
 
 Reported-by: Sebastian Krzyszkowiak <sebastian.krzyszkowiak@puri.sm>
-Closes: https://lore.kernel.org/linux-media/OmTXoHZJTSGePymL9I-1Cw@puri.sm
+Closes: https://lore.kernel.org/linux-media/OmTXoHZJTSGePymL9I-1Cw@puri.sm (local)
 Fixes: e8c0882685f9 ("media: i2c: add driver for the SK Hynix Hi-846 8M pixel camera")
+Link: https://lore.kernel.org/linux-media/OmTXoHZJTSGePymL9I-1Cw@puri.sm (local)
 Signed-off-by: Pengyu Luo <mitltlatltl@gmail.com>
-Link: https://lore.kernel.org/r/20260712115012.91600-4-mitltlatltl@gmail.com
+Link: https://ratatoskr.run/lkml/2026/08/17479792
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- drivers/media/i2c/hi846.c | 58 +++++++++++++++++++++++----------------
- 1 file changed, 34 insertions(+), 24 deletions(-)
+ drivers/media/i2c/hi846.c | 63 ++++++++++++++++++++++++---------------
+ 1 file changed, 39 insertions(+), 24 deletions(-)
 
 diff --git a/drivers/media/i2c/hi846.c b/drivers/media/i2c/hi846.c
-index 6bcd862ae..df7ea3ecf 100644
+index 2f8624f9b..26b429014 100644
 --- a/drivers/media/i2c/hi846.c
 +++ b/drivers/media/i2c/hi846.c
-@@ -1688,6 +1688,16 @@ static int __maybe_unused hi846_resume(struct device *dev)
+@@ -1713,6 +1713,21 @@ static int __maybe_unused hi846_resume(struct device *dev)
  	return hi846_power_on(hi846);
  }
  
-+static bool filter_by_mipi_lanes(const void *array, size_t index,
-+				 const void *context)
++static bool filter_modes(const void *array, size_t index, const void *context)
 +{
 +	const struct hi846_mode *mode = array;
 +	const struct hi846 *hi846 = context;
++	bool valid_link_freq;
++	int freq_idx;
 +
-+	return (hi846->nr_lanes == 2 && mode->reg_list_2lane.num_of_regs) ||
-+	       (hi846->nr_lanes == 4 && mode->reg_list_4lane.num_of_regs);
++	freq_idx = hi846_get_link_freq_index(hi846, mode);
++	valid_link_freq = freq_idx < 0 ? false : true;
++
++	return ((hi846->nr_lanes == 2 && mode->reg_list_2lane.num_of_regs) ||
++		(hi846->nr_lanes == 4 && mode->reg_list_4lane.num_of_regs)) &&
++	       valid_link_freq;
 +}
 +
  static int hi846_set_format(struct v4l2_subdev *sd,
  			    struct v4l2_subdev_state *sd_state,
  			    struct v4l2_subdev_format *format)
-@@ -1710,20 +1720,6 @@ static int hi846_set_format(struct v4l2_subdev *sd,
+@@ -1736,20 +1751,6 @@ static int hi846_set_format(struct v4l2_subdev *sd,
  		return 0;
  	}
  
@@ -62,7 +68,7 @@ index 6bcd862ae..df7ea3ecf 100644
  	mutex_lock(&hi846->mutex);
  
  	if (hi846->streaming) {
-@@ -1734,9 +1730,12 @@ static int hi846_set_format(struct v4l2_subdev *sd,
+@@ -1760,9 +1761,12 @@ static int hi846_set_format(struct v4l2_subdev *sd,
  	hi846->fmt = fmt;
  
  	hi846->cur_mode =
@@ -73,12 +79,12 @@ index 6bcd862ae..df7ea3ecf 100644
 +						   ARRAY_SIZE(supported_modes),
 +						   width, height,
 +						   mf->width, mf->height,
-+						   filter_by_mipi_lanes, hi846);
++						   filter_modes, hi846);
 +
  	dev_dbg(&client->dev, "%s: found mode: %dx%d\n", __func__,
  		hi846->cur_mode->width, hi846->cur_mode->height);
  
-@@ -1819,6 +1818,8 @@ static int hi846_enum_frame_size(struct v4l2_subdev *sd,
+@@ -1853,6 +1857,8 @@ static int hi846_enum_frame_size(struct v4l2_subdev *sd,
  				 struct v4l2_subdev_frame_size_enum *fse)
  {
  	struct i2c_client *client = v4l2_get_subdevdata(sd);
@@ -87,7 +93,7 @@ index 6bcd862ae..df7ea3ecf 100644
  
  	if (fse->pad || fse->index >= ARRAY_SIZE(supported_modes))
  		return -EINVAL;
-@@ -1828,15 +1829,24 @@ static int hi846_enum_frame_size(struct v4l2_subdev *sd,
+@@ -1862,15 +1868,24 @@ static int hi846_enum_frame_size(struct v4l2_subdev *sd,
  		return -EINVAL;
  	}
  
@@ -96,7 +102,7 @@ index 6bcd862ae..df7ea3ecf 100644
 -	fse->min_height = supported_modes[fse->index].height;
 -	fse->max_height = supported_modes[fse->index].height;
 +	for (count = i = 0; i < ARRAY_SIZE(supported_modes); i++) {
-+		if (!filter_by_mipi_lanes(&supported_modes[i], i, hi846))
++		if (!filter_modes(&supported_modes[i], i, hi846))
 +			continue;
 +
 +		if (count == fse->index) {

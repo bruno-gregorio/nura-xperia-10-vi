@@ -1,0 +1,70 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 16:12:38 -0300
+Subject: [PATCH] media: hi846: Report the pixel rate the timing runs at
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The pixel rate is worked out from the current mode's link frequency, so
+a binned mode on a slower link reports a slower rate. Its line and frame
+lengths stay those of the full readout, though: all modes have lines of
+3800 pixels, and 2526 lines at 30 fps, 842 at 90 fps or 631 at 120 fps,
+which all give 288 MHz from a 24 MHz clock, the full readout's rate. On
+four lanes the 1632x1224 mode measures 30 fps with frame lengths of
+2526 lines, where its 180 MHz link implies a pixel rate of 144 MHz and
+15 fps.
+
+The control is also created with the rate of the default 640x480 mode,
+72 MHz on four lanes, as its maximum, so the rates of the faster modes
+are clamped to it. Userspace that works out the line duration from the
+pixel rate, as libcamera does, gets lines four times too long:
+libcamera reported exposures of 133 ms at 30 fps.
+
+Report the full readout's rate in every mode.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/media/i2c/hi846.c | 20 +++++++++++---------
+ 1 file changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/drivers/media/i2c/hi846.c b/drivers/media/i2c/hi846.c
+index 7ad691364..5bec2105d 100644
+--- a/drivers/media/i2c/hi846.c
++++ b/drivers/media/i2c/hi846.c
+@@ -1157,9 +1157,8 @@ static const struct hi846_mode supported_modes[] = {
+ 		.height = 480,
+ 		.mipi_clk_div_2lane = 4,
+ 		/*
+-		 * Dummy but necessary if we set this mode default, otherwise
+-		 * hi846_calc_pixel_rate() will be broken in
+-		 * hi846_init_controls()
++		 * Dummy but necessary, as the probe works out every mode's
++		 * link frequency
+ 		 */
+ 		.mipi_clk_div_4lane = 8,
+ 		.fps = 120,
+@@ -1381,14 +1380,17 @@ static int hi846_get_link_freq_index(const struct hi846 *hi846,
+ 	return -EINVAL;
+ }
+ 
++/*
++ * The line and frame lengths of every mode give its frame rate at one pixel
++ * rate, that of the full readout over four lanes: 288 MHz from a 24 MHz clock,
++ * for lines of 3800 and 2526 lines at 30 fps, 842 at 90 fps and 631 at 120 fps.
++ * The binned modes send fewer pixels on a slower link, but their timing does
++ * not change with it.
++ */
+ static u64 hi846_calc_pixel_rate(struct hi846 *hi846)
+ {
+-	u64 link_freq = hi846_get_link_freq(hi846, hi846->cur_mode);
+-	u64 pixel_rate = link_freq * 2 * hi846->nr_lanes;
+-
+-	do_div(pixel_rate, HI846_RGB_DEPTH);
+-
+-	return pixel_rate;
++	return mul_u64_u32_div(clk_get_rate(hi846->clock), 90 * 2 * 4,
++			       3 * 2 * HI846_RGB_DEPTH);
+ }
+ 
+ static int hi846_read_reg(struct hi846 *hi846, u16 reg, u8 *val)

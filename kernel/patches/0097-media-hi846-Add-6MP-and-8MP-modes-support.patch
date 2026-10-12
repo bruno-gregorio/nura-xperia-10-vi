@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Pengyu Luo <mitltlatltl@gmail.com>
-Date: Sun, 12 Jul 2026 07:52:46 -0400
+Date: Mon, 31 Aug 2026 00:00:24 +0800
 Subject: [PATCH] media: hi846: Add 6MP and 8MP modes support
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
@@ -16,14 +16,14 @@ operation on the target device. The register sequences are extracted
 from the downstream Windows driver.
 
 Signed-off-by: Pengyu Luo <mitltlatltl@gmail.com>
-Link: https://lore.kernel.org/r/20260712115012.91600-5-mitltlatltl@gmail.com
+Link: https://ratatoskr.run/lkml/2026/08/17479793
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  drivers/media/i2c/hi846.c | 154 +++++++++++++++++++++++++++++++++++++-
  1 file changed, 153 insertions(+), 1 deletion(-)
 
 diff --git a/drivers/media/i2c/hi846.c b/drivers/media/i2c/hi846.c
-index df7ea3ecf..0fc27545e 100644
+index 26b429014..7ad691364 100644
 --- a/drivers/media/i2c/hi846.c
 +++ b/drivers/media/i2c/hi846.c
 @@ -1028,6 +1028,106 @@ static const struct hi846_reg mode_1632x1224_mipi_4lane[] = {

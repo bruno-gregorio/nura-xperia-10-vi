@@ -100,7 +100,7 @@ media: hi846: Fix hi846_write_reg_16 handling
 media: hi846: Fix link frequency handling
 media: hi846: Fix modes handling for different lane cases
 media: hi846: Add 6MP and 8MP modes support
-media: hi846: Get the clock before checking link frequencies against it
+media: hi846: Report the pixel rate the timing runs at
 dt-bindings: media: i2c: ak7375: Add AK7374
 media: i2c: ak7375: Add support for AK7374
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the main camera's focus

@@ -1,4 +1,4 @@
-From 7eddc944eaa8e097630fc5e3b19f37ffde45f885 Mon Sep 17 00:00:00 2001
+From 0c40105adbc76a939c46cc8226c3957ec355a9ac Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
 Date: Mon, 12 Oct 2026 15:37:45 -0300
 Subject: [PATCH 3/3] ipa: simple: Add a contrast detection autofocus
@@ -14,6 +14,11 @@ position and settle on the best fine one, refined by a parabola through
 it and its neighbours. A scan whose best is not clearly above its worst
 fails and leaves the lens at the default position.
 
+Noise adds to the sharpness and grows with the gain, so a scan waits
+for the brightness to hold still, as it does once the exposure has
+settled, and starts over if the brightness moves away during it. A
+scene too dark to show anything is not scanned.
+
 AfMode, AfTrigger, AfPause and LensPosition work as the control
 definitions describe. In continuous mode the algorithm keeps the
 sharpness and brightness it focused at and scans again once either has
@@ -28,19 +33,19 @@ for infinity to 10 cm.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- src/ipa/simple/algorithms/af.cpp      | 439 ++++++++++++++++++++++++++
- src/ipa/simple/algorithms/af.h        |  97 ++++++
+ src/ipa/simple/algorithms/af.cpp      | 473 ++++++++++++++++++++++++++
+ src/ipa/simple/algorithms/af.h        |  99 ++++++
  src/ipa/simple/algorithms/meson.build |   1 +
- 3 files changed, 537 insertions(+)
+ 3 files changed, 573 insertions(+)
  create mode 100644 src/ipa/simple/algorithms/af.cpp
  create mode 100644 src/ipa/simple/algorithms/af.h
 
 diff --git a/src/ipa/simple/algorithms/af.cpp b/src/ipa/simple/algorithms/af.cpp
 new file mode 100644
-index 0000000..533a782
+index 0000000..46003e4
 --- /dev/null
 +++ b/src/ipa/simple/algorithms/af.cpp
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,473 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/*
 + * Copyright (C) 2026, Bruno Gregório
@@ -78,6 +83,11 @@ index 0000000..533a782
 + * moves as soon as the IPA asks, so each set of statistics is of a frame taken
 + * where the previous set left the lens.
 + *
++ * Noise adds to the sharpness, and grows with the gain, so a scan waits for the
++ * brightness to hold still, as it does once the exposure has settled, and
++ * starts again if the brightness moves away during it. A scene too dark to
++ * show anything is not scanned at all.
++ *
 + * In continuous mode the algorithm keeps the sharpness and brightness it
 + * focused at, and scans again once either has changed for a while and the
 + * scene has then steadied.
@@ -90,16 +100,22 @@ index 0000000..533a782
 +static constexpr unsigned int kSamplesPastPeak = 2;
 +static constexpr double kPeakDrop = 0.25;
 +
-+/* Statistics to let the exposure settle before the first scan. */
-+static constexpr unsigned int kInitialSettle = 6;
-+
 +/* Statistics a change must last for, and the scene must then hold still for. */
 +static constexpr unsigned int kChangedSamples = 3;
 +static constexpr unsigned int kSteadySamples = 2;
 +static constexpr double kSteadyChange = 0.1;
 +
++/* How still the brightness must hold to scan, and how far it may then move. */
++static constexpr double kSteadyLight = 0.05;
++static constexpr double kScanLightDrift = 0.2;
++
 +/* Below this mean over the black level, out of 255, there is nothing to see. */
-+static constexpr double kMinBrightness = 4.0;
++static constexpr double kMinBrightness = 8.0;
++
++static double relativeChange(double value, double reference)
++{
++	return std::abs(value - reference) / std::max(reference, 1e-6);
++}
 +
 +int Af::init(IPAContext &context, const ValueNode &tuningData)
 +{
@@ -154,7 +170,8 @@ index 0000000..533a782
 +	sceneChanged_ = false;
 +	scanRequested_ = mode_ == controls::AfModeContinuous;
 +	state_ = scanRequested_ ? controls::AfStateScanning : controls::AfStateIdle;
-+	settle_ = kInitialSettle;
++	lastBrightness_ = 0.0;
++	lightSteady_ = 0;
 +
 +	hasLens_ = it != lensControls.end();
 +	if (!hasLens_) {
@@ -268,14 +285,27 @@ index 0000000..533a782
 +			<< "Lens at " << position_ << ", sharpness " << sharpness
 +			<< ", brightness " << brightness;
 +
-+		if (settle_) {
-+			settle_--;
-+		} else if (mode_ != controls::AfModeManual && !paused_) {
++		if (relativeChange(brightness, lastBrightness_) < kSteadyLight)
++			lightSteady_++;
++		else
++			lightSteady_ = 0;
++		lastBrightness_ = brightness;
++
++		if (mode_ != controls::AfModeManual && !paused_) {
++			if (scanning_ &&
++			    relativeChange(brightness, scanBrightness_) > kScanLightDrift) {
++				LOG(IPASoftAf, Debug) << "Light changed while scanning";
++				scanning_ = false;
++				scanRequested_ = true;
++			}
++
 +			if (scanning_) {
 +				scan(sharpness);
 +			} else if (scanRequested_) {
-+				scanRequested_ = false;
-+				startScan();
++				if (lightSteady_ >= kSteadySamples) {
++					scanRequested_ = false;
++					startScan(brightness);
++				}
 +			} else if (mode_ == controls::AfModeContinuous) {
 +				watch(sharpness, brightness);
 +			}
@@ -296,9 +326,18 @@ index 0000000..533a782
 +	}
 +}
 +
-+void Af::startScan()
++void Af::startScan(double brightness)
 +{
 +	const int32_t steps = static_cast<int32_t>(coarseSteps_);
++
++	if (brightness < kMinBrightness) {
++		LOG(IPASoftAf, Debug) << "Too dark to scan";
++		moveLens(lensFromDioptres(defaultDioptres_));
++		stopScan(controls::AfStateFailed);
++		return;
++	}
++
++	scanBrightness_ = brightness;
 +
 +	scanning_ = true;
 +	watching_ = false;
@@ -417,10 +456,6 @@ index 0000000..533a782
 +
 +void Af::watch(double sharpness, double brightness)
 +{
-+	auto change = [](double value, double reference) {
-+		return std::abs(value - reference) / std::max(reference, 1e-6);
-+	};
-+
 +	if (!watching_) {
 +		watching_ = true;
 +		sceneChanged_ = false;
@@ -432,8 +467,8 @@ index 0000000..533a782
 +	}
 +
 +	if (!sceneChanged_) {
-+		if (change(sharpness, focusedSharpness_) > rescanChange_ ||
-+		    change(brightness, focusedBrightness_) > rescanChange_)
++		if (relativeChange(sharpness, focusedSharpness_) > rescanChange_ ||
++		    relativeChange(brightness, focusedBrightness_) > rescanChange_)
 +			changed_++;
 +		else
 +			changed_ = 0;
@@ -444,13 +479,17 @@ index 0000000..533a782
 +			steady_ = 0;
 +		}
 +	} else {
-+		if (change(sharpness, lastSharpness_) < kSteadyChange)
++		if (relativeChange(sharpness, lastSharpness_) < kSteadyChange)
 +			steady_++;
 +		else
 +			steady_ = 0;
 +
-+		if (steady_ >= kSteadySamples)
-+			startScan();
++		/* Leave it to process() to wait for steady light too. */
++		if (steady_ >= kSteadySamples) {
++			watching_ = false;
++			scanRequested_ = true;
++			state_ = controls::AfStateScanning;
++		}
 +	}
 +
 +	lastSharpness_ = sharpness;
@@ -482,10 +521,10 @@ index 0000000..533a782
 +} /* namespace libcamera */
 diff --git a/src/ipa/simple/algorithms/af.h b/src/ipa/simple/algorithms/af.h
 new file mode 100644
-index 0000000..7d4f990
+index 0000000..a2c0673
 --- /dev/null
 +++ b/src/ipa/simple/algorithms/af.h
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,99 @@
 +/* SPDX-License-Identifier: LGPL-2.1-or-later */
 +/*
 + * Copyright (C) 2026, Bruno Gregório
@@ -530,7 +569,7 @@ index 0000000..7d4f990
 +		Fine,
 +	};
 +
-+	void startScan();
++	void startScan(double brightness);
 +	void stopScan(controls::AfStateEnum state);
 +	void scan(double sharpness);
 +	void finishScan();
@@ -562,7 +601,9 @@ index 0000000..7d4f990
 +	bool paused_ = false;
 +	bool pauseDeferred_ = false;
 +	bool scanRequested_ = false;
-+	unsigned int settle_ = 0;
++	double lastBrightness_ = 0.0;
++	unsigned int lightSteady_ = 0;
++	double scanBrightness_ = 0.0;
 +
 +	bool scanning_ = false;
 +	Phase phase_ = Phase::Coarse;

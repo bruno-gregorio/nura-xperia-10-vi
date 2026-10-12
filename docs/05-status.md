@@ -5041,6 +5041,42 @@ as what it would have fixed.
   - **A correction to `out/dl-sensors/REPORT.md`:** the IMX582 library's
     writes to 0x38b4 to 0x38bb set the PDAF window. They are not a copy
     of the exposure registers.
+- **What the vendor's tuning files hold** — 2026-10-12, the five
+  Chromatix files (`com.qti.tuned.*.bin`) from `vendor_b`, decoded into
+  `out/dl-tuned/`: every module as JSON, digests under `summary/`, every
+  lens shading table as CSV under `lsc/`, and BlackLevel and Ccm blocks
+  for libcamera under `libcamera/`. All five files link with no
+  dangling pointer, and every claim below was checked against
+  `camera.qcom.so` or other references unless it says otherwise.
+  Nothing ran on the phone, and none of it is in a tuning file yet.
+  - **Verified, the IMX582's two tuning files are one tuning:** 154 of
+    156 modules are byte-identical, and the other two weight AWB
+    statistics.
+  - **Verified, colour matrices in libcamera's order:** row-major,
+    RGB to RGB, after white balance, with no offsets, at 2200, 3000,
+    4100, 5200 and 6300 K for the IMX582, and 2200, 3000, 3900, 4350,
+    5200 and 6300 K for the Hi-846s. The two Hi-846s' matrices differ.
+    Stock fades them in dim scenes, to the identity in the IMX582's
+    darkest band, which the soft IPA cannot do.
+  - **Reasoned, the black level is 64 at 10 bits for all three,** as our
+    tuning files already say: two stages always add up to it, however
+    they split it.
+  - **Verified, the lens shading the soft ISP does not correct:** grids
+    of 17x13 per channel. The corners need 3.4 to 4.4 times the
+    centre's gain on the IMX582, 2.9 to 3.6 on the rear Hi-846 and 1.35
+    to 1.65 on the front, in bright scenes. libcamera 0.7.2 has no lens
+    shading correction, so the rear cameras' corners stay that much
+    darker.
+  - **Verified, how far stock's exposure goes:** 256x total gain on the
+    IMX582, 128x on the rear Hi-846 and 64x on the front, and exposures
+    up to 66.7 ms on all three. Our soft IPA stops the Hi-846s at 16x
+    and 33 ms (see "What the cameras still lack").
+  - **Verified, the AWB reference points:** each camera's R/G and B/G
+    under its reference illuminants, from which a colour temperature
+    curve for each can be built. The soft IPA's AWB is plain grey world.
+  - **Verified, stock's output gamma is S-shaped,** darker than sRGB in
+    the shadows. Reasoned: it follows tone mappers the soft ISP lacks,
+    so copying it alone would not give stock's look.
 - **The fingerprint reader, read off the firmware** — 2026-10-12.
   Nothing ran on the phone. The sources are `vendor_b` and `modem_b`
   from `out/firmware/`, the live tree, Sony's published kernel source
@@ -5919,10 +5955,11 @@ each entry says how much of it held.
     calibration data, which "What the vendor's camera module data
     holds" maps but nothing reads yet.
   - Tuning. The IMX582's colour matrices are another sensor's, and the
-    Hi-846 file has none. Stock's Chromatix files for all three
-    (`com.qti.tuned.*.bin`, parameter parser 3.5.1) hold colour
-    matrices, lens shading, gamma, black level, AWB and AEC tuning, and
-    are being decoded into `out/dl-tuned/`.
+    Hi-846 file has none. Stock's Chromatix files for all three are
+    decoded (see "What the vendor's tuning files hold"), and their
+    colour matrices are ready to paste. Lens shading and a calibrated
+    AWB need code in the soft IPA, and one `hi846.yaml` serves two
+    Hi-846s whose stock tunings differ.
   - The IMX582's full 8000x6000 quad Bayer readout. The driver offers the
     binned modes only.
   - Sensor delays for the Hi-846, which libcamera has no values for.

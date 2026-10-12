@@ -4940,6 +4940,156 @@ as what it would have fixed.
     frequency instead of working it out from the pixel rate. It read
     180 MHz at 1632x1224 and 360 MHz at 3264x2448, and both cameras
     streamed at 30 fps with no fault.
+- **The rear flash LED lights** — plans 20261012y and 20261012z,
+  2026-10-12: stay-up boots of kernel pkgrels 37 and 38 with device
+  pkgrel 13. The transcripts are `out/try-kernel/live-stayup-flash1.txt`
+  and `live-stayup-flash2.txt`. The light was measured through the rear
+  Hi-846 streaming as the session's user, and no frame left the phone.
+  - **Verified, one LED on the PM6150L's first channel:** stock's tree
+    (`out/device-dump-root/live.dts`, `qcom,leds@d300`) has the PMIC's
+    three-channel flash module at 0xd300 on SPMI USID 5. Both of its
+    camera flash nodes, the IMX582's and the rear Hi-846's, use
+    `flash_0` and `torch_0`. Mainline's `leds-qcom-flash` counts
+    sources from 1, so pkgrel 37 enables `pm6150l_flash` with one LED
+    on `led-sources = <1>`, and it binds as `white:flash`.
+  - **Verified, the limits:** stock allows that channel 1.5 A of flash
+    for 300 ms, 1 A by default, and a torch of 500 mA, 300 mA by
+    default. Pkgrel 37 sets 1.2 A, 300 ms and 300 mA, and sysfs reads
+    back `max_flash_brightness` 1200000, `max_flash_timeout` 300000 and
+    `max_brightness` 255.
+    - Reasoned, 1.2 A and not 1.5 A: 1.5 A is a reference-board value,
+      the LED's own rating is unknown, and stock's camera stack never
+      asked for more than 1.2 A. Nothing on our side sets up stock's
+      battery and droop protections either (`qcom,vph-droop-det`,
+      `qcom,thermal-derate-en`, `qcom,use-qti-battery-interface`).
+  - **Verified, the torch lights:** in round y, `brightness` 26 lit it
+    at 33.4 s, and the driver logged "allowed flash current: 30mA".
+    The frame's mean sample value, which sits at 1 when every pixel is
+    in the darkest fifth, rose to between 1.30 and 1.44. Three seconds
+    later the torch went off, and the next statistics were back at 1,
+    though the AGC was still raising the gain.
+  - **Verified, the flash fires and its timer ends it:** in round y, a
+    strobe of 100 mA for 300 ms at 48.4 s, with the camera at 16x,
+    raised the mean to 2.94 and 2.91 in the next two sets of
+    statistics, 0.13 s apart. The set after that was back at 1. The LED
+    then reported `flash-timeout-exceeded`, which is its safety timer
+    ending the strobe as designed. The battery was full, and the script
+    would not strobe under 30%.
+  - **Verified in the source, two driver fixes in pkgrel 37,** both
+    meant for upstream:
+    - Reasoned, from the flash research: the safety timer runs one
+      10 ms step longer than the value written, so 300 ms gave 310 ms.
+      `set_flash_timeout()` now writes one step less.
+    - Probe's error path and `remove()` released only the first V4L2
+      flash device. They now release every one.
+  - **Verified, the flash is the IMX582's in V4L2:** pkgrel 38 names
+    it in the IMX582's `flash-leds` and builds the V4L2 flash glue,
+    which makes the LED driver a module. In round z the flash appeared
+    as `/dev/v4l-subdev20`, with `led_mode`, `strobe_source` (software),
+    `strobe_timeout` up to 300 ms, `intensity_flash_mode` up to 1.2 A
+    in 12.5 mA steps, `intensity_torch_mode` up to 300 mA in 5 mA steps,
+    and `faults`. libcamera warned "Unsupported ancillary entity
+    function 131074", which is `MEDIA_ENT_F_FLASH`, for the IMX582,
+    so the link is there and libcamera does not use it yet. All three
+    cameras streamed at 30 fps with no fault.
+    - `led_mode` 2 lit the torch at the control's default of 200 mA
+      for 3 s, because the round named the intensity control wrongly.
+      The mean rose from 1 to between 2.17 and 2.27, against 1.30 to
+      1.44 at 30 mA, and fell back to 1 when it went off.
+    - Stock gives both rear cameras the same LED. On mainline only one
+      sensor's notifier can bind it, so the rear Hi-846 has no flash.
+- **What the vendor's camera module data holds** — 2026-10-12, read off
+  `vendor_b` and decoded into `out/dl-afcal/`: JSON for each module, and
+  the tools that made it. Nothing ran on the phone. The camera work
+  this feeds waits for the decode of the tuning files.
+  - **Verified, the two IMX582 module bins differ only in their names:**
+    every register list and the flash, OIS, actuator and PDAF data are
+    the same, and so is the code of the two sensor libraries.
+  - **Verified, the IMX582's timing and limits:** five modes on four
+    lanes of RAW10, from 8000x6000 at 10 fps to 2000x1132 at 120 fps.
+    Analogue gain goes to 64x, held to 16x in the two unbinned modes,
+    and digital gain to 4x. Exposure goes up to the frame length less
+    48 lines. The lens is 4.71 mm at f/1.8 and focuses from 10 cm to
+    10 m.
+    - Reasoned: CamX writes exposure, gain and frame length in the same
+      request, each with a delay of 2, so libcamera's delays for the
+      IMX582 are 2, 2 and 2.
+  - **Verified, the Hi-846s:** analogue gain to 16x, digital gain to 8x
+    on the rear and 16x on the front, and exposure to the frame length
+    less 6 lines. The rear lens is 1.65 mm at f/2.2. The front is
+    2.77 mm at f/2.0 with no actuator, and its focus range is given as
+    33 to 52 cm. The bins give no delays for either.
+  - **Verified, the IMX582's calibration EEPROM:** CamX reads 8 KiB from
+    0x50 on the main camera's CCI bus, with 16-bit addresses. It holds
+    white balance ratios at 0x1a, a 17x13 lens shading grid at 0x22,
+    the autofocus's macro and infinity codes at 0x70c and 0x70e, PDAF
+    gain maps, and two blocks that CamX writes straight into the sensor:
+    QSC to 0xc500 and SPC to 0x7b10 and 0x7c00. Nothing is checksummed.
+    - Reasoned, from the code that reads them: the two focus codes are
+      AK7374 DAC values, the units of our `focus_absolute`. CamX widens
+      the range between them by 15% past infinity and 30% past macro,
+      and scans it in 400 steps. Our autofocus scans the lens's whole
+      range, 0 to 1023, in steps of about 100 and then 25.
+    - This phone's EEPROM has not been read. Its bytes 0x00 to 0x19 may
+      hold a serial number, and stay out of git and logs.
+  - **Verified, the Hi-846s keep their calibration in the sensor's own
+    OTP:** white balance and lens shading, in three groups each, and no
+    focus data.
+  - **Verified, the OIS is a DW9784 at 0x72,** set up by two short lists
+    and given no calibration from the EEPROM. Mainline has no driver for
+    it.
+  - **A correction to `out/dl-sensors/REPORT.md`:** the IMX582 library's
+    writes to 0x38b4 to 0x38bb set the PDAF window. They are not a copy
+    of the exposure registers.
+- **The fingerprint reader, read off the firmware** — 2026-10-12.
+  Nothing ran on the phone. The sources are `vendor_b` and `modem_b`
+  from `out/firmware/`, the live tree, Sony's published kernel source
+  for this phone, and the notes under `out/dl-fp/`: `notes-re/` on the
+  vendor's libraries and trusted app, `notes-qtee/NOTES.md` on
+  Qualcomm's TEE under mainline, and `notes-kdriver/NOTES.md` on Sony's
+  driver.
+  - **Verified, an Egis EC617, run from TrustZone:** Sony's kernel
+    source for the 10 VI (kernel-copyleft, branch `70.2.A.1.xxx`) builds
+    `drivers/input/fingerprint/et617/` for it, and the vendor's trusted
+    app, `egisap64`, carries the EC617's tables and self-test. The app
+    drives the sensor's SPI bus itself, at 9.6 MHz, so the live tree
+    gives Linux only GPIOs: VDD on 96, VCC on 106 (3.0 V), reset on 108
+    and the finger interrupt on 111.
+  - **Verified, Sony's driver does power, reset and the interrupt and
+    nothing more:** `etxxx_fp.c` is a platform driver for "fp-egistec"
+    behind `/dev/esfp0`, with raw ioctl numbers and `poll()` for the
+    finger. It raises VDD and VCC together, waits 3 ms, releases reset
+    and waits 3 ms more. A reset pulse is 10 ms low, then 3 ms. Its SPI
+    ioctls do nothing.
+  - **Verified, how Android reaches the app:** the vendor's HAL loads
+    `egisap64` from `modem_b` through the legacy QSEECom interface, and
+    wraps every Egis message in command 0xE0. That command's buffer
+    holds a pointer at offset 8, which TrustZone has to fix up, as
+    QSEECom's "modified command" does. The app encrypts its own
+    templates and stores them through the secure file system listener
+    and through file callbacks in the HAL. It needs an RPMB listener as
+    well.
+  - **Verified, mainline's `qcom_qseecom` cannot carry it:** it cannot
+    load an app, cannot fix up an embedded pointer, and serves no
+    listeners.
+  - **Reasoned, mainline's `qcomtee` may:**
+    - Verified: stock reports QSEE 0x1402000 (QTEE 5.2.0) with its SHM
+      bridge enabled (`out/device-dump-root/`), and our boot logs (for
+      example `log-r97.txt`) list the `qcomtee` device, which
+      `qcom_scm` creates only when TrustZone answers its probe.
+    - Reasoned: only a QSEECom compatibility loader (UID 122) can fix
+      up the pointer through `qcomtee`. Whether this QTEE lets a Linux
+      client open it is the open question. The fallback is an
+      out-of-tree QSEECom TEE driver that others have used with a
+      fingerprint app of this kind.
+  - **Rules for everything that follows:**
+    - Load only `egisap64`. `fingerpr`, Qualcomm's ultrasonic app, is
+      unused here and declares the same app name.
+    - Send nothing but command 0x01 until the pointer fix-up is proven.
+      Reasoned, from a precedent: a wrong one resets the phone.
+    - Never provision or erase RPMB, and write nothing to it without
+      the owner's word: its counters are shared with Android.
+    - Leave the fingerprint's SPI engine and its pins to TrustZone.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -5759,8 +5909,15 @@ each entry says how much of it held.
     because its error stops growing once every pixel is in the lowest
     bin. From a black frame to 60x gain took nine seconds, and the
     autofocus waits for it.
-  - The flash LED, the OIS rail (`cam_ois_vdd`) and the modules'
-    calibration EEPROMs.
+  - Flash in libcamera. The LED works through sysfs and as the
+    IMX582's V4L2 flash (see "The rear flash LED lights"), but
+    libcamera 0.7.2 ignores flash entities, so no app can fire it
+    with a picture. Reasoned: Phosh's torch toggle looks for an LED
+    named `*:torch*` or `*:flash*`, so `white:flash` should serve it,
+    but nobody has tried it.
+  - The OIS (a DW9784, with no mainline driver) and the modules'
+    calibration data, which "What the vendor's camera module data
+    holds" maps but nothing reads yet.
   - Tuning. The IMX582's colour matrices are another sensor's, and the
     Hi-846 file has none. Stock's Chromatix files for all three
     (`com.qti.tuned.*.bin`, parameter parser 3.5.1) hold colour

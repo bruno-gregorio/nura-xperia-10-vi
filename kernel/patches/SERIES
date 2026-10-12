@@ -67,3 +67,6 @@ ASoC: qcom: sc8280xp: Add SM6450 support
 arm64: dts: qcom: sm6450: Add QUP0 I2C0 and I2C2
 arm64: dts: qcom: sm6450: Add the audio subsystem
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable audio
+ASoC: dt-bindings: awinic,aw88395: Add the AW88263
+ASoC: codecs: Add the Awinic AW88263 amplifier driver
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: The top amplifier is an AW88263

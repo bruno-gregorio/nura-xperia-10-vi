@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 08:21:52 -0300
+Subject: [PATCH] ASoC: dt-bindings: awinic,aw88395: Add the AW88263
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The AW88263 is an I2S amplifier with a boost converter and current and
+voltage sensing, in the same family and with the same properties as the
+AW88261 already in this binding: an I2C address, a reset line and the
+channel that picks its profile from the firmware file.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ Documentation/devicetree/bindings/sound/awinic,aw88395.yaml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/sound/awinic,aw88395.yaml b/Documentation/devicetree/bindings/sound/awinic,aw88395.yaml
+index 7d64b38e4..5d0580b72 100644
+--- a/Documentation/devicetree/bindings/sound/awinic,aw88395.yaml
++++ b/Documentation/devicetree/bindings/sound/awinic,aw88395.yaml
+@@ -21,6 +21,7 @@ properties:
+       - awinic,aw88083
+       - awinic,aw88166
+       - awinic,aw88261
++      - awinic,aw88263
+       - awinic,aw88395
+       - awinic,aw88399
+ 

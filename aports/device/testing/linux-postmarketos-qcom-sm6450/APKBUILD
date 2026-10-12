@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=24
+pkgrel=25
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -101,6 +101,11 @@ _config="config-$_flavor.$arch"
 # 6.18's bindings do not have yet, left out. The speaker amplifiers take their
 # I2S bit clock from the SoC, and without it nothing turns that clock on.
 # Our sc8280xp change uses its LPAIF_MI2S_BCLK.
+#
+# backport-0010 is Srinivas Kandagatla's port limit check, d49ee8faefec in
+# linux-next, with USB_RX standing in for the SENARY MI2S ports 6.18 lacks.
+# 6.18 sizes the q6apm DAI arrays at 127 entries, and QUINARY_MI2S_RX, the
+# speaker port, is number 127.
 source="
 	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
 	$_config
@@ -120,6 +125,7 @@ source="
 	bringup-dwc3-qcom-phy-reinit.patch
 	backport-0008-drm-msm-adreno-set-cx_misc_mmio-regardless-of-LLCC.patch
 	backport-0009-ASoC-qcom-q6apm-lpass-dais-Add-MI2S-clock-control.patch
+	backport-0010-ASoC-qcom-common-validate-cpu-dai-id-during-parsing.patch
 "
 builddir="$srcdir/linux-$pkgver"
 
@@ -171,8 +177,8 @@ package() {
 
 sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
-2ade7e10fb6be76c1cd14b79d69ccfe7a3fa53134fa833bf863e0c6f70ed695109c397e3f4baf87dd6f150b47ee39c5bcf4cd7b04e600dfb8c6237d36ad153e7  config-postmarketos-qcom-sm6450.aarch64
-6221f385e1c008b12ef95b0d94cb62d879d2c72e070033631b117722753ca854d549bc93054b5dde0fdc80ddc1c75c6e52b03b043035018e2c9a537b323a67ee  sm6450-mainline.patch
+020830e820247c35f775e190d609c85c28be6d57cb54d01e64cad92324d5199ff6babb007266e58e03479f28a204cc3eac46b614c156685d2b70cacb7d822bec  config-postmarketos-qcom-sm6450.aarch64
+97f617671582427a9669f5143d8a42282c9c478fca74ee67b9d3b9081e5721c8d5d1f4b5eb7f4724de6d2d84c823f04224976f37e0b33cf9fcadd4a2f4baa126  sm6450-mainline.patch
 8a668e14d1a656a8843aabc427fa930b8976f120fcdabb4042c17a4c4aeee7518dcc2403b6f8090a633ff741b0766ece418d47ce603401f73407df2d94d19b26  backport-0001-firmware-qcom-scm-Register-gunyah-watchdog-device.patch
 c008b7cf41b8820bf26deb4fef5b8e68d093e88106eeda58b4828f4f7ac031a6374e0815f1d4a72e01ea03cf42070285455d7720ff382c08d88d4163d25bff77  backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
 693ed8dff51fabd84fcabe6b579383bfcdc817687122f9bb43d9257d6e27ccc83979acdd4754718336d8fe1e3bf2375a41007f56ccdb7fbcd1549e19eeb2f760  bringup-milestones.patch
@@ -188,4 +194,5 @@ a4307c5157f745f2824069b0d32515866cdb631803d0aa4e3bbb4e4d1d21ffcb952d19ff0424fb32
 0ee1b6035876d58d497f1a8ac8489263049e301b1bbd683ec4aff26677b31c523888813cb983f00dd82113be9981651b5a0287d833fd31b99099b82232923751  bringup-dwc3-qcom-phy-reinit.patch
 ecb3c87131cf1082accfc31594d2c6728539dcfcdcc6bf3d383bb930036a89535b8ae68519a639fb1836ca1664fbead07aefdc93e5176d8188db57f778deac13  backport-0008-drm-msm-adreno-set-cx_misc_mmio-regardless-of-LLCC.patch
 eed4b432c128ddfabef55c6041ff5a38ac0305e146f497618f05c6b9b9f9ca4b18c87499fb48042ee8f8c0d2a80d0e75cbc5a3965dab747fc715ff3b4071a104  backport-0009-ASoC-qcom-q6apm-lpass-dais-Add-MI2S-clock-control.patch
+20088d456f0e2334a15f346e2df73d43ee85a4f3319060353ea3bc792d4317034308b30d00cc02a859a5a9e7c674eb6a11aa6403a355757eddc88c773e49f6a1  backport-0010-ASoC-qcom-common-validate-cpu-dai-id-during-parsing.patch
 "

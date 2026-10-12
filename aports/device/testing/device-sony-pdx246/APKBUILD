@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=8
+pkgrel=9
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -69,6 +69,14 @@ kernel_downstream() {
 # Bluetooth chip's rampatch and NVM, crbtfw32.tlv and crnv32u.bin, which
 # rounds 44 and 53 loaded; until pkgrel 7 nothing pulled them in.
 #
+# soc-qcom is what every mainline Qualcomm device in pmaports pulls in. Here
+# it is for bootmac: the WCN3991's NVM carries the default Bluetooth address,
+# so btqca leaves hci0 unconfigured until something sets one, and bluetoothd
+# never sees a controller. bootmac sets one from a hash of the serial number,
+# and an address for wlan0, which otherwise gets a random one each boot. Not
+# soc-qcom-qbootctl: qbootctl marks the slot good in the UFS GPT, and this
+# port does not write the UFS.
+#
 # hexagonrpcd serves the ADSP's sensors domain its files. Our fork in
 # temp/hexagonrpcd, 0.4.0-r103, adds the sns_reg_version mapping this phone's
 # domain asks for, hence the version. The domain also wants hexagonrpcd early,
@@ -86,6 +94,7 @@ kernel_mainline() {
 		linux-firmware-ath10k
 		linux-firmware-qca
 		linux-postmarketos-qcom-sm6450
+		soc-qcom
 		"
 	devicepkg_subpackage_kernel $startdir $pkgname $subpkgname
 

@@ -25,9 +25,9 @@ Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
  sound/soc/codecs/Kconfig   |  13 +
  sound/soc/codecs/Makefile  |   2 +
- sound/soc/codecs/aw88263.c | 932 +++++++++++++++++++++++++++++++++++++
+ sound/soc/codecs/aw88263.c | 936 +++++++++++++++++++++++++++++++++++++
  sound/soc/codecs/aw88263.h | 136 ++++++
- 4 files changed, 1083 insertions(+)
+ 4 files changed, 1087 insertions(+)
  create mode 100644 sound/soc/codecs/aw88263.c
  create mode 100644 sound/soc/codecs/aw88263.h
 
@@ -84,10 +84,10 @@ index da4077463..9f03aeac5 100644
  obj-$(CONFIG_SND_SOC_BT_SCO)	+= snd-soc-bt-sco.o
 diff --git a/sound/soc/codecs/aw88263.c b/sound/soc/codecs/aw88263.c
 new file mode 100644
-index 000000000..0704f46a1
+index 000000000..acd01e9b3
 --- /dev/null
 +++ b/sound/soc/codecs/aw88263.c
-@@ -0,0 +1,932 @@
+@@ -0,0 +1,936 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +//
 +// aw88263.c  --  AW88263 ALSA SoC Audio driver
@@ -403,6 +403,7 @@ index 000000000..0704f46a1
 +static int aw88263_dev_start(struct aw88263 *aw88263)
 +{
 +	struct aw_device *aw_dev = aw88263->aw_pa;
++	unsigned int reg_val;
 +	int ret;
 +
 +	if (aw_dev->status == AW88263_DEV_PW_ON)
@@ -455,6 +456,9 @@ index 000000000..0704f46a1
 +
 +	aw88263_dev_clear_int_status(aw_dev);
 +	aw_dev->status = AW88263_DEV_PW_ON;
++
++	if (!regmap_read(aw_dev->regmap, AW88263_SYSST_REG, &reg_val))
++		dev_dbg(aw_dev->dev, "started, SYSST 0x%04x\n", reg_val);
 +
 +	return 0;
 +

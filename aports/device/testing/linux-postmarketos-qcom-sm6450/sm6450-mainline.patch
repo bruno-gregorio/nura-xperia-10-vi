@@ -89,10 +89,10 @@ Base: v6.18.55
      sound/soc/codecs/Kconfig                           |   13 +
      sound/soc/codecs/Makefile                          |    2 +
      sound/soc/codecs/aw88261.c                         |   20 +
-     sound/soc/codecs/aw88263.c                         |  932 ++++++
+     sound/soc/codecs/aw88263.c                         |  936 ++++++
      sound/soc/codecs/aw88263.h                         |  136 +
-     sound/soc/qcom/sc8280xp.c                          |  114 +-
-     86 files changed, 15710 insertions(+), 46 deletions(-)
+     sound/soc/qcom/sc8280xp.c                          |  103 +-
+     86 files changed, 15703 insertions(+), 46 deletions(-)
 
 diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
 index 18b5ed044..1500a8fdf 100644
@@ -15761,10 +15761,10 @@ index c0d629927..24e38b6eb 100644
  	.id_table = aw88261_i2c_id,
 diff --git a/sound/soc/codecs/aw88263.c b/sound/soc/codecs/aw88263.c
 new file mode 100644
-index 000000000..0704f46a1
+index 000000000..acd01e9b3
 --- /dev/null
 +++ b/sound/soc/codecs/aw88263.c
-@@ -0,0 +1,932 @@
+@@ -0,0 +1,936 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +//
 +// aw88263.c  --  AW88263 ALSA SoC Audio driver
@@ -16080,6 +16080,7 @@ index 000000000..0704f46a1
 +static int aw88263_dev_start(struct aw88263 *aw88263)
 +{
 +	struct aw_device *aw_dev = aw88263->aw_pa;
++	unsigned int reg_val;
 +	int ret;
 +
 +	if (aw_dev->status == AW88263_DEV_PW_ON)
@@ -16132,6 +16133,9 @@ index 000000000..0704f46a1
 +
 +	aw88263_dev_clear_int_status(aw_dev);
 +	aw_dev->status = AW88263_DEV_PW_ON;
++
++	if (!regmap_read(aw_dev->regmap, AW88263_SYSST_REG, &reg_val))
++		dev_dbg(aw_dev->dev, "started, SYSST 0x%04x\n", reg_val);
 +
 +	return 0;
 +
@@ -16840,10 +16844,10 @@ index 000000000..e7aed94a5
 +
 +#endif
 diff --git a/sound/soc/qcom/sc8280xp.c b/sound/soc/qcom/sc8280xp.c
-index ed8b04c60..064e9f156 100644
+index ed8b04c60..147ffa423 100644
 --- a/sound/soc/qcom/sc8280xp.c
 +++ b/sound/soc/qcom/sc8280xp.c
-@@ -12,10 +12,25 @@
+@@ -12,10 +12,23 @@
  #include <sound/jack.h>
  #include <linux/input-event-codes.h>
  #include "qdsp6/q6afe.h"
@@ -16856,12 +16860,10 @@ index ed8b04c60..064e9f156 100644
 + * @driver_name: card driver name, which picks the topology and UCM files
 + * @mi2s_bclk_enable: turn on the MI2S bit clock, for codecs that do not
 + *	provide one
-+ * @mi2s_s32: run the MI2S back ends with 32-bit samples rather than 16
 + */
 +struct sc8280xp_snd_match_data {
 +	const char *driver_name;
 +	bool mi2s_bclk_enable;
-+	bool mi2s_s32;
 +};
 +
  struct sc8280xp_snd_data {
@@ -16869,29 +16871,7 @@ index ed8b04c60..064e9f156 100644
  	bool stream_prepared[AFE_PORT_MAX];
  	struct snd_soc_card *card;
  	struct sdw_stream_runtime *sruntime[AFE_PORT_MAX];
-@@ -82,6 +97,7 @@ static void sc8280xp_snd_shutdown(struct snd_pcm_substream *substream)
- static int sc8280xp_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
- 				     struct snd_pcm_hw_params *params)
- {
-+	struct sc8280xp_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
- 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
- 	struct snd_interval *rate = hw_param_interval(params,
- 					SNDRV_PCM_HW_PARAM_RATE);
-@@ -100,6 +116,13 @@ static int sc8280xp_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
- 	case TX_CODEC_DMA_TX_3:
- 		channels->min = 1;
- 		break;
-+	case PRIMARY_MI2S_RX...QUATERNARY_MI2S_TX:
-+	case QUINARY_MI2S_RX...QUINARY_MI2S_TX:
-+		if (data->match_data->mi2s_s32) {
-+			snd_mask_none(fmt);
-+			snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S32_LE);
-+		}
-+		break;
- 	default:
- 		break;
- 	}
-@@ -114,6 +137,25 @@ static int sc8280xp_snd_hw_params(struct snd_pcm_substream *substream,
+@@ -114,6 +127,25 @@ static int sc8280xp_snd_hw_params(struct snd_pcm_substream *substream,
  	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
  	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
  	struct sc8280xp_snd_data *pdata = snd_soc_card_get_drvdata(rtd->card);
@@ -16917,7 +16897,7 @@ index ed8b04c60..064e9f156 100644
  
  	return qcom_snd_sdw_hw_params(substream, params, &pdata->sruntime[cpu_dai->id]);
  }
-@@ -178,6 +220,7 @@ static int sc8280xp_platform_probe(struct platform_device *pdev)
+@@ -178,6 +210,7 @@ static int sc8280xp_platform_probe(struct platform_device *pdev)
  	if (!data)
  		return -ENOMEM;
  
@@ -16925,7 +16905,7 @@ index ed8b04c60..064e9f156 100644
  	card->dev = dev;
  	dev_set_drvdata(dev, card);
  	snd_soc_card_set_drvdata(card, data);
-@@ -185,23 +228,70 @@ static int sc8280xp_platform_probe(struct platform_device *pdev)
+@@ -185,23 +218,69 @@ static int sc8280xp_platform_probe(struct platform_device *pdev)
  	if (ret)
  		return ret;
  
@@ -16962,7 +16942,6 @@ index ed8b04c60..064e9f156 100644
 +static const struct sc8280xp_snd_match_data sm6450_data = {
 +	.driver_name = "sm6450",
 +	.mi2s_bclk_enable = true,
-+	.mi2s_s32 = true,
 +};
 +
 +static const struct sc8280xp_snd_match_data sm8450_data = {

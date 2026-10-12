@@ -1,13 +1,14 @@
 # Status
 
-Last updated: 2026-10-11. **The phone has run this port, but never a full
-system on our own kernel.** The downstream 5.10 kernel booted pmOS to a login
-on 2026-10-05 (see "The port boots"). The 6.18 mainline kernel has run in
-about eighty rounds since, none of them past the initramfs' debug shell. They
-brought up USB, the display, touch, the GPU, the DSPs and the sensors, but none
-went on into the rootfs' init. Every claim below carries its confidence and the
-basis for it, because that is the only thing standing between this port and a
-bricked phone.
+Last updated: 2026-10-11. **Our own kernel boots a full system: round 83
+took the 6.18 mainline kernel through OpenRC into Lomiri.** The downstream
+5.10 kernel booted pmOS to a login on 2026-10-05 (see "The port boots"). The
+mainline kernel then ran in about eighty rounds that stopped in the
+initramfs' debug shell, and brought up USB, the display, touch, the GPU, the
+DSPs and the sensors there. Rounds 82 and 83 put the Lomiri image on the
+card, ran Mesa on the GPU, and booted it. Every claim below carries its
+confidence and the basis for it, because that is the only thing standing
+between this port and a bricked phone.
 
 ## Confidence levels
 
@@ -1572,9 +1573,10 @@ as what it would have fixed.
   registered whether or not a host ever sees it. After that stage 2 waits in
   `debug_shell` for `/tmp/continue_boot`, which only a telnet session can
   create; without `pmos.debug-shell` it would wait 30 seconds for a root
-  partition that mainline cannot see, having no UFS, and then loop in
-  `fail_halt_boot`. Either way the init is alive and silent for ever, and
-  nothing of ours resets it.
+  partition that mainline could not then see, and then loop in
+  `fail_halt_boot`. That was round 18's kernel; mainline has driven UFS
+  since round 39 and read the card, as `mmcblk0`, since round 43. Either way
+  the init is alive and silent for ever, and nothing of ours resets it.
 
   So the likeliest reading of round 18 is Reasoned, not Verified: the init
   ran, the gadget never reached the host, and the phone sat still. A real
@@ -3930,6 +3932,77 @@ as what it would have fixed.
     nothing. If it is late, the helper restarts the ADSP at the cost of a
     few seconds without its charger and USB-C link. That boot has not
     happened yet.
+- **Round 82: the Lomiri image is on the card, and Mesa drives the GPU** —
+  Verified 2026-10-11, 23:00 to 23:21. Plan 20261011s put the OpenRC image
+  with `postmarketos-ui-lomiri` on the card from the debug shell, then ran
+  Mesa 26.2.4-r101 from it through a read-only chroot. drm/msm was in its
+  combined mode, without `msm.separate_gpu_kms=1`, so the GPU and the
+  display share `card0`, with `renderD128` beside it. The transcript is
+  `out/try-kernel/live-r82.txt`.
+  - **Verified:** `sdcard-install.sh --keep-table` pushed the 3886 MiB
+    image in 759 s, and `dd` wrote it at 5.1 MB/s with `dd_rc=0`. The card
+    then read back UUID `e931386d`, `e2fsck -fy` returned 0, and
+    `resize2fs` grew the filesystem to 4,194,304 blocks of 4 KiB, the whole
+    16 GiB of p1. The log region past 32 GiB was not touched.
+  - **Verified:** `eglinfo -B` reports vendor `freedreno`, renderer `FD710`,
+    OpenGL 4.6 core and compatibility, and OpenGL ES 3.2, on the GBM,
+    surfaceless and device platforms. Wayland and X11 fail, as they should
+    with no compositor running, and that is why it exits 2.
+  - **Verified:** the GPU loaded `a710_sqe.fw` and GMU firmware 4.0.7 on
+    the first open after the test copied them in, ran at 600 MHz, and
+    logged no fault, hang or recovery.
+  - **Verified:** kmscube set up EGL and GLES on FD710, then stopped at its
+    first frame with "user interrupted!". It reads any readable stdin as a
+    key press, and `/dev/null` always is. `out/tools/gpu-test.sh` now gives
+    it a FIFO that is never written. So no frame has been put on the panel
+    by the GPU yet.
+  - **Verified, and fixed:** `sdcard-install.sh` exited 143 after
+    "done", without its cleanup's last line. `set -e` holds in an EXIT
+    trap, and `wait` on the killed hold renewer returns 143. That left
+    this round's hold as the round wanted, but a hold the script made
+    itself would have stayed until its fifteen-minute lease ran out. The
+    renewer's last `sleep 120` also kept `tsh.py`'s pipe open for up to
+    two minutes after the script ended.
+- **Round 83: the first full boot on our kernel reaches Lomiri** —
+  Verified 2026-10-11, 23:21 to 23:27. `FULLBOOT=1`, the same kernel and
+  image as round 82, and no `pmos.debug-shell`. The transcript is
+  `out/try-kernel/live-r83.txt`, the card's `bootlog-card-20261011-232751.txt`.
+  - **Verified:** the initramfs mounted `mmcblk0p1` by its UUID at 6.6 s
+    and switched root, and sshd answered the host at about 20 s of uptime.
+    `sudo` worked with the image's password.
+  - **Verified:** OpenRC started everything in the boot and default
+    runlevels: among them `hexagonrpcd-adsp-sensorspd`, `sensorfw`,
+    `tinydm`, `elogind`, `dbus`, NetworkManager, bluetooth and sshd.
+  - **Verified:** `hexagonrpcd-adsp-fresh` found the ADSP up since 10 s at
+    13 s and left it alone, so hexagonrpcd came well inside the window
+    rounds 78 to 81 measured. Whether sensorfw then saw the 32 sensors was
+    not asked.
+  - **Verified:** tinydm logged `user` in and ran `start_lomiri`. Mir 2.28
+    took DSI-1 at 1080x2520, 59.99 Hz, 61x141 mm, through its KMS
+    platforms, and Lomiri started in its full-greeter mode, with its
+    indicators, telephony service and PipeWire. The GPU loaded its
+    firmware from the rootfs at 19.0 s, at Mir's first open, and logged no
+    fault. Nobody was at the phone, so what the panel showed is not known.
+  - **Verified:** USB came through the ADSP's boot: the role went to none
+    and back at 11.5 s, and the PHY was brought up again at 13.1 s with
+    the gadget reconnected.
+  - **Verified:** 7305 MiB of memory, 361 MiB of it in use, 10957 MiB of
+    zram swap, and 2.8 GiB used of the 15.7 GiB root.
+  - **Verified:** the keep hook ran, but logged only "kept /bin /sbin
+    /proc". Its fresh sysfs and devtmpfs mounts failed with EBUSY, so the
+    switch took the only `/sys` and `/dev` there were. The card log stops
+    at the switch in all seven attempts, and the jobs cannot see the UDC,
+    so a hold lapses 90 s after it is made. The hold itself went through
+    `/proc/147/root`. The hook now binds `/sys` and `/dev` onto
+    themselves instead; see "The loop past switch_root".
+  - **Verified, by its timing:** the queue took the phone from the full
+    boot to stock Android in 4.5 minutes, seven attempts about 40 s apart.
+    Only the ssh kick resets a boot that fast; the log hook's backup is at
+    500 s.
+  - **Verified:** Bluetooth's WCN3991 asks for `qca/crbtfw32.tlv`, which
+    the image does not have. `hfd-service`, Lomiri's haptics, makes binder
+    calls for an Android HAL that is not there and fails them, which is
+    harmless. The clock reads 1970, as there is no RTC driver yet.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -4050,17 +4123,18 @@ as what it would have fixed.
   `distrobox enter pmport -- ./scripts/pmb -q shutdown` before it. The script
   then calls `shutdown` itself a second time, after `mkinitfs`, for the same
   reason.
-- **The card is written from the debug shell, over the cable** — Written and
-  guarded, not yet run against the phone. `scripts/sdcard-install.sh` serves
-  the image over HTTP bound to the USB address alone - not `0.0.0.0`, which
-  would also publish it to the wireless network - and has the phone pull it
-  straight into `dd`, staging nothing, since the image is larger than the
-  phone's RAM. The write runs under `setsid` with its output in a file and is
-  polled over short telnet connections, because `scripts/telnet.py` stops
-  reading two seconds after its piped input ends and a dropped session would
-  otherwise take `dd` with it. It refuses any target that is not
-  `/dev/mmcblkN`, refuses a card smaller than the image, and does nothing at
-  all without `--yes`.
+- **The card is written from the debug shell, over the cable** — Verified
+  2026-10-05; see "The card, after the write". `scripts/sdcard-install.sh`
+  has `nc` on the phone listen on the USB address and pipe straight into
+  `dd`, and pushes the image to it from the host, staging nothing, since the
+  image is larger than the phone's RAM. It started as an HTTP pull with
+  busybox `wget`, and its header comment still says so. The write runs under
+  `setsid` with its output in a file and is polled over short telnet
+  connections, because `scripts/telnet.py` stops reading two seconds after
+  its piped input ends and a dropped session would otherwise take `dd` with
+  it. It refuses any target that is not `/dev/mmcblkN`, refuses a card
+  smaller than the image, and does nothing at all without `--yes`.
+  `--keep-table` is in "The loop past switch_root".
 
 ## The initramfs and the debug shell
 
@@ -4584,6 +4658,105 @@ for it. This is now a two-minute step instead of an eleven-minute one.
   the moment telnet answers makes it about twenty-six seconds. Four resets took
   the phone from a probe shell to stock Android in two minutes.
 
+### The loop past switch_root
+
+Until 2026-10-11 every mainline round stopped in the debug shell, and the
+loop was built around that: a telnet shell to run commands in, and jobs in
+the initramfs to log the boot to the card and reset the phone when nobody
+holds it. A boot that goes on into the rootfs loses all three, so commit
+2750b73 rebuilt each for it. Round 83, the first `FULLBOOT=1` round, ran it;
+each entry says how much of it held.
+
+- **switch_root takes the jobs' tools and their /proc away** — Verified by
+  reading the initramfs. Its `switch_root` is util-linux 2.42.4, not
+  busybox's. It moves the mounts at `/dev`, `/proc`, `/sys` and `/run` into
+  the new root, then deletes everything on the initramfs that is not a
+  mount. On this merged-usr ramdisk that is busybox, the musl loader, and
+  `/bin`, `/sbin` and `/lib`, which are symlinks into `/usr`. The jobs
+  outlive the switch, because `init_2nd.sh` kills only `udevd`, `syslogd`,
+  `unudhcpd` and every `sh`, and theirs are named `init`. But from then on
+  each command they run fails, and so does each read of `/proc` or `/sys`
+  and each write to the card.
+- **A hook keeps them working** — Half verified by round 83, and the other
+  half fixed and Reasoned. `scripts/bootlog.py` now adds
+  `hooks-cleanup/99-pdx246-keep.sh`, which runs just before the switch.
+  In round 83 the tools and `/proc` came through, and `/sys` and `/dev`
+  did not; the third point below says why, and what replaced it.
+  - It puts a static busybox and its applet links on a tmpfs at `/pmkeep`.
+    The jobs' root is still the initramfs after the switch, so that tmpfs
+    stays theirs.
+  - It turns `/bin` and `/sbin` into directories and mounts that tmpfs on
+    them. `/usr/bin` is left alone, because the rest of `init_2nd.sh` needs
+    `switch_root` from it.
+  - It stacks a second mount on `/proc`, `/sys` and `/dev`. `switch_root`
+    moves the top one at each path, and the jobs keep the ones underneath,
+    configfs and debugfs included. `/proc` gets a fresh proc. `/sys` and
+    `/dev` get recursive binds of themselves, because a fresh sysfs or
+    devtmpfs is the same superblock, and the kernel refuses to mount a
+    superblock where it is already the top mount ("Refuse the same
+    filesystem on the same mount point", `do_add_mount()`). Round 83's
+    fresh ones failed that way, with EBUSY.
+  - Verified off the device, in a user namespace: moving a path with two
+    mounts stacked on it moves only the top one, and with recursive binds
+    both sides keep their submounts.
+  - The busybox is Alpine's `busybox-static-1.38.0-r7`, the initramfs' own
+    version, checked against the APKINDEX's checksum. It lives in `out/`,
+    which is not in git; the comment above `KEEP_SH` says where it came from.
+- **The host holds a booted system through the jobs' root** — Verified
+  by round 83, which held through `/proc/147/root`. Until the jobs see the
+  UDC again, which the bind fix is for, such a hold lapses after 90 s.
+  `/pmhold` and the jobs' other files are deleted at the switch, and the
+  log hook's backup reset comes back at 500 s of uptime. The jobs still see
+  the old root, and from the new one it can be reached as
+  `/proc/<pid>/root`. `scripts/ssh.py` runs commands as root through sudo,
+  finds the first such root that has `/pmkeep/bin/busybox`, and touches
+  `pmhold` in it the way `tsh.py` touches `/pmhold`. Its `@hold` creates the
+  hold, and retries six times 10 s apart, because the ADSP's boot drops the
+  USB link for a few seconds.
+- **`FULLBOOT=1` makes a round a full boot** — Verified by round 83.
+  `try-kernel.sh` takes `pmos.debug-shell` off the command line, waits up
+  to `SSH_WAIT` seconds for sshd on 172.16.42.1:22, and runs the round's
+  commands over ssh with an `@hold` in front. The transcript has anything
+  twelve characters or longer of digits and capitals redacted, as the
+  harvest does.
+- **The queue resets a booted system over ssh** — Verified by round 83's
+  timing: seven full boots about 40 s apart, from the round's end to stock
+  Android in 4.5 minutes. With no telnet after the switch, `kick_gadget`
+  in `scripts/queue.sh` sends sysrq b through `ssh.py` and sudo when port
+  22 answers and 23 does not. So each of the seven or so attempts that
+  burn the retry counter down to the stock slot ends quickly.
+- **A full boot writes nothing to UFS that we know of** — Reasoned, read
+  out of the image before round 83.
+  - The image has no rmtfs, udisks2, ModemManager or automounter.
+  - Its swap file is on the root filesystem, `local.d` is empty, and no
+    udev rule writes to a disk.
+  - busybox's `watchdog` service is in no runlevel, so nothing opens
+    `/dev/watchdog0`.
+  - `mount_subpartitions` in the initramfs only reads, and looks for loop
+    partitions only while the root has not been found. With
+    `pmos_root_uuid=` on the command line and the card in, `blkid --uuid`
+    finds the root first.
+- **postmarketos-mkinitfs 2.12.0 writes a zstd ramdisk** — Verified, magic
+  `28 b5 2f fd`. Earlier ones were gzip. The kernel takes both
+  (`CONFIG_RD_GZIP=y`, `CONFIG_RD_ZSTD=y`), and `bootlog.py` now reads
+  either and writes gzip. `verify-bootimg.py` still reads only gzip; the
+  loop does not use it.
+- **`sdcard-install.sh --keep-table` writes into the card's existing
+  partition** — Verified by round 82.
+  - It finds the card on the phone by `device/type` reading `SD`, and
+    insists on exactly one.
+  - It checks that p1 exists, is at least as large as the image, and ends
+    before the log region at 32 GiB. A new partition table makes p1 1 MiB
+    to 16 GiB.
+  - After the write it sets the phone's clock from the host, runs
+    `e2fsck -fy` (0 or 1 is fine, anything else stops it), and then
+    `resize2fs`, which only warns if it fails. Stage 2 also runs
+    `e2fsck -p` and `resize2fs` on every boot (`resize_root_filesystem`
+    in `init_functions_2nd.sh`), but with the phone's clock near the epoch
+    its `resize2fs` can refuse, as "The card, after the write" found. So
+    the resize that counts is this one, and stage 2's has nothing left to
+    do.
+
 ## Known gaps
 
 - **Display.** On the mainline kernel it is in-tree drivers only: drm/msm's
@@ -4865,5 +5038,11 @@ port boots" above. What is left starts from there.
    libssc, as long as hexagonrpcd attaches within 25 s or so of the ADSP
    booting (rounds 78 to 81). The firmware is packaged. Device pkgrel 5
    starts hexagonrpcd at boot, and pkgrel 6 restarts the ADSP first if it
-   has been up too long, which round 81 tried in the debug shell. What is
-   left is the image itself.
+   has been up too long, which round 81 tried in the debug shell.
+
+   Round 82 put the Lomiri image on the card and ran Mesa from it:
+   freedreno reports FD710 with OpenGL 4.6 and ES 3.2. Round 83 booted it,
+   on our own kernel, through OpenRC to Lomiri on the panel's output, with
+   the sensors services started and sshd answering at 20 s. What is left
+   here: a look at the screen, the sensors as Lomiri sees them, Bluetooth's
+   firmware, and a clock.

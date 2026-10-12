@@ -1,0 +1,123 @@
+From 421d574aa9c537b2382e47a94fcc0c8a315e127f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 18:34:56 -0300
+Subject: [PATCH] tests: Open and release services by UID
+
+Add -o, which registers as a client, opens each UID given and releases it
+at once. It tells which services a client can reach without loading or
+invoking anything.
+---
+ tests/CMakeLists.txt  |  1 +
+ tests/main.c          | 12 ++++++++++--
+ tests/services.c      | 43 +++++++++++++++++++++++++++++++++++++++++++
+ tests/tests_private.h |  3 +++
+ 4 files changed, 57 insertions(+), 2 deletions(-)
+ create mode 100644 tests/services.c
+
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index ab45f69..98ec02a 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -13,6 +13,7 @@ set(SRC
+ 	common.c
+ 	diagnostics.c
+ 	ta_load.c
++	services.c
+ 	main.c
+ )
+ 
+diff --git a/tests/main.c b/tests/main.c
+index d313258..7caf919 100644
+--- a/tests/main.c
++++ b/tests/main.c
+@@ -11,16 +11,24 @@ static void usage(char *name)
+ 	       "\t-d - Run the TZ diagnostics test that prints basic info on TZ heaps.\n"
+ 	       "\t-l - Load the test TA and send command.\n"
+ 	       "\t\t%s -l <path to TA binary> <buffer vs. memory object> <command>\n"
++	       "\t-o - Open each service and release it at once.\n"
++	       "\t\t%s -o <UID> [<UID> ...]\n"
+ 	       "\t-h - Print this help message and exit\n\n",
+-	       name);
++	       name, name);
+ }
+ 
+ int main(int argc, char *argv[])
+ {
+-	switch (getopt(argc, argv, "dlh")) {
++	switch (getopt(argc, argv, "dloh")) {
+ 	case 'd':
+ 		test_print_diagnostics_info();
+ 		break;
++	case 'o':
++		if (argc < 3)
++			goto help;
++
++		test_open_services(argc - 2, &argv[2]);
++		break;
+ 	case 'l':
+ 		if (argc != 5)
+ 			goto help;
+diff --git a/tests/services.c b/tests/services.c
+new file mode 100644
+index 0000000..7056f5c
+--- /dev/null
++++ b/tests/services.c
+@@ -0,0 +1,43 @@
++// SPDX-License-Identifier: BSD-3-Clause
++
++#include "tests_private.h"
++
++/*
++ * Open each service in turn and release it at once. Nothing is loaded and
++ * no service is invoked, so this only asks QTEE which UIDs this client may
++ * reach.
++ */
++void test_open_services(int count, char *uids[])
++{
++	struct qcomtee_object *root, *client_env_object, *service_object;
++	unsigned long value;
++	uint32_t uid;
++	int i;
++
++	MSG("Starting test_open_services\n");
++
++	/* Get root + supplicant. */
++	root = test_get_root();
++	if (root == QCOMTEE_OBJECT_NULL)
++		return;
++
++	client_env_object = test_get_client_env_object(root);
++	if (client_env_object == QCOMTEE_OBJECT_NULL)
++		goto dec_root_object;
++
++	for (i = 0; i < count; i++) {
++		value = strtoul(uids[i], NULL, 0);
++		uid = value;
++
++		service_object = test_get_service_object(client_env_object, uid);
++		if (service_object == QCOMTEE_OBJECT_NULL)
++			continue;
++
++		qcomtee_object_refs_dec(service_object);
++		MSG_INFO("Released object (UID = %u)\n", uid);
++	}
++
++	qcomtee_object_refs_dec(client_env_object);
++dec_root_object:
++	qcomtee_object_refs_dec(root);
++}
+diff --git a/tests/tests_private.h b/tests/tests_private.h
+index fa1b57a..a1fc89c 100644
+--- a/tests/tests_private.h
++++ b/tests/tests_private.h
+@@ -62,4 +62,7 @@ void test_print_diagnostics_info(void);
+ 
+ void test_load_sample_ta(const char *pathname, int use_mo, int cmd);
+ 
++/* services.c. */
++void test_open_services(int count, char *uids[]);
++
+ #endif // _TESTS_PRIVATE_H
+-- 
+2.55.0
+

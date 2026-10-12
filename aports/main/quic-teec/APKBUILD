@@ -1,0 +1,44 @@
+# Maintainer: Bruno Gregório <accounts@bruno.pw>
+#
+# Qualcomm's client library for the mainline qcomtee driver, and its test
+# client, for the Xperia 10 VI's fingerprint work. The patch adds -o to the
+# test client, which opens services by UID and releases them at once, to
+# find out what this phone's QTEE lets a Linux client reach.
+pkgname=quic-teec
+pkgver=1.0.2
+pkgrel=0
+pkgdesc="Qualcomm TEE client library (libqcomtee)"
+url="https://github.com/quic/quic-teec"
+arch="aarch64"
+license="BSD-3-Clause"
+makedepends="cmake samurai libcbor-dev linux-headers"
+subpackages="$pkgname-dev $pkgname-tests"
+source="$pkgname-$pkgver.tar.gz::https://github.com/quic/quic-teec/archive/refs/tags/v$pkgver.tar.gz
+	0001-tests-Open-and-release-services-by-UID.patch
+	"
+# The tests need the phone's QTEE.
+options="!check"
+
+build() {
+	cmake -B build -G Ninja \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_BUILD_TYPE=None \
+		-DBUILD_SHARED_LIBS=ON \
+		-DBUILD_UNITTEST=ON
+	cmake --build build
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+	install -Dm755 build/tests/qcomteetest "$pkgdir"/usr/bin/qcomteetest
+}
+
+tests() {
+	pkgdesc="$pkgdesc (test client)"
+
+	amove usr/bin/qcomteetest
+}
+sha512sums="
+2960a5030780f85e9cce2ef56fda081520cecec87dce7c7f5d575fa07fa46feec9fb3794a0c2d9f916f70afaf9d0ea4302419543d51c1bbefa160e81f969b605  quic-teec-1.0.2.tar.gz
+0dfc8328de38bc34bff2f32a1122b2654cdb2b48261b8fc6398f01f6519203ff1ba3bd75f7a8bab3678d7cf8a5922dc3720d663eaaa0bcad037aa4948f67a35b  0001-tests-Open-and-release-services-by-UID.patch
+"

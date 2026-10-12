@@ -56,3 +56,4 @@ arm64: dts: qcom: Add Sony Xperia 10 VI
 dt-bindings: soc: qcom: Add SMP2P sleep state
 soc: qcom: Add SMP2P sleep state driver
 arm64: dts: qcom: sm6450: Add the ADSP sleep state
+remoteproc: qcom: pas: Boot the SM6450 WPSS at probe

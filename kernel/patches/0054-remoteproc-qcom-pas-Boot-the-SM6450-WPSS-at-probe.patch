@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 06:53:34 -0300
+Subject: [PATCH] remoteproc: qcom: pas: Boot the SM6450 WPSS at probe
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The WLAN on SM6450 is the WCN3990-class core running in the WPSS, and
+its driver is ath10k_snoc. SC7280's WPSS, which SM6450's otherwise
+matches, leaves auto_boot off because ath11k boots it through its
+qcom,rproc phandle. ath10k has no such link, so on SM6450 nothing boots
+the WPSS and the WLAN never appears.
+
+Give SM6450 its own data, equal to SC7280's except that the remote
+processor is booted when it is registered.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/remoteproc/qcom_q6v5_pas.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/drivers/remoteproc/qcom_q6v5_pas.c b/drivers/remoteproc/qcom_q6v5_pas.c
+index 8c59eac9b..e76cec62c 100644
+--- a/drivers/remoteproc/qcom_q6v5_pas.c
++++ b/drivers/remoteproc/qcom_q6v5_pas.c
+@@ -1380,6 +1380,27 @@ static const struct qcom_pas_data sc7280_wpss_resource = {
+ 	.ssctl_id = 0x19,
+ };
+ 
++/*
++ * SM6450's WLAN is the WCN3990-class core in the WPSS, driven by ath10k_snoc,
++ * which, unlike ath11k on SC7280, does not boot the WPSS itself.
++ */
++static const struct qcom_pas_data sm6450_wpss_resource = {
++	.crash_reason_smem = 626,
++	.firmware_name = "wpss.mdt",
++	.pas_id = 6,
++	.minidump_id = 4,
++	.auto_boot = true,
++	.proxy_pd_names = (char*[]){
++		"cx",
++		"mx",
++		NULL
++	},
++	.load_state = "wpss",
++	.ssr_name = "wpss",
++	.sysmon_name = "wpss",
++	.ssctl_id = 0x19,
++};
++
+ static const struct qcom_pas_data sm8650_cdsp_resource = {
+ 	.crash_reason_smem = 601,
+ 	.firmware_name = "cdsp.mdt",
+@@ -1501,6 +1522,7 @@ static const struct of_device_id qcom_pas_of_match[] = {
+ 	{ .compatible = "qcom,sm6375-adsp-pas", .data = &sm6350_adsp_resource},
+ 	{ .compatible = "qcom,sm6375-cdsp-pas", .data = &sm8150_cdsp_resource},
+ 	{ .compatible = "qcom,sm6375-mpss-pas", .data = &sm6375_mpss_resource},
++	{ .compatible = "qcom,sm6450-wpss-pas", .data = &sm6450_wpss_resource},
+ 	{ .compatible = "qcom,sm8150-adsp-pas", .data = &sm8150_adsp_resource},
+ 	{ .compatible = "qcom,sm8150-cdsp-pas", .data = &sm8150_cdsp_resource},
+ 	{ .compatible = "qcom,sm8150-mpss-pas", .data = &mpss_resource_init},

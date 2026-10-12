@@ -4716,6 +4716,38 @@ as what it would have fixed.
   - The session's source had Mic3 as its active port, not Mic1.
     - Guess: the user picked it in the settings while testing; the
       sound server keeps that choice.
+- **Both speakers** — plan 20261012r, 2026-10-12, a stay-up boot at 12:42
+  of kernel pkgrel 30 and device pkgrel 13. The transcript is
+  `out/try-kernel/live-stayup-audio9.txt`.
+  - **Verified, the second amplifier is an AW88263 too:** stock's
+    `aw882xx_smartpa@34` on `i2c@988000` (reset GPIO 27,
+    `sound-channel = <1>`) is now described on our I2C2, and both
+    `0-0034` and `1-0034` bound to the AW88263 driver, which refuses any
+    other chip ID. The card formed with a Top and a Bottom volume, both at
+    the boot sequence's 336.
+  - **Verified, the vendor ACF covers both:** its four entries are profiles
+    0 and 10 for device index 0 and again for index 1, matched by
+    `awinic,audio-channel`, with no bus or address of their own.
+  - **Verified, the bottom speaker plays the right channel:** with the
+    ADCs at step 12 and a 1 kHz tone on one channel of the speaker PCM, the
+    left channel read 314 in the top microphone (AMIC3) and 35 in the
+    bottom one (AMIC1); the right channel read 267 in the bottom one and
+    124 in the top one.
+  - **Verified, I2C2 runs in FIFO mode:** stock marks the bus `qcom,shared`
+    and logs "Multi-EE usecase" for it, driving it through GPI DMA. Pkgrel
+    30 describes QUP0's GPI DMA engine (`900000.dma-controller`, the vendor
+    tree's channel mask 0x3f and SMMU stream 0x176), which probed, but no
+    channel was taken and I2C2's own interrupt fired 1560 times: its FIFO
+    is open.
+    - Reasoned: whatever else shares the bus is idle here; nothing on
+      the boot logged an I2C error.
+  - **Verified, the session:** greet.py's login brought up Phosh with
+    phosh-osk-stevia, the user's PulseAudio took the card 9 s later and the
+    greeter's left 18 s after that. Its source was Mic3, mono, at 100%,
+    which is ADC step 20. A tone played to the default sink read 532.7 in
+    it. Plan 20261012q's session read 12.55, through Mic1 in stereo at
+    step 12 with one speaker, so the two are not one change's measure.
+  - The ADSP did not crash and nothing oopsed.
 - **boot-deploy's v4 path builds the images the way this port needs** —
   Verified. boot-deploy 0.24.0 `generate_bootimg()`: for `header_version` 3 or
   4 it calls `mkbootimg --header_version 4 --dtb "$_dtb" --kernel ...
@@ -5511,10 +5543,11 @@ each entry says how much of it held.
   redistributable, and firmware-sony-pdx246 packages it for this phone
   only.
 - **What sound still lacks.**
-  - The second speaker. Stock has a second AW882xx amplifier, at 0x34 on
-    QUP0's I2C2 (`i2c@988000`), with its reset on GPIO 27 and
-    `sound-channel = <1>` (Verified: live.dts). Only the first, on I2C0,
-    is described, so only that speaker plays.
+  - Speaker protection. Both amplifiers run 6 dB under stock's profiles
+    because nothing watches the speakers' temperature or excursion.
+    - Reasoned: stock does that on the ADSP; its amplifier nodes name
+      ADSP ports and topologies (`aw-rx-topo-id`, `aw-tx-topo-id`) and a
+      calibration mode.
   - A headset. The headphone path, the headset microphone and the
     buttons are described, but nothing has been plugged in.
   - A true capture volume scale. Since device pkgrel 12 the sound server

@@ -70,7 +70,7 @@ WORK="$ROOT/out/try-kernel"
 # chose the kernel subpackage, so it is also what decided which device tree
 # boot-deploy put in vendor_boot. The two need opposite handling below.
 KERNEL=$(sed -n 's/^kernel *= *//p' "$ROOT/.pmb/pmbootstrap_v3.cfg" | head -1)
-KERNEL=${KERNEL:-downstream}
+KERNEL=${KERNEL:-mainline}
 MAINLINE_DTB="qcom/sm6450-sony-xperia-columbia-pdx246.dtb"
 
 # DTB=path overrides the tree that goes into vendor_boot, for bisection.
@@ -202,7 +202,7 @@ build_vendor_boot() {
 		FULLBOOT=1
 		BOOTLOG=0
 		MARKS=""
-		[ "${STAGE:-0}${DEVPROBE:-0}${WDTPROBE:-0}${PROBE:-0}" = 0000 ] \
+		[ "${STAGE:-0}${PROBE:-0}" = 00 ] \
 			|| die "STAYUP=1 boots the real init, not a probe"
 	fi
 	[ -f "$BOOT/vendor_boot.img" ] || die "missing $BOOT/vendor_boot.img - run 'pmb install' first"
@@ -212,22 +212,20 @@ build_vendor_boot() {
 		# Sony's describes downstream compatibles no mainline driver matches,
 		# so carrying it here would boot a kernel that probes nothing.
 		#
-		# It does need the two bootloader properties stamped on, or the boot
-		# chain will not select it out of the dtb area at all. They are not
-		# device tree and do not belong in the source; see
-		# scripts/dtb-stamp-ids.py, which stamps for the strict matcher the
-		# appended path uses rather than the lenient one stock takes.
+		# The boot chain selects it out of the dtb area only by its
+		# qcom,msm-id and qcom,board-id, which the board's bring-up commit
+		# adds; a tree without them is never booted.
 		dtb="${DTB:-$BOOT/dtbs/$MAINLINE_DTB}"
 		[ -f "$dtb" ] || die "missing $dtb - is linux-postmarketos-qcom-sm6450 installed in the rootfs?"
+		grep -q 'qcom,board-id' "$dtb" \
+			|| die "$dtb has no bootloader ids, so the bootloader would never pick it"
 		# An if, not a &&: under set -e a trailing && that tests false is
 		# the whole statement's exit status, and the script would abort
 		# every time DTB was unset, which is most of the time.
 		if [ -n "${DTB:-}" ]; then
 			say "using the device tree named by DTB, not the package's"
 		fi
-		say "stamping the bootloader ids onto our own device tree"
-		"$ROOT/scripts/dtb-stamp-ids.py" "$dtb" "$WORK/pdx246-stamped.dtb"
-		"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$WORK/pdx246-stamped.dtb"
+		"$ROOT/scripts/swap-vendor-dtb.py" "$BOOT/vendor_boot.img" "$WORK/vendor_boot.img" "$dtb"
 	else
 		# Sony's device trees, because our downstream base does not define the
 		# labels the dtbo overlays reference and the bootloader rejects the
@@ -250,26 +248,6 @@ build_vendor_boot() {
 		say "STAGE=1: replacing /init with the staged module probe"
 		"$ROOT/scripts/bootlog.py" stage "$WORK/vendor_boot.img" "$WORK/vendor_boot-stage.img"
 		mv "$WORK/vendor_boot-stage.img" "$WORK/vendor_boot.img"
-	elif [ "${DEVPROBE:-0}" = "1" ]; then
-		# Answers "how far did the devices this port waits on get?":
-		# whether qcom_scm bound and registered the Gunyah watchdog, and
-		# whether the SMMU, the dwc3 core and the SD controller bound.
-		# The same length-of-attempt channel as WDTPROBE, decoded with
-		#   bootlog.py devdecode <total>
-		say "DEVPROBE=1: replacing /init with the device probe"
-		"$ROOT/scripts/bootlog.py" devprobe "$WORK/vendor_boot.img" "$WORK/vendor_boot-d.img"
-		mv "$WORK/vendor_boot-d.img" "$WORK/vendor_boot.img"
-	elif [ "${WDTPROBE:-0}" = "1" ]; then
-		# Answers "does the Gunyah watchdog reset a hung kernel?", which
-		# has to be yes before a round can be left to run unattended:
-		# without it every hang waits for someone to hold the buttons.
-		# The /init lets the kernel feed it, then starves it, and each
-		# attempt's length says what happened:
-		#   bootlog.py wdtdecode <total>
-		say "WDTPROBE=1: replacing /init with the Gunyah watchdog probe"
-		"$ROOT/scripts/bootlog.py" wdtprobe "$WORK/vendor_boot.img" "$WORK/vendor_boot-w.img"
-		mv "$WORK/vendor_boot-w.img" "$WORK/vendor_boot.img"
-		CMDLINE_ADD="gunyah_wdt.start_at_boot=1 ${CMDLINE_ADD:-}"
 	elif [ "${PROBE:-0}" = "1" ]; then
 		# Answers "does the initramfs run at all?" using the retry
 		# counter as the only output channel: an init that reboots on

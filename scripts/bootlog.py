@@ -35,10 +35,6 @@ catches a later hang rather than only a panic.
 
   bootlog.py install <vendor_boot-in> <vendor_boot-out>
   bootlog.py probe   <vendor_boot-in> <vendor_boot-out>
-  bootlog.py wdtprobe <vendor_boot-in> <vendor_boot-out>
-  bootlog.py wdtdecode <round-total-seconds>
-  bootlog.py devprobe <vendor_boot-in> <vendor_boot-out>
-  bootlog.py devdecode <round-total-seconds>
   bootlog.py stage   <vendor_boot-in> <vendor_boot-out> [skip-these-modules]
   bootlog.py marks   <vendor_boot-in> <vendor_boot-out> <table-out> <base> <scale> [panic-scale]
   bootlog.py markdecode <round-total-seconds> <base> <scale> [table]
@@ -699,113 +695,6 @@ PROBE_INIT = """#!/bin/busybox ash
 """ % PROBE_SLEEP
 
 
-# Tests the Gunyah watchdog, which with gunyah_wdt.start_at_boot=1 is what
-# resets a kernel that hangs, and without which every hang has cost a person
-# holding the buttons. It can only be trusted with that once a round has seen
-# it fed and seen it bite, so this /init does both and nothing else, and lets
-# the length of each attempt say what happened. Every outcome but one ends in
-# a reset, so the round falls back to stock on its own; the exception is a
-# bite that does not reset the board, and that is the thing being asked.
-#
-# Per attempt, after the ~13 s the bootloader and kernel take to reach /init:
-#   5 s     no /dev/watchdog0: the driver never registered
-#   ~31 s   bitten during the 50 s wait: the kernel does not feed it
-#   82 s    fed for 50 s, then starved, then bitten 32 s later: it works
-#   150 s   starved and never bitten, so reboot(2) did it: it does not reset
-# bootlog.py wdtdecode turns a round total back into one of these.
-WDTPROBE_WAIT = 50
-WDTPROBE_STARVE = 100
-WDTPROBE_INIT = """#!/bin/busybox ash
-# Gunyah watchdog probe, written by scripts/bootlog.py. Not a real init.
-/bin/busybox mkdir -p /dev
-/bin/busybox mount -t devtmpfs devtmpfs /dev
-if [ ! -e /dev/watchdog0 ]; then
-	/bin/busybox sleep 5
-	/bin/busybox reboot -f
-fi
-# The kernel feeds it until someone opens it. Outlive its 32 s timeout.
-/bin/busybox sleep %d
-# Then take it over and never write to it.
-exec 3> /dev/watchdog0
-/bin/busybox sleep %d
-# Still here, so the bite did not reset the board.
-/bin/busybox reboot -f
-/bin/busybox sleep 120
-/bin/busybox reboot -f
-""" % (WDTPROBE_WAIT, WDTPROBE_STARVE)
-
-
-# A /init that reports which of the devices this port is waiting on have
-# bound, through the length of each attempt alone - the same channel as the
-# watchdog probe, for the same reason: it needs no USB, no card and no log.
-# The Gunyah watchdog probe found no /dev/watchdog0 both without an SCM node
-# and with one, and that leaves four places it could have stopped, plus the
-# question of whether SCM let the SMMU, and so USB and the card, probe.
-#
-# It waits DEVPROBE_SETTLE seconds first, because deferred probing runs out
-# ten seconds after the last driver registers and nothing loads modules here.
-# Then it sleeps DEVPROBE_STEP seconds for every unit of
-#
-#   8 * qcom_scm's state + the bound devices
-#
-# where the state is
-#   0  no firmware:scm device at all
-#   1  the device exists and is waiting in devices_deferred
-#   2  the device exists, is not deferred, and did not bind: probe failed
-#   3  qcom_scm bound, but registered no gunyah-wdt device - the
-#      hypervisor UUID check said this is not Gunyah
-#   4  a gunyah-wdt device, but no /dev/watchdog0: its probe failed
-#   5  /dev/watchdog0 exists
-# and the bound devices add
-#   1  the apps SMMU, 15000000.iommu
-#   2  the dwc3 core, a600000.usb
-#   4  the SD controller, 8804000.mmc
-# bootlog.py devdecode reads a round total back into both.
-DEVPROBE_SETTLE = 25
-DEVPROBE_STEP = 4
-DEVPROBE_INIT = """#!/bin/busybox ash
-# Device probe, written by scripts/bootlog.py. Not a real init.
-B=/bin/busybox
-$B mkdir -p /dev /sys /proc
-$B mount -t devtmpfs devtmpfs /dev
-$B mount -t sysfs sysfs /sys
-$B mount -t proc proc /proc
-$B mount -t debugfs debugfs /sys/kernel/debug
-$B sleep %d
-P=/sys/bus/platform/devices
-s=0
-if [ -e $P/firmware:scm ]; then
-	s=1
-	if [ -e $P/firmware:scm/driver ]; then
-		s=3
-	elif ! $B grep -q '^firmware:scm' /sys/kernel/debug/devices_deferred 2>/dev/null; then
-		s=2
-	fi
-fi
-if [ "$s" = 3 ] && [ -e $P/gunyah-wdt ]; then
-	s=4
-	[ -e /dev/watchdog0 ] && s=5
-fi
-b=0
-[ -e $P/15000000.iommu/driver ] && b=$((b + 1))
-[ -e $P/a600000.usb/driver ] && b=$((b + 2))
-[ -e $P/8804000.mmc/driver ] && b=$((b + 4))
-$B sleep $(( (s * 8 + b) * %d ))
-$B reboot -f
-$B sleep 120
-$B reboot -f
-""" % (DEVPROBE_SETTLE, DEVPROBE_STEP)
-
-DEVPROBE_STATES = [
-    "no firmware:scm device at all",
-    "firmware:scm deferred",
-    "firmware:scm probe failed",
-    "qcom_scm bound, no gunyah-wdt device (the hypervisor UUID check failed)",
-    "gunyah-wdt device, no /dev/watchdog0 (its probe failed)",
-    "/dev/watchdog0 present",
-]
-
-
 def _replace_init(src, dst, text, what):
     d = open(src, "rb").read()
     s = sections(d)
@@ -831,68 +720,6 @@ def _replace_init(src, dst, text, what):
 def probe(src, dst):
     """Rebuild a vendor_boot whose /init only reboots."""
     _replace_init(src, dst, PROBE_INIT, "reboot probe")
-
-
-def wdtprobe(src, dst):
-    """Rebuild a vendor_boot whose /init tests the Gunyah watchdog."""
-    _replace_init(src, dst, WDTPROBE_INIT, "Gunyah watchdog probe")
-
-
-def devprobe(src, dst):
-    """Rebuild a vendor_boot whose /init reports which devices bound."""
-    _replace_init(src, dst, DEVPROBE_INIT, "device probe")
-
-
-def devdecode(total):
-    """Read a devprobe round's total back into what bound."""
-    pre = 13.34
-    per = (total - 30) / 7
-    x = (per - pre - DEVPROBE_SETTLE) / DEVPROBE_STEP
-    code = max(0, round(x))
-    print(f"  {total:.0f} s total, {per:.1f} s an attempt,"
-          f" {x:.2f} units of {DEVPROBE_STEP} s after the settle")
-    odd = x < -1.5 or abs(x - round(x)) > 0.3
-    if odd:
-        print("  that is not a whole number of units: something else ended"
-              " these attempts, so read what follows with suspicion")
-    st, b = code // 8, code % 8
-    print(f"  qcom_scm: {DEVPROBE_STATES[st] if st < len(DEVPROBE_STATES) else f'state {st}?'}")
-    for bit, name in ((1, "apps SMMU"), (2, "dwc3 core"), (4, "SD controller")):
-        print(f"  {name}: {'bound' if b & bit else 'NOT bound'}")
-    # For scripts/queue.sh: the scm state and the bound bits, or "other".
-    print("verdict: other" if odd or st >= len(DEVPROBE_STATES)
-          else f"verdict: {st} {b}")
-
-
-def wdtdecode(total):
-    """Name the wdtprobe outcome a round's total in seconds fits best."""
-    # The same model as markdecode: seven attempts, then 30 s for the
-    # fallback boot to answer.
-    pre = 13.34
-    # The first word is a verdict for scripts/queue.sh to branch on.
-    cases = [
-        (5, "none", "no /dev/watchdog0: the driver never registered"),
-        (WDTPROBE_WAIT - 19, "unsafe", "bitten while the kernel should have"
-         " been feeding it: start_at_boot is not safe to use"),
-        (WDTPROBE_WAIT + 32, "works", "fed, then starved and bitten: the"
-         " watchdog works, and a hung kernel will now reset"),
-        (WDTPROBE_WAIT + WDTPROBE_STARVE, "nobite", "starved and never"
-         " bitten: it does not reset this board"),
-    ]
-    per = (total - 30) / 7
-    print(f"  {total:.0f} s total, {per:.1f} s an attempt,"
-          f" {per - pre:.1f} s of it after /init")
-    best = min(cases, key=lambda c: abs(per - pre - c[0]))
-    for case in cases:
-        mark = "->" if case == best else "  "
-        print(f"  {mark} {case[0]:4d} s  {case[2]}")
-    verdict = best[1]
-    if abs(per - pre - best[0]) > 15:
-        print("  no case fits within 15 s an attempt: something else"
-              " happened, such as a panic before /init (panic=60)")
-        verdict = "other"
-    print(f"verdict: {verdict}")
-
 
 
 # Modules held back from the first pass. The first pass exists to get the USB
@@ -1556,8 +1383,8 @@ def marks(src, dst, table, base, scale, pscale=1):
     and one round is enough, because the watchdog's own offset is known:
     markdecode reads the step straight off the round's total.
 
-    /proc/sys/kernel/panic gets pscale * k, the same instrument as the
-    kernel's pmos.milestone, for a kernel that dies instead. With
+    /proc/sys/kernel/panic gets pscale * k, for a kernel that dies instead
+    of an init that hangs. With
     nmi_watchdog=panic softlockup_panic=1 on the command line a lockup
     becomes a panic, and the timeout says which step was running. A lockup
     panic comes some unknown time after the hang, and that offset lands in
@@ -1959,14 +1786,6 @@ if __name__ == "__main__":
         install(a[1], a[2])
     elif len(a) == 3 and a[0] == "probe":
         probe(a[1], a[2])
-    elif len(a) == 3 and a[0] == "wdtprobe":
-        wdtprobe(a[1], a[2])
-    elif len(a) == 2 and a[0] == "wdtdecode":
-        wdtdecode(float(a[1]))
-    elif len(a) == 3 and a[0] == "devprobe":
-        devprobe(a[1], a[2])
-    elif len(a) == 2 and a[0] == "devdecode":
-        devdecode(float(a[1]))
     elif len(a) == 3 and a[0] == "usbquirk":
         usbquirk(a[1], a[2])
     elif len(a) == 4 and a[0] == "usbquirk" and a[3] == "--no-watchdog":

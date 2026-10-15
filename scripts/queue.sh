@@ -10,7 +10,7 @@
 #   ROUND_RESULT  fallback, gadget, fastboot, ours, nothing or failed - what
 #                 try-kernel's RESULT line said, or failed for no such line
 #   ROUND_TOTAL   seconds from the reboot into the round to the phone
-#                 answering, the number markdecode and wdtdecode read back
+#                 answering, the number markdecode reads back
 #
 # and `adopt NAME PID`, which does the same for a round already started by
 # hand into out/try-kernel/run-NAME.log, once process PID has exited.
@@ -203,19 +203,6 @@ adopt() {
 		command sleep 30
 	done
 	finish_round "$name"
-}
-
-# Branch helpers for plans.
-wdt_verdict() {
-	"$ROOT/scripts/bootlog.py" wdtdecode "$ROUND_TOTAL" 2>/dev/null \
-		| sed -n 's/^verdict: //p'
-}
-
-# "<scm state> <bound bits>" for a DEVPROBE round, or "other"; see
-# bootlog.py devdecode for what the numbers mean.
-dev_verdict() {
-	"$ROOT/scripts/bootlog.py" devdecode "$ROUND_TOTAL" 2>/dev/null \
-		| sed -n 's/^verdict: //p'
 }
 
 plan=$(mktemp "$WORK/.plan.XXXXXX")

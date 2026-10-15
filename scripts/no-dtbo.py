@@ -106,8 +106,8 @@ slots as they shipped, and scripts/try-kernel.sh --restore puts them back.
 
 One thing this moves rather than removes: the appended path uses the older LK
 matcher, platform_dt_absolute_match, which is strict where the scoring matcher
-was lenient. scripts/dtb-stamp-ids.py stamps for the strict one, and says
-which of its fields comes from where.
+was lenient. The ids our board file carries are written for the strict one;
+docs/06-mainline.md says which field comes from where.
 
 Format, for the record, from AOSP system/libufdt/utils/src/dt_table.h, all
 fields big-endian - this is the header being deliberately *not* written:

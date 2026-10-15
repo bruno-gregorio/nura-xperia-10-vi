@@ -11,12 +11,11 @@ properties decide whether our device tree is ever used.
 Accepts a bare .dtb, a concatenation of them (which is what Qualcomm ships in
 vendor_boot), or a vendor_boot image, whose dtb area is found from its header.
 
-scripts/dtb-stamp-ids.py is the other half of this pair: a mainline device tree
-carries none of these properties, because they describe the firmware's
-selection protocol rather than the hardware, so they are stamped on at flash
-time and checked back with this.
+Upstream does not allow these properties on a new SoC, so our board file gets
+them from a bring-up commit (kernel/bringup/); docs/06-mainline.md has the
+derivation of every value. Use this to check what a build or a flash produced.
 
-"Match" means one of two things and the difference decides what a stamp has to
+"Match" means one of two things and the difference decides what the ids have to
 say. With a readable dtbo partition ABL scores candidates and treats a zero
 field as a wildcard; without one it uses the older LK matcher, which wants
 every field exactly. The mainline kernel takes the second path on purpose - see

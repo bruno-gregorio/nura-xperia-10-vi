@@ -1,0 +1,129 @@
+From 1777385f70b73db22c9bf9332b4c14a9ba313fae Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 22:32:45 -0300
+Subject: [PATCH] software_isp: Reject clipped and near-black samples for white
+ balance
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../internal/software_isp/swisp_stats.h        |  8 ++++++++
+ src/ipa/simple/algorithms/awb.cpp              | 18 +++++++++++-------
+ src/libcamera/software_isp/swstats_cpu.cpp     | 14 ++++++++++++++
+ 3 files changed, 33 insertions(+), 7 deletions(-)
+
+diff --git a/include/libcamera/internal/software_isp/swisp_stats.h b/include/libcamera/internal/software_isp/swisp_stats.h
+index f9f4328..3fe9375 100644
+--- a/include/libcamera/internal/software_isp/swisp_stats.h
++++ b/include/libcamera/internal/software_isp/swisp_stats.h
+@@ -31,6 +31,14 @@ struct SwIspStats {
+ 	 * \brief Sums of colour channels of all the sampled pixels
+ 	 */
+ 	RGB<uint64_t> sum_;
++	/**
++	 * \brief Channel sums and sample count excluding clipped Bayer tiles
++	 *
++	 * Clipped highlights lose their illuminant ratios and must not drive AWB.
++	 * Sums use the same normalized 8-bit units as sum_.
++	 */
++	RGB<uint64_t> awbSum;
++	uint64_t awbCount;
+ 	/**
+ 	 * \brief Number of bins in the yHistogram
+ 	 */
+diff --git a/src/ipa/simple/algorithms/awb.cpp b/src/ipa/simple/algorithms/awb.cpp
+index 732f345..ae11dd6 100644
+--- a/src/ipa/simple/algorithms/awb.cpp
++++ b/src/ipa/simple/algorithms/awb.cpp
+@@ -94,7 +94,6 @@ void Awb::process(IPAContext &context,
+ 		  const SwIspStats *stats,
+ 		  ControlList &metadata)
+ {
+-	const SwIspStats::Histogram &histogram = stats->yHistogram;
+ 	const uint8_t blackLevel = context.activeState.blc.level;
+ 
+ 	metadata.set(controls::ColourGains, { frameContext.gains.r(),
+@@ -108,15 +107,20 @@ void Awb::process(IPAContext &context,
+ 	 * would be off if they were computed from the whole brightness range
+ 	 * rather than from the sensor range.
+ 	 */
+-	const uint64_t nPixels = std::accumulate(
+-		histogram.begin(), histogram.end(), uint64_t(0));
++	const uint64_t nPixels = stats->awbCount;
++	if (nPixels < 16)
++		return;
+ 	const uint64_t offset = blackLevel * nPixels;
+-	const uint64_t minValid = 1;
+ 	/*
+-	 * Make sure the sums are at least minValid, while preventing unsigned
+-	 * integer underflow.
++	 * Near black, ratios mostly describe read noise and black-level error.
++	 * Keep the last estimate until every channel has a measurable signal.
++	 * This also prevents underflow when subtracting the black level.
+ 	 */
+-	const RGB<uint64_t> sum = stats->sum_.max(offset + minValid) - offset;
++	for (unsigned int channel = 0; channel < 3; channel++) {
++		if (stats->awbSum[channel] <= offset + 2 * nPixels)
++			return;
++	}
++	const RGB<uint64_t> sum = stats->awbSum - offset;
+ 
+ 	/*
+ 	 * Calculate red and blue gains for AWB.
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index 2ec0ae2..f07e1e4 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -201,6 +201,13 @@ static constexpr unsigned int kBlueYMul = 29; /* 0.114 * 256 */
+ 	sumG += g;                         \
+ 	sumB += b;                         \
+                                            \
++	if (r < 250 * (div) && g < 250 * (div) && b < 250 * (div)) { \
++		stats.awbSum.r() += r;        \
++		stats.awbSum.g() += g;        \
++		stats.awbSum.b() += b;        \
++		stats.awbCount++;            \
++	}                                  \
++                                           \
+ 	yVal = r * kRedYMul;               \
+ 	yVal += g * kGreenYMul;            \
+ 	yVal += b * kBlueYMul;             \
+@@ -466,6 +473,8 @@ void SwStatsCpu::startFrame(uint32_t frame)
+ 
+ 	for (auto &s : stats_) {
+ 		s.sum_ = RGB<uint64_t>({ 0, 0, 0 });
++		s.awbSum = RGB<uint64_t>({ 0, 0, 0 });
++		s.awbCount = 0;
+ 		s.yHistogram.fill(0);
+ 		s.focus = 0;
+ 		s.focusSum = 0;
+@@ -486,12 +495,16 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 
+ 	if (valid) {
+ 		sharedStats_->sum_ = RGB<uint64_t>({ 0, 0, 0 });
++		sharedStats_->awbSum = RGB<uint64_t>({ 0, 0, 0 });
++		sharedStats_->awbCount = 0;
+ 		sharedStats_->yHistogram.fill(0);
+ 		sharedStats_->focus = 0;
+ 		sharedStats_->focusSum = 0;
+ 		sharedStats_->focusCount = 0;
+ 		for (const auto &s : stats_) {
+ 			sharedStats_->sum_ += s.sum_;
++			sharedStats_->awbSum += s.awbSum;
++			sharedStats_->awbCount += s.awbCount;
+ 			for (unsigned int j = 0; j < SwIspStats::kYHistogramSize; j++)
+ 				sharedStats_->yHistogram[j] += s.yHistogram[j];
+ 			sharedStats_->focus += s.focus;
+@@ -500,6 +513,7 @@ void SwStatsCpu::finishFrame(uint32_t frame, uint32_t bufferId)
+ 		}
+ 
+ 		sharedStats_->sum_ >>= sumShift_;
++		sharedStats_->awbSum >>= sumShift_;
+ 	}
+ 
+ 	sharedStats_->valid = valid;
+-- 
+2.47.3
+

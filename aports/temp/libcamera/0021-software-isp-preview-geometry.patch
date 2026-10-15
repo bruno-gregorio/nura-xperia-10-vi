@@ -1,0 +1,146 @@
+Use the same centred active-array crop for rendering, filtering and metering.
+
+--- a/include/libcamera/internal/software_isp/quad_bayer.h
++++ b/include/libcamera/internal/software_isp/quad_bayer.h
+@@ -32,12 +32,11 @@
+ 	       size.width % 4 == 0 && size.height % 4 == 0;
+ }
+ 
+-inline Rectangle softwareIspViewport(const Size &physicalSize,
++inline Rectangle softwareIspViewport([[maybe_unused]] const Size &physicalSize,
+ 				     const Size &outputSize,
+-				     bool quadBayer)
++				     [[maybe_unused]] bool quadBayer)
+ {
+-	const Size &viewportSize = quadBayer ? outputSize : physicalSize;
+-	return { 0, 0, viewportSize.width, viewportSize.height };
++	return { 0, 0, outputSize.width, outputSize.height };
+ }
+ 
+ inline Rectangle quadBayerStatsWindow(const Size &physicalSize,
+@@ -64,21 +63,8 @@
+ 
+ inline std::array<float, 8> softwareIspTextureCoordinates(const Size &physicalSize,
+ 							  const Rectangle &window,
+-							  bool quadBayer)
++							  [[maybe_unused]] bool quadBayer)
+ {
+-	if (!quadBayer) {
+-		return {
+-			0.0f,
+-			0.0f,
+-			0.0f,
+-			1.0f,
+-			1.0f,
+-			1.0f,
+-			1.0f,
+-			0.0f,
+-		};
+-	}
+-
+ 	const float left = static_cast<float>(window.x) / physicalSize.width;
+ 	const float top = static_cast<float>(window.y) / physicalSize.height;
+ 	const float right = static_cast<float>(window.x + window.width) / physicalSize.width;
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -349,22 +349,12 @@
+ 	outputSize_ = outputCfg.size;
+ 	nativeOutputSize_ = outSizeRange.max;
+ 
+-	if (quadBayer_) {
+-		window_ = quadBayerStatsWindow(inputCfg.size, outputCfg.size);
+-	} else {
+-		window_.x = ((inputCfg.size.width - outputCfg.size.width) / 2) &
+-			    ~(inputConfig_.patternSize.width - 1);
+-		window_.y = ((inputCfg.size.height - outputCfg.size.height) / 2) &
+-			    ~(inputConfig_.patternSize.height - 1);
+-		window_.width = outputCfg.size.width;
+-		window_.height = outputCfg.size.height;
+-	}
+-
+-	/*
+-	 * Don't pass x,y from window_ since process() already adjusts for it.
+-	 * But crop the window to 2/3 of its width and height for speedup.
++	/* Meter the same centred active-array crop that is rendered. The old
++	 * ordinary-Bayer path metered an output-sized top-left patch while
++	 * rendering another region, driving high gain in mixed scenes.
+ 	 */
+-	stats_->setWindow(quadBayer_ ? window_ : Rectangle(window_.size()));
++	window_ = quadBayerStatsWindow(inputCfg.size, outputCfg.size);
++	stats_->setWindow(window_);
+ 
+ 	inputBufferCount_ = inputCfg.bufferCount;
+ 	outputBufferCount_ = outputCfg.bufferCount;
+@@ -439,21 +429,14 @@
+ 		Step[1] = 1.0f / height_;
+ 	}
+ 	GLfloat Stride = (GLfloat)width_ / (shaderStridePixels_ / bytesPerPixel_);
+-	/*
+-	 * Scale the output size from the native size the algorithm produces for
+-	 * the input size. Keep the aspect ratio and prefer cropping over black
+-	 * bars.
+-	 */
+-	GLfloat scale = quadBayer_
+-				? 1.0f
+-				: std::max((GLfloat)outputSize_.width / nativeOutputSize_.width,
+-					   (GLfloat)outputSize_.height / nativeOutputSize_.height);
+-	GLfloat trans = -(1.0f - scale);
++	/* The viewport is the output FBO; texture coordinates do the centred
++	 * aspect crop, so no second scale/translation belongs in projection.
++	 */
+ 	GLfloat projMatrix[] = {
+-		scale, 0, 0, 0,
+-		0, scale, 0, 0,
++		1, 0, 0, 0,
++		0, 1, 0, 0,
+ 		0, 0, 1, 0,
+-		trans, trans, 0, 1
++		0, 0, 0, 1
+ 	};
+ 	/* Static const coordinates */
+ 	static const GLfloat vcoordinates[4][2] = {
+@@ -558,10 +541,8 @@
+ 	 */
+ 	glUniform1f(gammaUniformDataIn_, params.gamma);
+ 	glUniform1f(bayerDenoiseUniform_, params.bayerDenoise);
+-	const Rectangle footprintViewport = softwareIspViewport({ width_, height_ }, outputSize_,
+-	                                                       quadBayer_);
+-	glUniform2f(pixelFootprintUniform_, static_cast<float>(width_) / footprintViewport.width,
+-	            static_cast<float>(height_) / footprintViewport.height);
++	glUniform2f(pixelFootprintUniform_, static_cast<float>(window_.width) / outputSize_.width,
++	            static_cast<float>(window_.height) / outputSize_.height);
+ 	LOG(Debayer, Debug) << " gammaUniformDataIn_ " << gammaUniformDataIn_ << " data " << params.gamma;
+ 
+ 	/*
+--- a/test/quad-bayer.cpp
++++ b/test/quad-bayer.cpp
+@@ -92,8 +92,8 @@
+ 			return TestFail;
+ 		}
+ 		if (softwareIspViewport({ 4656, 3456 }, { 1600, 1200 }, false) !=
+-		    Rectangle(0, 0, 4656, 3456)) {
+-			std::cerr << "ordinary Bayer viewport no longer uses physical geometry" << std::endl;
++		    Rectangle(0, 0, 1600, 1200)) {
++			std::cerr << "ordinary Bayer viewport does not match output FBO" << std::endl;
+ 			return TestFail;
+ 		}
+ 
+@@ -103,6 +103,18 @@
+ 			return TestFail;
+ 		}
+ 
++		/* Hi846 4:3 sensor to 16:9 preview: preserve horizontal field,
++		 * remove equal strips at top/bottom and meter that same crop.
++		 */
++		const Rectangle hi846Window = quadBayerStatsWindow({3264, 2448}, {1280, 720});
++		if (hi846Window != Rectangle(0, 304, 3264, 1836))
++			return TestFail;
++		const auto hi846Coords = softwareIspTextureCoordinates({3264, 2448}, hi846Window, false);
++		if (std::abs(hi846Coords[1] - 304.0f / 2448) > 0.000001f ||
++		    std::abs(hi846Coords[3] - 2140.0f / 2448) > 0.000001f ||
++		    hi846Coords[4] != 1.0f)
++			return TestFail;
++
+ 		const auto ordinaryCoordinates = softwareIspTextureCoordinates(
+ 			{ 4656, 3456 }, { 0, 0, 4656, 3456 }, false);
+ 		constexpr std::array<float, 8> fullTexture = {

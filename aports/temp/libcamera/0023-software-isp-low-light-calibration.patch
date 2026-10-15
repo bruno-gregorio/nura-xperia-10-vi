@@ -1,0 +1,271 @@
+Apply stock exposure-dependent lens shading, CCM and linear raw-luma targets.
+
+--- a/src/ipa/simple/algorithms/agc.cpp
++++ b/src/ipa/simple/algorithms/agc.cpp
+@@ -75,6 +75,17 @@
+  */
+ int Agc::init([[maybe_unused]] IPAContext &context, const ValueNode &tuningData)
+ {
++	if (tuningData.contains("exposureTargets")) {
++		int ret = targets_.readYaml(tuningData["exposureTargets"], "lux", "target");
++		if (ret)
++			return ret;
++		for (const auto &[lux, target] : targets_.data())
++			if (!std::isfinite(target) || target <= 0 || target >= 1)
++				return -EINVAL;
++	}
++	referenceTime_ = tuningData["referenceExposureTime"].get<double>(1.0);
++	if (!std::isfinite(referenceTime_) || referenceTime_ <= 0)
++		return -EINVAL;
+ 	std::optional<double> exposureTimeMax =
+ 		tuningData["exposureTimeMax"].get<double>();
+ 	if (exposureTimeMax) {
+@@ -323,6 +334,26 @@
+ 	}
+ 
+ 	float exposureMSV = (denom == 0 ? 0 : static_cast<float>(num) / denom);
++	if (!targets_.data().empty()) {
++		/* Stock targets are linear raw luminance. Five coarse MSV bins
++		 * cannot resolve the dark-scene targets, so use the full histogram.
++		 * Include pixels below black as zero instead of dropping them.
++		 */
++		double sum = 0, count = 0;
++		for (unsigned int i = 0; i < histogram.size(); ++i) {
++			double value = std::max(0.0, (i + 0.5) * 256.0 / histogram.size() -
++				context.activeState.blc.level);
++			sum += histogram[i] * value;
++			count += histogram[i];
++		}
++		const double lux = exposureIndex(exposureTime.get<std::micro>(),
++			frameContext.sensor.gain * frameContext.digitalGain, referenceTime_);
++		const double target = targets_.getInterpolated(std::lround(lux));
++		const double mean = count ? sum / count / 255.0 * frameContext.digitalGain : 0;
++		exposureMSV = kExposureOptimal * mean / target;
++		LOG(IPASoftExposure, Debug) << "lux index " << lux
++			<< " raw mean " << mean << " target " << target;
++	}
+ 	updateExposure(context, frameContext, exposureMSV);
+ 	setFrameLength(context, frameContext);
+ }
+--- a/src/ipa/simple/algorithms/agc.h
++++ b/src/ipa/simple/algorithms/agc.h
+@@ -12,6 +12,7 @@
+ #include <libcamera/base/utils.h>
+ 
+ #include "algorithm.h"
++#include "low_light.h"
+ 
+ namespace libcamera {
+ 
+@@ -40,6 +41,8 @@
+ 	/* Tuning */
+ 	std::optional<utils::Duration> exposureTimeMax_;
+ 	double digitalGainMax_ = 1.0;
++	Interpolator<double> targets_;
++	double referenceTime_ = 1.0;
+ 
+ 	/* Session */
+ 	int32_t exposureMaxLong_ = 0;
+--- a/src/ipa/simple/algorithms/lsc.cpp
++++ b/src/ipa/simple/algorithms/lsc.cpp
+@@ -16,6 +16,12 @@
+ 	int ret = tables_.readYaml(tuningData["tables"], "ct", "gains");
+ 	if (ret)
+ 		return ret;
++	ret = luxTables_.read(tuningData["luxBands"], "tables", "gains", 0.5);
++	if (ret)
++		return ret;
++	referenceTime_ = tuningData["referenceExposureTime"].get<double>(1.0);
++	if (!std::isfinite(referenceTime_) || referenceTime_ <= 0)
++		return -EINVAL;
+ 	for (const auto &[ct, table] : tables_.data()) {
+ 		for (float gain : table.data()) {
+ 			if (!std::isfinite(gain) || gain < 0.5f || gain > 8.0f)
+@@ -35,7 +41,12 @@
+ 	    !info.analogCrop.width || !info.analogCrop.height)
+ 		return;
+ 
+-	const auto &table = tables_.getInterpolated(context.activeState.awb.temperatureK);
++	const utils::Duration time = context.configuration.agc.lineDuration * context.activeState.agc.appliedExposure;
++	const double lux = exposureIndex(time.get<std::micro>(),
++		context.activeState.agc.appliedGain * context.activeState.agc.digitalGain, referenceTime_);
++	const auto table = luxTables_.empty()
++		? tables_.getInterpolated(context.activeState.awb.temperatureK)
++		: luxTables_.get(lux, context.activeState.awb.temperatureK);
+ 	std::copy(table.data().begin(), table.data().end(), params->lensShading.begin());
+ 	params->lensShadingCrop = {
+ 		float(info.analogCrop.x) / info.activeAreaSize.width,
+--- a/src/ipa/simple/algorithms/lsc.h
++++ b/src/ipa/simple/algorithms/lsc.h
+@@ -3,6 +3,7 @@
+ 
+ #include <libipa/interpolator.h>
+ #include "algorithm.h"
++#include "low_light.h"
+ 
+ namespace libcamera::ipa::soft::algorithms {
+ 
+@@ -15,6 +16,8 @@
+ 
+ private:
+ 	Interpolator<Matrix<float, 13, 17 * 3>> tables_;
++	LuxTables<Matrix<float, 13, 17 * 3>> luxTables_;
++	double referenceTime_ = 1.0;
+ };
+ 
+ } /* namespace libcamera::ipa::soft::algorithms */
+--- a/src/ipa/simple/algorithms/ccm.cpp
++++ b/src/ipa/simple/algorithms/ccm.cpp
+@@ -36,6 +36,12 @@
+ 		return ret;
+ 	}
+ 
++	ret = luxTables_.read(tuningData["luxBands"], "ccms", "ccm");
++	if (ret)
++		return ret;
++	referenceTime_ = tuningData["referenceExposureTime"].get<double>(1.0);
++	if (!std::isfinite(referenceTime_) || referenceTime_ <= 0)
++		return -EINVAL;
+ 	context.ccmEnabled = true;
+ 
+ 	return 0;
+@@ -47,7 +53,12 @@
+ 	const unsigned int ct = context.activeState.awb.temperatureK;
+ 
+ 	/* Change CCM only on bigger temperature changes. */
+-	if (!currentCcm_ ||
++	if (!luxTables_.empty()) {
++		const utils::Duration time = context.configuration.agc.lineDuration * context.activeState.agc.appliedExposure;
++		const double lux = exposureIndex(time.get<std::micro>(),
++			context.activeState.agc.appliedGain * context.activeState.agc.digitalGain, referenceTime_);
++		currentCcm_ = luxTables_.get(lux, ct);
++	} else if (!currentCcm_ ||
+ 	    utils::abs_diff(ct, lastCt_) >= kTemperatureThreshold) {
+ 		currentCcm_ = ccm_.getInterpolated(ct);
+ 		lastCt_ = ct;
+--- a/src/ipa/simple/algorithms/ccm.h
++++ b/src/ipa/simple/algorithms/ccm.h
+@@ -14,6 +14,7 @@
+ #include <libipa/interpolator.h>
+ 
+ #include "algorithm.h"
++#include "low_light.h"
+ 
+ namespace libcamera {
+ 
+@@ -38,6 +39,8 @@
+ private:
+ 	unsigned int lastCt_;
+ 	Interpolator<Matrix<float, 3, 3>> ccm_;
++	LuxTables<Matrix<float, 3, 3>> luxTables_;
++	double referenceTime_ = 1.0;
+ 	std::optional<Matrix<float, 3, 3>> currentCcm_;
+ };
+ 
+--- /dev/null
++++ b/src/ipa/simple/algorithms/low_light.h
+@@ -0,0 +1,81 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++
++#include <algorithm>
++#include <cmath>
++#include <errno.h>
++#include <vector>
++
++#include <libipa/interpolator.h>
++
++namespace libcamera::ipa::soft::algorithms {
++
++/* Exposure index used by the module's stock tuning: 3% sensitivity steps.
++ * This uses applied exposure, not the proprietary scene-metering estimator.
++ * referenceTime is the first exposure-table knee, in microseconds.
++ */
++inline double exposureIndex(double time, double gain, double referenceTime)
++{
++	return std::max(0.0, std::log10(std::max(time * gain / referenceTime, 1.0)) *
++			77.89852905273438);
++}
++
++/* Preserve constant tuning inside each trigger band, interpolate in gaps. */
++template<typename T>
++class LuxTables
++{
++public:
++	int read(const ValueNode &yaml, const char *tables, const char *value,
++		 double minimum = -8.0)
++	{
++		bands_.clear();
++		if (yaml.isEmpty())
++			return 0;
++		if (!yaml.isList())
++			return -EINVAL;
++		for (const auto &node : yaml.asList()) {
++			auto start = node["start"].template get<double>();
++			auto end = node["end"].template get<double>();
++			if (!start || !end || !std::isfinite(*start) || !std::isfinite(*end) ||
++			    *start < 0 || *end < *start ||
++			    (!bands_.empty() && *start <= bands_.back().end))
++				return -EINVAL;
++			Band band{ *start, *end, {} };
++			if (band.tables.readYaml(node[tables], "ct", value))
++				return -EINVAL;
++			for (const auto &[ct, matrix] : band.tables.data())
++				for (auto v : matrix.data())
++					if (!std::isfinite(v) || v < minimum || v > 8)
++						return -EINVAL;
++			bands_.push_back(std::move(band));
++		}
++		return 0;
++	}
++
++	bool empty() const { return bands_.empty(); }
++
++	T get(double lux, unsigned int ct)
++	{
++		for (size_t i = 0; i < bands_.size(); ++i) {
++			auto &a = bands_[i];
++			if (lux <= a.end || i + 1 == bands_.size())
++				return a.tables.getInterpolated(ct);
++			auto &b = bands_[i + 1];
++			if (lux < b.start) {
++				double t = (lux - a.end) / (b.start - a.end);
++				return a.tables.getInterpolated(ct) * (1 - t) +
++				       b.tables.getInterpolated(ct) * t;
++			}
++		}
++		return {};
++	}
++
++private:
++	struct Band {
++		double start, end;
++		Interpolator<T> tables;
++	};
++	std::vector<Band> bands_;
++};
++
++} /* namespace libcamera::ipa::soft::algorithms */
+--- a/src/ipa/simple/ipa_context.h
++++ b/src/ipa/simple/ipa_context.h
+@@ -40,6 +40,9 @@
+ 		int32_t exposure;
+ 		double again;
+ 		double digitalGain;
++		/* Most recent sensor controls, before AGC requests the next frame. */
++		int32_t appliedExposure;
++		double appliedGain;
+ 		bool valid;
+ 	} agc;
+ 
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -323,6 +323,8 @@
+ 		sensorControls.get(V4L2_CID_EXPOSURE).get<int32_t>();
+ 	int32_t again = sensorControls.get(V4L2_CID_ANALOGUE_GAIN).get<int32_t>();
+ 	frameContext.sensor.gain = camHelper_ ? camHelper_->gain(again) : again;
++	context_.activeState.agc.appliedExposure = frameContext.sensor.exposure;
++	context_.activeState.agc.appliedGain = frameContext.sensor.gain;
+ 	if (sensorControls.contains(V4L2_CID_VBLANK))
+ 		frameContext.sensor.vblank =
+ 			sensorControls.get(V4L2_CID_VBLANK).get<int32_t>();

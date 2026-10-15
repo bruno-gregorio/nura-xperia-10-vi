@@ -1,0 +1,420 @@
+From 37f4da30b580477d788425fa2c408e3b8b354c89 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 21:55:57 -0300
+Subject: [PATCH] software_isp: Apply calibrated shading and colour
+ temperature; unstick gain
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../internal/software_isp/debayer_params.h    |  5 ++
+ src/ipa/simple/algorithms/awb.cpp             | 47 +++++++++++++++++
+ src/ipa/simple/algorithms/awb.h               |  8 +++
+ src/ipa/simple/algorithms/lsc.cpp             | 51 +++++++++++++++++++
+ src/ipa/simple/algorithms/lsc.h               | 20 ++++++++
+ src/ipa/simple/algorithms/meson.build         |  1 +
+ src/ipa/simple/soft_simple.cpp                | 19 ++++++-
+ src/libcamera/shaders/bayer_1x_packed.frag    | 20 ++++++++
+ src/libcamera/software_isp/debayer_egl.cpp    | 39 ++++++++++++++
+ src/libcamera/software_isp/debayer_egl.h      |  4 ++
+ 10 files changed, 212 insertions(+), 2 deletions(-)
+ create mode 100644 src/ipa/simple/algorithms/lsc.cpp
+ create mode 100644 src/ipa/simple/algorithms/lsc.h
+
+diff --git a/include/libcamera/internal/software_isp/debayer_params.h b/include/libcamera/internal/software_isp/debayer_params.h
+index 6772b43..886bbca 100644
+--- a/include/libcamera/internal/software_isp/debayer_params.h
++++ b/include/libcamera/internal/software_isp/debayer_params.h
+@@ -10,6 +10,7 @@
+ 
+ #pragma once
+ 
++#include <array>
+ #include <stdint.h>
+ 
+ #include "libcamera/internal/matrix.h"
+@@ -25,6 +26,10 @@ struct DebayerParams {
+ 	float gamma = 1.0;
+ 	float contrastExp = 1.0;
+ 	RGB<float> gains = RGB<float>({ 1.0, 1.0, 1.0 });
++	/* RGB gains on a 17 x 13 grid across the active pixel array. */
++	std::array<float, 17 * 13 * 3> lensShading;
++	std::array<float, 4> lensShadingCrop;
++	bool lensShadingEnabled = false;
+ };
+ 
+ } /* namespace libcamera */
+diff --git a/src/ipa/simple/algorithms/awb.cpp b/src/ipa/simple/algorithms/awb.cpp
+index 92ed0bb..732f345 100644
+--- a/src/ipa/simple/algorithms/awb.cpp
++++ b/src/ipa/simple/algorithms/awb.cpp
+@@ -7,6 +7,9 @@
+ 
+ #include "awb.h"
+ 
++#include <algorithm>
++#include <cmath>
++#include <limits>
+ #include <numeric>
+ #include <stdint.h>
+ 
+@@ -23,11 +26,53 @@ LOG_DEFINE_CATEGORY(IPASoftAwb)
+ 
+ namespace ipa::soft::algorithms {
+ 
++int Awb::init([[maybe_unused]] IPAContext &context, const ValueNode &tuningData)
++{
++	if (!tuningData.contains("illuminants"))
++		return 0;
++	for (const auto &entry : tuningData["illuminants"].asList()) {
++		auto ct = entry["ct"].get<double>();
++		auto rg = entry["rg"].get<double>();
++		auto bg = entry["bg"].get<double>();
++		if (!ct || !rg || !bg || !std::isfinite(*ct) ||
++		    !std::isfinite(*rg) || !std::isfinite(*bg) ||
++		    *ct < 1000 || *ct > 25000 || *rg <= 0 || *bg <= 0)
++			return -EINVAL;
++		illuminants_.push_back({ *ct, std::log(*rg), std::log(*bg) });
++	}
++	std::sort(illuminants_.begin(), illuminants_.end());
++	return illuminants_.size() >= 2 ? 0 : -EINVAL;
++}
++
++unsigned int Awb::calibratedTemperature(double rg, double bg) const
++{
++	const double r = std::log(rg), b = std::log(bg);
++	double best = std::numeric_limits<double>::infinity();
++	double ct = 5000;
++	/* Project raw-channel ratios onto this sensor's illuminant locus. */
++	for (size_t i = 1; i < illuminants_.size(); ++i) {
++		const auto &a = illuminants_[i - 1];
++		const auto &z = illuminants_[i];
++		double dr = z[1] - a[1], db = z[2] - a[2];
++		double norm = dr * dr + db * db;
++		double t = norm > 0 ? std::clamp(((r - a[1]) * dr + (b - a[2]) * db) / norm, 0.0, 1.0) : 0.0;
++		double er = r - a[1] - t * dr, eb = b - a[2] - t * db;
++		double distance = er * er + eb * eb;
++		if (distance < best) {
++			best = distance;
++			/* Interpolate in reciprocal colour temperature. */
++			ct = 1.0 / ((1.0 - t) / a[0] + t / z[0]);
++		}
++	}
++	return std::lround(ct);
++}
++
+ int Awb::configure(IPAContext &context,
+ 		   [[maybe_unused]] const IPAConfigInfo &configInfo)
+ {
+ 	auto &gains = context.activeState.awb.gains;
+ 	gains = { { 1.0, 1.0, 1.0 } };
++	context.activeState.awb.temperatureK = 5000;
+ 
+ 	return 0;
+ }
+@@ -86,6 +131,8 @@ void Awb::process(IPAContext &context,
+ 
+ 	RGB<double> rgbGains{ { 1 / gains.r(), 1 / gains.g(), 1 / gains.b() } };
+ 	context.activeState.awb.temperatureK = estimateCCT(rgbGains);
++	if (!illuminants_.empty())
++		context.activeState.awb.temperatureK = calibratedTemperature(rgbGains.r(), rgbGains.b());
+ 	metadata.set(controls::ColourTemperature, context.activeState.awb.temperatureK);
+ 
+ 	LOG(IPASoftAwb, Debug)
+diff --git a/src/ipa/simple/algorithms/awb.h b/src/ipa/simple/algorithms/awb.h
+index ad993f3..6a32f3c 100644
+--- a/src/ipa/simple/algorithms/awb.h
++++ b/src/ipa/simple/algorithms/awb.h
+@@ -7,6 +7,9 @@
+ 
+ #pragma once
+ 
++#include <array>
++#include <vector>
++
+ #include "algorithm.h"
+ 
+ namespace libcamera {
+@@ -18,6 +21,7 @@ class Awb : public Algorithm
+ public:
+ 	Awb() = default;
+ 	~Awb() = default;
++	int init(IPAContext &context, const ValueNode &tuningData) override;
+ 
+ 	int configure(IPAContext &context, const IPAConfigInfo &configInfo) override;
+ 	void prepare(IPAContext &context,
+@@ -29,6 +33,10 @@ public:
+ 		     IPAFrameContext &frameContext,
+ 		     const SwIspStats *stats,
+ 		     ControlList &metadata) override;
++
++private:
++	std::vector<std::array<double, 3>> illuminants_;
++	unsigned int calibratedTemperature(double rg, double bg) const;
+ };
+ 
+ } /* namespace ipa::soft::algorithms */
+diff --git a/src/ipa/simple/algorithms/lsc.cpp b/src/ipa/simple/algorithms/lsc.cpp
+new file mode 100644
+index 0000000..89534a2
+--- /dev/null
++++ b/src/ipa/simple/algorithms/lsc.cpp
+@@ -0,0 +1,51 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* Lens shading calibration in active-array coordinates. */
++#include "lsc.h"
++
++#include <algorithm>
++#include <cmath>
++
++#include <libcamera/base/log.h>
++
++namespace libcamera::ipa::soft::algorithms {
++
++LOG_DEFINE_CATEGORY(IPASoftLsc)
++
++int Lsc::init([[maybe_unused]] IPAContext &context, const ValueNode &tuningData)
++{
++	int ret = tables_.readYaml(tuningData["tables"], "ct", "gains");
++	if (ret)
++		return ret;
++	for (const auto &[ct, table] : tables_.data()) {
++		for (float gain : table.data()) {
++			if (!std::isfinite(gain) || gain < 0.5f || gain > 8.0f)
++				return -EINVAL;
++		}
++	}
++	LOG(IPASoftLsc, Info) << "Loaded " << tables_.data().size()
++			    << " lens shading tables (17x13 RGB)";
++	return 0;
++}
++
++void Lsc::prepare(IPAContext &context, [[maybe_unused]] uint32_t frame,
++		  [[maybe_unused]] IPAFrameContext &frameContext, DebayerParams *params)
++{
++	const auto &info = context.sensorInfo;
++	if (!info.activeAreaSize.width || !info.activeAreaSize.height ||
++	    !info.analogCrop.width || !info.analogCrop.height)
++		return;
++
++	const auto &table = tables_.getInterpolated(context.activeState.awb.temperatureK);
++	std::copy(table.data().begin(), table.data().end(), params->lensShading.begin());
++	params->lensShadingCrop = {
++		float(info.analogCrop.x) / info.activeAreaSize.width,
++		float(info.analogCrop.y) / info.activeAreaSize.height,
++		float(info.analogCrop.width) / info.activeAreaSize.width,
++		float(info.analogCrop.height) / info.activeAreaSize.height,
++	};
++	params->lensShadingEnabled = true;
++}
++
++REGISTER_IPA_ALGORITHM(Lsc, "LensShading")
++
++} /* namespace libcamera::ipa::soft::algorithms */
+diff --git a/src/ipa/simple/algorithms/lsc.h b/src/ipa/simple/algorithms/lsc.h
+new file mode 100644
+index 0000000..4e8be35
+--- /dev/null
++++ b/src/ipa/simple/algorithms/lsc.h
+@@ -0,0 +1,20 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++
++#include <libipa/interpolator.h>
++#include "algorithm.h"
++
++namespace libcamera::ipa::soft::algorithms {
++
++class Lsc : public Algorithm
++{
++public:
++	int init(IPAContext &context, const ValueNode &tuningData) override;
++	void prepare(IPAContext &context, uint32_t frame,
++		     IPAFrameContext &frameContext, DebayerParams *params) override;
++
++private:
++	Interpolator<Matrix<float, 13, 17 * 3>> tables_;
++};
++
++} /* namespace libcamera::ipa::soft::algorithms */
+diff --git a/src/ipa/simple/algorithms/meson.build b/src/ipa/simple/algorithms/meson.build
+index 1cd58d5..d9d5409 100644
+--- a/src/ipa/simple/algorithms/meson.build
++++ b/src/ipa/simple/algorithms/meson.build
+@@ -7,4 +7,5 @@ soft_simple_ipa_algorithms = files([
+     'agc.cpp',
+     'blc.cpp',
+     'ccm.cpp',
++    'lsc.cpp',
+ ])
+diff --git a/src/ipa/simple/soft_simple.cpp b/src/ipa/simple/soft_simple.cpp
+index e69fdc6..fa9065a 100644
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -303,6 +303,7 @@ void IPASoftSimple::computeParams(const uint32_t frame)
+ {
+ 	context_.activeState.combinedMatrix = Matrix<float, 3, 3>::identity();
+ 	params_->gains = RGB<float>({ 1.0f, 1.0f, 1.0f });
++	params_->lensShadingEnabled = false;
+ 
+ 	IPAFrameContext &frameContext = context_.frameContexts.get(frame);
+ 	for (const auto &algo : algorithms())
+@@ -342,8 +343,22 @@ void IPASoftSimple::processStats(const uint32_t frame,
+ 
+ 	auto &againNew = frameContext.sensor.gain;
+ 	ctrls.set(V4L2_CID_EXPOSURE, frameContext.sensor.exposure);
+-	ctrls.set(V4L2_CID_ANALOGUE_GAIN,
+-		  static_cast<int32_t>(camHelper_ ? camHelper_->gainCode(againNew) : againNew));
++	int32_t gainCode = camHelper_ ? camHelper_->gainCode(againNew) : againNew;
++	const double gainOld = camHelper_ ? camHelper_->gain(again) : again;
++	/*
++	 * A fixed minimum gain increment does not cover reciprocal gain
++	 * encodings: near the IMX582's limit a single code spans several x.
++	 * Ensure a requested change survives quantization, or AGC can remain
++	 * stuck below the limit and never use longer exposures/digital gain.
++	 */
++	if (againNew > gainOld && gainCode <= again)
++		gainCode = again + 1;
++	else if (againNew < gainOld && gainCode >= again)
++		gainCode = again - 1;
++	const auto &gainInfo = sensorInfoMap_.at(V4L2_CID_ANALOGUE_GAIN);
++	gainCode = std::clamp(gainCode, gainInfo.min().get<int32_t>(),
++			      gainInfo.max().get<int32_t>());
++	ctrls.set(V4L2_CID_ANALOGUE_GAIN, gainCode);
+ 	if (frameContext.sensor.vblank)
+ 		ctrls.set(V4L2_CID_VBLANK, *frameContext.sensor.vblank);
+ 
+diff --git a/src/libcamera/shaders/bayer_1x_packed.frag b/src/libcamera/shaders/bayer_1x_packed.frag
+index d20d9d6..2383f28 100644
+--- a/src/libcamera/shaders/bayer_1x_packed.frag
++++ b/src/libcamera/shaders/bayer_1x_packed.frag
+@@ -71,6 +71,24 @@ uniform vec3 blacklevel;
+ uniform float gamma;
+ uniform float contrastExp;
+ 
++uniform sampler2D lens_shading;
++uniform vec4 lens_shading_crop;
++uniform bool lens_shading_enabled;
++
++vec3 shading_gain(vec2 position)
++{
++	vec2 grid = clamp(lens_shading_crop.xy + position * lens_shading_crop.zw,
++			  vec2(0.0), vec2(1.0)) * vec2(16.0, 12.0);
++	vec2 base = floor(grid);
++	vec2 weight = fract(grid);
++	vec2 uv = (base + 0.5) / vec2(17.0, 13.0);
++	vec2 step = 1.0 / vec2(17.0, 13.0);
++	return mix(mix(texture2D(lens_shading, uv).rgb,
++		       texture2D(lens_shading, uv + vec2(step.x, 0.0)).rgb, weight.x),
++		   mix(texture2D(lens_shading, uv + vec2(0.0, step.y)).rgb,
++		       texture2D(lens_shading, uv + step).rgb, weight.x), weight.y);
++}
++
+ #if defined (QUAD_BAYER)
+ vec2 quad_cell(vec2 pixel)
+ {
+@@ -276,6 +294,8 @@ void main(void)
+ 	 * reworked into a single multiplication.
+ 	 */
+ 	rgb = (rgb - blacklevel) / (1.0 - blacklevel);
++	if (lens_shading_enabled)
++		rgb *= shading_gain(center_pixel / max(tex_size - vec2(1.0), vec2(1.0)));
+ 
+ 	/* Apply AWB gains, and saturate each channel at sensor range */
+ 	rgb = clamp(rgb * awb, vec3(0.0), vec3(1.0));
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+index aaa42b5..17a594b 100644
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <assert.h>
++#include <cstring>
+ #include <memory>
+ #include <stdlib.h>
+ #include <string>
+@@ -124,6 +125,9 @@ int DebayerEGL::getShaderVariableLocations(void)
+ 	blackLevelUniformDataIn_ = glGetUniformLocation(programId_, "blacklevel");
+ 	gammaUniformDataIn_ = glGetUniformLocation(programId_, "gamma");
+ 	contrastExpUniformDataIn_ = glGetUniformLocation(programId_, "contrastExp");
++	lensShadingUniform_ = glGetUniformLocation(programId_, "lens_shading");
++	lensShadingCropUniform_ = glGetUniformLocation(programId_, "lens_shading_crop");
++	lensShadingEnabledUniform_ = glGetUniformLocation(programId_, "lens_shading_enabled");
+ 
+ 	textureUniformStep_ = glGetUniformLocation(programId_, "tex_step");
+ 	textureUniformSize_ = glGetUniformLocation(programId_, "tex_size");
+@@ -519,6 +523,21 @@ void DebayerEGL::setShaderVariableValues(eGLImage &eglImageIn, const DebayerPara
+ 	LOG(Debayer, Debug) << " blackLevelUniformDataIn_ " << blackLevelUniformDataIn_ << " data " << params.blackLevel;
+ 
+ 	glUniform3f(awbUniformDataIn_, params.gains[0], params.gains[1], params.gains[2]);
++	glUniform1i(lensShadingEnabledUniform_, params.lensShadingEnabled && lensShadingTexture_);
++	if (params.lensShadingEnabled && lensShadingTexture_) {
++		std::array<float, 17 * 13 * 4> rgba;
++		for (unsigned int i = 0; i < 17 * 13; ++i) {
++			for (unsigned int c = 0; c < 3; ++c)
++				rgba[i * 4 + c] = params.lensShading[i * 3 + c];
++			rgba[i * 4 + 3] = 1.0f;
++		}
++		glActiveTexture(GL_TEXTURE2);
++		glBindTexture(GL_TEXTURE_2D, lensShadingTexture_);
++		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 17, 13, 0, GL_RGBA, GL_FLOAT, rgba.data());
++		glUniform1i(lensShadingUniform_, 2);
++		glUniform4fv(lensShadingCropUniform_, 1, params.lensShadingCrop.data());
++		glActiveTexture(GL_TEXTURE0);
++	}
+ 	LOG(Debayer, Debug) << " awbUniformDataIn_ " << awbUniformDataIn_ << " data " << params.gains;
+ 
+ 	/*
+@@ -722,11 +741,31 @@ int DebayerEGL::start()
+ 	if (initBayerShaders(inputPixelFormat_, outputPixelFormat_))
+ 		return -EINVAL;
+ 
++	const char *extensions = reinterpret_cast<const char *>(glGetString(GL_EXTENSIONS));
++	if (lensShadingUniform_ >= 0 && extensions &&
++	    std::strstr(extensions, "GL_OES_texture_float") && maxTextureImageUnits >= 3) {
++		glGenTextures(1, &lensShadingTexture_);
++		glActiveTexture(GL_TEXTURE2);
++		glBindTexture(GL_TEXTURE_2D, lensShadingTexture_);
++		/* Manual bilinear sampling needs no float-linear extension. */
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++		glActiveTexture(GL_TEXTURE0);
++	} else {
++		LOG(Debayer, Info) << "Lens shading unavailable for this EGL format/context";
++	}
++
+ 	return 0;
+ }
+ 
+ void DebayerEGL::stop()
+ {
++	if (lensShadingTexture_) {
++		glDeleteTextures(1, &lensShadingTexture_);
++		lensShadingTexture_ = 0;
++	}
+ 	eglImageOutCache_.clear();
+ 	eglImageInCache_.clear();
+ 
+diff --git a/src/libcamera/software_isp/debayer_egl.h b/src/libcamera/software_isp/debayer_egl.h
+index 8e6b4af..44c7d8f 100644
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -113,6 +113,10 @@ private:
+ 
+ 	/* Contrast */
+ 	GLint contrastExpUniformDataIn_;
++	GLuint lensShadingTexture_ = 0;
++	GLint lensShadingUniform_;
++	GLint lensShadingCropUniform_;
++	GLint lensShadingEnabledUniform_;
+ 
+ 	Size nativeOutputSize_;
+ 	Rectangle window_;
+-- 
+2.47.3
+

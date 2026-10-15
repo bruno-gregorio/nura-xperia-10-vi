@@ -1,0 +1,35 @@
+--- a/src/libcamera/pipeline/simple/simple.cpp
++++ b/src/libcamera/pipeline/simple/simple.cpp
+@@ -1247,6 +1247,7 @@
+ 	 */
+ 	const SimpleCameraData::Configuration *maxPipeConfig = nullptr;
+ 	pipeConfig_ = nullptr;
++	unsigned int bestCrop = 101;
+ 
+ 	for (const SimpleCameraData::Configuration *pipeConfig : *configs) {
+ 		const Size &captureSize = pipeConfig->captureSize;
+@@ -1256,8 +1257,23 @@
+ 		    maxOutputSize.height >= maxProcessedStreamSize.height &&
+ 		    captureSize.width >= maxRawStreamSize.width &&
+ 		    captureSize.height >= maxRawStreamSize.height) {
+-			if (!pipeConfig_ || captureSize < pipeConfig_->captureSize)
++			/* Avoid choosing a cropped video mode for a 4:3 preview
++			 * just because its dimensions are sufficient. Prefer matching
++			 * aspect ratios, then the smallest capture. Treat differences
++			 * below 1% equally (Bayer borders/alignment and 1080 vs 1088).
++			 * Raw requests retain the existing resolution-based selection.
++			 */
++			unsigned int crop = 0;
++			if (maxRawStreamSize.isNull() && !maxProcessedStreamSize.isNull()) {
++				uint64_t w = uint64_t(captureSize.width) * maxProcessedStreamSize.height;
++				uint64_t h = uint64_t(captureSize.height) * maxProcessedStreamSize.width;
++				crop = 100 * (std::max(w, h) - std::min(w, h)) / std::max(w, h);
++			}
++			if (!pipeConfig_ || crop < bestCrop ||
++			    (crop == bestCrop && captureSize < pipeConfig_->captureSize)) {
+ 				pipeConfig_ = pipeConfig;
++				bestCrop = crop;
++			}
+ 		}
+ 
+ 		if (!maxPipeConfig || maxPipeConfig->captureSize < captureSize)

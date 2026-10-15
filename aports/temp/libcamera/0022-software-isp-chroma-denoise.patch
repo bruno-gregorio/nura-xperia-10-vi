@@ -1,0 +1,153 @@
+Filter Hi846 color noise in output space with a luminance-guided GPU pass.
+
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -639,6 +639,46 @@
+ 	return eglImageOut;
+ }
+ 
++int DebayerEGL::initChromaFilter()
++{
++	static constexpr unsigned char vertex[] =
++		"attribute vec2 vertexIn; varying vec2 textureOut;"
++		"void main() { gl_Position=vec4(vertexIn,0.0,1.0);"
++		"textureOut=(vertexIn+1.0)*0.5; }";
++	std::vector<std::string> env = { "#version 100\n" };
++	GLuint vs = 0, fs = 0;
++	if (egl_.compileVertexShader(vs, Span(vertex, sizeof(vertex) - 1), env))
++		return -EINVAL;
++	utils::scope_exit vertexGuard([&] { glDeleteShader(vs); });
++	if (egl_.compileFragmentShader(fs, chroma_denoise_frag, env))
++		return -EINVAL;
++	utils::scope_exit fragmentGuard([&] { glDeleteShader(fs); });
++	if (egl_.linkProgram(chromaProgram_, fs, vs))
++		return -EINVAL;
++	chromaImage_ = std::make_unique<eGLImage>(GL_RGBA, outputSize_.width,
++		outputSize_.height, outputSize_.width * 4, GL_TEXTURE3, 3);
++	egl_.createTexture2D(*chromaImage_, nullptr);
++	return egl_.attachTextureToFBO(*chromaImage_);
++}
++
++void DebayerEGL::filterChroma(eGLImage &output)
++{
++	static const GLfloat vertices[4][2] = {
++		{-1, -1}, {-1, 1}, {1, 1}, {1, -1}
++	};
++	egl_.attachTextureToFBO(output);
++	egl_.useProgram(chromaProgram_);
++	egl_.activateBindTexture(*chromaImage_);
++	glUniform1i(glGetUniformLocation(chromaProgram_, "image"), 3);
++	glUniform2f(glGetUniformLocation(chromaProgram_, "pixel_step"),
++		1.0f / outputSize_.width, 1.0f / outputSize_.height);
++	GLint position = glGetAttribLocation(chromaProgram_, "vertexIn");
++	glEnableVertexAttribArray(position);
++	glVertexAttribPointer(position, 2, GL_FLOAT, GL_FALSE, 0, vertices);
++	glViewport(0, 0, outputSize_.width, outputSize_.height);
++	glDrawArrays(GL_TRIANGLE_FAN, 0, DEBAYER_OPENGL_COORDS);
++}
++
+ int DebayerEGL::debayerGPU(FrameBuffer *input, FrameBuffer *output, const DebayerParams &params, std::optional<MappedFrameBuffer> *inMapped, std::optional<DmaSyncer> *inDmaSyncer)
+ {
+ 	eGLImage *eglImageIn;
+@@ -654,7 +694,11 @@
+ 	if (!eglImageOut)
+ 		return -ENOMEM;
+ 
+-	egl_.attachTextureToFBO(*eglImageOut);
++	const bool filter = !quadBayer_ && params.bayerDenoise > 0.0f;
++	if (filter && !chromaImage_ && initChromaFilter())
++		return -EINVAL;
++	egl_.useProgram(programId_);
++	egl_.attachTextureToFBO(filter ? *chromaImage_ : *eglImageOut);
+ 	setShaderVariableValues(*eglImageIn, params);
+ 
+ 	const Rectangle viewport = softwareIspViewport({ width_, height_ }, outputSize_,
+@@ -662,6 +706,8 @@
+ 	glViewport(viewport.x, viewport.y, viewport.width, viewport.height);
+ 	glClear(GL_COLOR_BUFFER_BIT);
+ 	glDrawArrays(GL_TRIANGLE_FAN, 0, DEBAYER_OPENGL_COORDS);
++	if (filter)
++		filterChroma(*eglImageOut);
+ 
+ 	GLenum err = glGetError();
+ 	if (err != GL_NO_ERROR) {
+@@ -761,6 +807,11 @@
+ 
+ void DebayerEGL::stop()
+ {
++	chromaImage_.reset();
++	if (chromaProgram_) {
++		glDeleteProgram(chromaProgram_);
++		chromaProgram_ = 0;
++	}
+ 	if (lensShadingTexture_) {
+ 		glDeleteTextures(1, &lensShadingTexture_);
+ 		lensShadingTexture_ = 0;
+diff --git a/src/libcamera/software_isp/debayer_egl.h b/src/libcamera/software_isp/debayer_egl.h
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -68,6 +68,8 @@
+ 	static int getOutputConfig(PixelFormat outputFormat, DebayerOutputConfig &config);
+ 	int initBayerShaders(PixelFormat inputFormat, PixelFormat outputFormat);
+ 	int getShaderVariableLocations();
++	int initChromaFilter();
++	void filterChroma(eGLImage &output);
+ 	void setShaderVariableValues(eGLImage &eGLImageIn, const DebayerParams &params);
+ 	int debayerGPU(FrameBuffer *input, FrameBuffer *output, const DebayerParams &params, std::optional<MappedFrameBuffer> *mappedInputBuffer, std::optional<DmaSyncer> *inputBufferDmaSyncer);
+ 
+@@ -78,6 +80,8 @@
+ 	GLuint vertexShaderId_ = 0;
+ 	GLuint fragmentShaderId_ = 0;
+ 	GLuint programId_ = 0;
++	GLuint chromaProgram_ = 0;
++	std::unique_ptr<eGLImage> chromaImage_;
+ 
+ 	/* Pointer to object representing input texture */
+ 	std::deque<std::pair<SharedFD, std::unique_ptr<eGLImage>>> eglImageInCache_;
+diff --git a/src/libcamera/shaders/meson.build b/src/libcamera/shaders/meson.build
+--- a/src/libcamera/shaders/meson.build
++++ b/src/libcamera/shaders/meson.build
+@@ -7,6 +7,7 @@
+     'bayer_unpacked.frag',
+     'bayer_unpacked.vert',
+     'identity.vert',
++    'chroma_denoise.frag',
+ ])
+ 
+ # Generate header from shaders
+diff --git a/src/libcamera/shaders/chroma_denoise.frag b/src/libcamera/shaders/chroma_denoise.frag
+--- /dev/null
++++ b/src/libcamera/shaders/chroma_denoise.frag
+@@ -0,0 +1,31 @@
++/* SPDX-License-Identifier: BSD-2-Clause */
++/* Spatial chroma filtering after downsampling. Luminance guides the filter
++ * across edges; retain most original luminance for texture and sharpness.
++ * This is our software filter, not Qualcomm's hardware noise algorithm.
++ */
++precision highp float;
++varying vec2 textureOut;
++uniform sampler2D image;
++uniform vec2 pixel_step;
++void main()
++{
++    vec3 centre = texture2D(image, textureOut).rgb;
++    /* Symmetric R/B coefficients work for both output byte orders. */
++    const vec3 luma = vec3(0.25, 0.5, 0.25);
++    float y0 = dot(centre, luma);
++    vec3 total = vec3(0.0);
++    float norm = 0.0;
++    for (int y = -2; y <= 2; y++) {
++        for (int x = -2; x <= 2; x++) {
++            vec3 c = texture2D(image, textureOut + vec2(float(x), float(y)) * pixel_step).rgb;
++            float difference = (dot(c, luma) - y0) / 0.10;
++            float spatial = (3.0 - abs(float(x))) * (3.0 - abs(float(y)));
++            float weight = spatial / (1.0 + difference * difference);
++            total += weight * c;
++            norm += weight;
++        }
++    }
++    vec3 smooth = total / norm;
++    float ys = dot(smooth, luma);
++    gl_FragColor = vec4(clamp(smooth + vec3(0.7 * (y0 - ys)), 0.0, 1.0), 1.0);
++}

@@ -1,0 +1,669 @@
+diff --git a/include/libcamera/internal/software_isp/debayer_params.h b/include/libcamera/internal/software_isp/debayer_params.h
+index 886bbca..a58fa07 100644
+--- a/include/libcamera/internal/software_isp/debayer_params.h
++++ b/include/libcamera/internal/software_isp/debayer_params.h
+@@ -23,6 +23,7 @@ struct DebayerParams {
+ 						 0.0, 1.0, 0.0,
+ 						 0.0, 0.0, 1.0 } };
+ 	RGB<float> blackLevel = RGB<float>({ 0.0, 0.0, 0.0 });
++	float bayerDenoise = 0.0;
+ 	float gamma = 1.0;
+ 	float contrastExp = 1.0;
+ 	RGB<float> gains = RGB<float>({ 1.0, 1.0, 1.0 });
+diff --git a/src/ipa/simple/algorithms/adjust.cpp b/src/ipa/simple/algorithms/adjust.cpp
+index 8bf39c4..e92e888 100644
+--- a/src/ipa/simple/algorithms/adjust.cpp
++++ b/src/ipa/simple/algorithms/adjust.cpp
+@@ -8,6 +8,9 @@
+ 
+ #include "adjust.h"
+ 
++#include <algorithm>
++#include <cmath>
++
+ #include <libcamera/base/log.h>
+ #include <libcamera/base/utils.h>
+ 
+@@ -26,6 +29,9 @@ LOG_DEFINE_CATEGORY(IPASoftAdjust)
+ 
+ int Adjust::init(IPAContext &context, [[maybe_unused]] const ValueNode &tuningData)
+ {
++	bayerDenoise_ = tuningData["bayerDenoise"].get<float>(0.0f);
++	if (!std::isfinite(bayerDenoise_) || bayerDenoise_ < 0 || bayerDenoise_ > 32)
++		return -EINVAL;
+ 	context.ctrlMap[&controls::Gamma] =
+ 		ControlInfo(0.1f, 10.0f, kDefaultGamma);
+ 	context.ctrlMap[&controls::Contrast] =
+@@ -97,6 +103,9 @@ void Adjust::prepare(IPAContext &context,
+ 		     IPAFrameContext &frameContext,
+ 		     DebayerParams *params)
+ {
++	/* Sigma in RAW10 codes at unity gain; empirically tuned, not vendor ABF units. */
++	params->bayerDenoise = bayerDenoise_ *
++		std::sqrt(std::clamp(context.activeState.agc.again, 1.0, 16.0)) / 1020.0;
+ 	frameContext.gamma = context.activeState.knobs.gamma;
+ 	frameContext.contrast = context.activeState.knobs.contrast;
+ 
+diff --git a/src/ipa/simple/algorithms/adjust.h b/src/ipa/simple/algorithms/adjust.h
+index 49c1f26..b27c937 100644
+--- a/src/ipa/simple/algorithms/adjust.h
++++ b/src/ipa/simple/algorithms/adjust.h
+@@ -42,6 +42,7 @@ public:
+ 		     ControlList &metadata) override;
+ 
+ private:
++	float bayerDenoise_ = 0.0f;
+ 	void applySaturation(Matrix<float, 3, 3> &ccm, float saturation);
+ };
+ 
+diff --git a/src/libcamera/shaders/bayer_1x_packed.frag b/src/libcamera/shaders/bayer_1x_packed.frag
+index 2383f28..3b253ee 100644
+--- a/src/libcamera/shaders/bayer_1x_packed.frag
++++ b/src/libcamera/shaders/bayer_1x_packed.frag
+@@ -23,40 +23,6 @@
+ precision highp float;
+ #endif
+ 
+-/*
+- * These constants are used to select the bytes containing the HS part of
+- * the pixel value:
+- * BPP - bytes per pixel,
+- * THRESHOLD_L = fract(BPP) * 0.5 + 0.02
+- * THRESHOLD_H = 1.0 - fract(BPP) * 1.5 + 0.02
+- * Let X is the x coordinate in the texture measured in bytes (so that the
+- * range is from 0 to (stride_-1)) aligned on the nearest pixel.
+- * E.g. for RAW10P:
+- * -------------+-------------------+-------------------+--
+- *  pixel No    |  0   1    2   3   |  4   5    6   7   | ...
+- * -------------+-------------------+-------------------+--
+- *  byte offset | 0   1   2   3   4 | 5   6   7   8   9 | ...
+- * -------------+-------------------+-------------------+--
+- *      X       | 0.0 1.25 2.5 3.75 | 5.0 6.25 7.5 8.75 | ...
+- * -------------+-------------------+-------------------+--
+- * If fract(X) < THRESHOLD_L then the previous byte contains the LS
+- * bits of the pixel values and needs to be skipped.
+- * If fract(X) > THRESHOLD_H then the next byte contains the LS bits
+- * of the pixel values and needs to be skipped.
+- */
+-#if defined(RAW10P)
+-#define BPP		1.25
+-#define THRESHOLD_L	0.14
+-#define THRESHOLD_H	0.64
+-#elif defined(RAW12P)
+-#define BPP		1.5
+-#define THRESHOLD_L	0.27
+-#define THRESHOLD_H	0.27
+-#else
+-#error Invalid raw format
+-#endif
+-
+-
+ varying vec2 textureOut;
+ 
+ /* the texture size in pixels */
+@@ -89,25 +55,69 @@ vec3 shading_gain(vec2 position)
+ 		       texture2D(lens_shading, uv + step).rgb, weight.x), weight.y);
+ }
+ 
+-#if defined (QUAD_BAYER)
+-vec2 quad_cell(vec2 pixel)
++/* Fetch complete MIPI samples, including the shared low-bit byte.
++ * Reflect at the active image edges to preserve the Bayer colour phase.
++ * tex_step is the inverse texture size, so address texel centres exactly.
++ */
++float raw_fetch(vec2 pixel)
+ {
+-	return clamp(floor(pixel / 2.0) * 2.0, vec2(0.0), tex_size - vec2(2.0));
++    pixel = min(abs(pixel), 2.0 * (tex_size - 1.0) - pixel);
++#if defined(RAW10P)
++    float lane = mod(pixel.x, 4.0);
++    float group = floor(pixel.x / 4.0) * 5.0;
++    float high = floor(texture2D(tex_y, (vec2(group + lane, pixel.y) + 0.5) * tex_step).r * 255.0 + 0.5);
++    float low_byte = floor(texture2D(tex_y, (vec2(group + 4.0, pixel.y) + 0.5) * tex_step).r * 255.0 + 0.5);
++    float low = mod(floor(low_byte / exp2(2.0 * lane)), 4.0);
++    /* Keep the existing 8-bit black-level/statistics scale: 64/1020 = 16/255. */
++    return (high * 4.0 + low) / 1020.0;
++#elif defined(RAW12P)
++    float lane = mod(pixel.x, 2.0);
++    float group = floor(pixel.x / 2.0) * 3.0;
++    float high = floor(texture2D(tex_y, (vec2(group + lane, pixel.y) + 0.5) * tex_step).r * 255.0 + 0.5);
++    float low_byte = floor(texture2D(tex_y, (vec2(group + 2.0, pixel.y) + 0.5) * tex_step).r * 255.0 + 0.5);
++    float low = mod(floor(low_byte / exp2(4.0 * lane)), 16.0);
++    return (high * 16.0 + low) / 4080.0;
++#else
++#error Invalid raw format
++#endif
+ }
+ 
+-float quad_fetch(vec2 pixel)
++float sample_bayer(vec2 pixel)
+ {
+-	vec2 cell = quad_cell(pixel);
+-	vec2 byte_pos = vec2(floor(BPP * cell.x + 0.02), cell.y) * tex_step;
+-	vec2 byte_pos_x1 = vec2(floor(BPP * (cell.x + 1.0) + 0.02), cell.y) * tex_step;
+-	vec2 byte_pos_y1 = byte_pos + vec2(0.0, tex_step.y);
+-	vec2 byte_pos_xy1 = vec2(byte_pos_x1.x, byte_pos_y1.y);
+-	return (texture2D(tex_y, byte_pos).r +
+-		texture2D(tex_y, byte_pos_x1).r +
+-		texture2D(tex_y, byte_pos_y1).r +
+-		texture2D(tex_y, byte_pos_xy1).r) * 0.25;
+-}
++#if defined(QUAD_BAYER)
++    vec2 cell = clamp(floor(pixel / 2.0) * 2.0, vec2(0.0), tex_size - 2.0);
++    return (raw_fetch(cell) + raw_fetch(cell + vec2(1.0, 0.0)) +
++            raw_fetch(cell + vec2(0.0, 1.0)) + raw_fetch(cell + 1.0)) * 0.25;
++#else
++    return raw_fetch(pixel);
+ #endif
++}
++
++uniform float bayer_denoise;
++
++/* Opt-in 5x5 spatial/range filter in linear sensor space. This is our
++ * software filter, not a reproduction of Qualcomm's ABF hardware.
++ */
++vec3 denoise_bayer(vec2 pixel, vec3 reference)
++{
++    vec3 sum = vec3(0.0), weights = vec3(0.0);
++    for (int y = -2; y <= 2; y++) {
++        for (int x = -2; x <= 2; x++) {
++            vec2 pos = pixel + vec2(float(x), float(y));
++            vec2 phase = mod(pos + tex_bayer_first_red, 2.0);
++            vec3 channel = phase.x < 1.0 ?
++                (phase.y < 1.0 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)) :
++                (phase.y < 1.0 ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));
++            float value = raw_fetch(pos);
++            float difference = (value - dot(reference, channel)) / bayer_denoise;
++            float spatial = 1.0 / (1.0 + float(x*x + y*y) * 0.25);
++            float weight = spatial / (1.0 + difference * difference);
++            sum += channel * (weight * value);
++            weights += channel * weight;
++        }
++    }
++    return sum / max(weights, vec3(0.000001));
++}
+ 
+ float apply_contrast(float value)
+ {
+@@ -120,175 +130,32 @@ float apply_contrast(float value)
+ 
+ void main(void)
+ {
+-	vec3 rgb;
+-
+-	/*
+-	 * center_bytes holds the coordinates of the MS byte of the pixel
+-	 * being sampled on the [0, stride-1/height-1] range.
+-	 * center_pixel holds the coordinates of the pixel being sampled
+-	 * on the [0, width/height-1] range.
+-	 */
+-	vec2 center_bytes;
+-	vec2 center_pixel;
+-
+-	/*
+-	 * x- and y-positions of the adjacent pixels on the [0, 1] range.
+-	 */
+-	vec2 xcoords;
+-	vec2 ycoords;
+-
+-	/*
+-	 * The coordinates passed to the shader in textureOut may point
+-	 * to a place in between the pixels if the texture format doesn't
+-	 * match the image format. In particular, MIPI packed raw Bayer
+-	 * formats don't have a matching texture format.
+-	 * In this case align the coordinates to the left nearest pixel
+-	 * by hand.
+-	 */
+-	center_pixel = floor(textureOut * tex_size);
+-#if defined (QUAD_BAYER)
+-	center_pixel = quad_cell(center_pixel);
++    vec2 center_pixel = floor(textureOut * tex_size);
++    float step = 1.0;
++#if defined(QUAD_BAYER)
++    center_pixel = floor(center_pixel / 2.0) * 2.0;
++    step = 2.0;
+ #endif
+-	center_bytes.y = center_pixel.y;
+-
+-	/*
+-	 * Add a small number (a few mantissa's LSBs) to avoid float
+-	 * representation issues. Maybe paranoic.
+-	 */
+-	center_bytes.x = BPP * center_pixel.x + 0.02;
+-
+-	float fract_x = fract(center_bytes.x);
+-
+-	/*
+-	 * The below floor() call ensures that center_bytes.x points
+-	 * at one of the bytes representing the 8 higher bits of
+-	 * the pixel value, not at the byte containing the LS bits
+-	 * of the group of the pixels.
+-	 */
+-	center_bytes.x = floor(center_bytes.x);
+-	center_bytes *= tex_step;
+-
+-#if defined (QUAD_BAYER)
+-	xcoords = center_pixel.x + vec2(-2.0, 2.0);
+-	ycoords = center_pixel.y + vec2(-2.0, 2.0);
+-#else
+-	xcoords = center_bytes.x + vec2(-tex_step.x, tex_step.x);
+-	ycoords = center_bytes.y + vec2(-tex_step.y, tex_step.y);
+-
+-	/*
+-	 * If xcoords[0] points at the byte containing the LS bits
+-	 * of the previous group of the pixels, move xcoords[0] one
+-	 * byte back.
+-	 */
+-	xcoords[0] += (fract_x < THRESHOLD_L) ? -tex_step.x : 0.0;
+-
+-	/*
+-	 * If xcoords[1] points at the byte containing the LS bits
+-	 * of the current group of the pixels, move xcoords[1] one
+-	 * byte forward.
+-	 */
+-	xcoords[1] += (fract_x > THRESHOLD_H) ? tex_step.x : 0.0;
++    float c = sample_bayer(center_pixel);
++    float horizontal = (sample_bayer(center_pixel + vec2(-step, 0.0)) +
++                        sample_bayer(center_pixel + vec2(step, 0.0))) * 0.5;
++    float vertical = (sample_bayer(center_pixel + vec2(0.0, -step)) +
++                      sample_bayer(center_pixel + vec2(0.0, step))) * 0.5;
++    float diagonal = (sample_bayer(center_pixel + vec2(-step, -step)) +
++                      sample_bayer(center_pixel + vec2(step, -step)) +
++                      sample_bayer(center_pixel + vec2(-step, step)) +
++                      sample_bayer(center_pixel + vec2(step, step))) * 0.25;
++    vec2 phase = mod(center_pixel / step + tex_bayer_first_red, 2.0);
++    vec3 rgb = phase.x < 1.0 ?
++        (phase.y < 1.0 ? vec3(c, (horizontal + vertical) * 0.5, diagonal) :
++                         vec3(vertical, c, horizontal)) :
++        (phase.y < 1.0 ? vec3(horizontal, c, vertical) :
++                         vec3(diagonal, (horizontal + vertical) * 0.5, c));
++#if !defined(QUAD_BAYER)
++    if (bayer_denoise > 0.0)
++        rgb = denoise_bayer(center_pixel, rgb);
+ #endif
+ 
+-	vec2 alternate = mod(center_pixel.xy / 2.0 + tex_bayer_first_red, 2.0);
+-#if !defined (QUAD_BAYER)
+-	alternate = mod(center_pixel.xy + tex_bayer_first_red, 2.0);
+-#endif
+-	bool even_col = alternate.x < 1.0;
+-	bool even_row = alternate.y < 1.0;
+-
+-	/*
+-	 * We need to sample the central pixel and the ones with offset
+-	 * of -1 to +1 pixel in both X and Y directions. Let's name these
+-	 * pixels as below, where C is the central pixel:
+-	 *
+-	 *   +----+----+----+----+
+-	 *   | \ x|    |    |    |
+-	 *   |y \ | -1 |  0 | +1 |
+-	 *   +----+----+----+----+
+-	 *   | +1 | D2 | A1 | D3 |
+-	 *   +----+----+----+----+
+-	 *   |  0 | B0 |  C | B1 |
+-	 *   +----+----+----+----+
+-	 *   | -1 | D0 | A0 | D1 |
+-	 *   +----+----+----+----+
+-	 *
+-	 * In the below equations (0,-1).r means "r component of the texel
+-	 * shifted by -tex_step.y from the center_bytes one" etc.
+-	 *
+-	 * In the even row / even column (EE) case the colour values are:
+-	 *   R = C = (0,0).r,
+-	 *   G = (A0 + A1 + B0 + B1) / 4.0 =
+-	 *       ( (0,-1).r + (0,1).r + (-1,0).r + (1,0).r ) / 4.0,
+-	 *   B = (D0 + D1 + D2 + D3) / 4.0 =
+-	 *       ( (-1,-1).r + (1,-1).r + (-1,1).r + (1,1).r ) / 4.0
+-	 *
+-	 * For even row / odd column (EO):
+-	 *   R = (B0 + B1) / 2.0 = ( (-1,0).r + (1,0).r ) / 2.0,
+-	 *   G = C = (0,0).r,
+-	 *   B = (A0 + A1) / 2.0 = ( (0,-1).r + (0,1).r ) / 2.0
+-	 *
+-	 * For odd row / even column (OE):
+-	 *   R = (A0 + A1) / 2.0 = ( (0,-1).r + (0,1).r ) / 2.0,
+-	 *   G = C = (0,0).r,
+-	 *   B = (B0 + B1) / 2.0 = ( (-1,0).r + (1,0).r ) / 2.0
+-	 *
+-	 * For odd row / odd column (OO):
+-	 *   R = (D0 + D1 + D2 + D3) / 4.0 =
+-	 *       ( (-1,-1).r + (1,-1).r + (-1,1).r + (1,1).r ) / 4.0,
+-	 *   G = (A0 + A1 + B0 + B1) / 4.0 =
+-	 *       ( (0,-1).r + (0,1).r + (-1,0).r + (1,0).r ) / 4.0,
+-	 *   B = C = (0,0).r
+-	 */
+-
+-	/*
+-	 * Fetch the values and precalculate the terms:
+-	 *   patterns.x = (A0 + A1) / 2.0
+-	 *   patterns.y = (B0 + B1) / 2.0
+-	 *   patterns.z = (A0 + A1 + B0 + B1) / 4.0
+-	 *   patterns.w = (D0 + D1 + D2 + D3) / 4.0
+-	 */
+-#if defined (QUAD_BAYER)
+-	#define fetch(x, y) quad_fetch(vec2(x, y))
+-	float C = quad_fetch(center_pixel);
+-#else
+-	#define fetch(x, y) texture2D(tex_y, vec2(x, y)).r
+-	float C = texture2D(tex_y, center_bytes).r;
+-#endif
+-	vec4 patterns = vec4(
+-#if defined (QUAD_BAYER)
+-		fetch(center_pixel.x, ycoords[0]),	/* A0: (0,-1) */
+-		fetch(xcoords[0], center_pixel.y),	/* B0: (-1,0) */
+-#else
+-		fetch(center_bytes.x, ycoords[0]),	/* A0: (0,-1) */
+-		fetch(xcoords[0], center_bytes.y),	/* B0: (-1,0) */
+-#endif
+-		fetch(xcoords[0], ycoords[0]),		/* D0: (-1,-1) */
+-		fetch(xcoords[1], ycoords[0]));		/* D1: (1,-1) */
+-	vec4 temp = vec4(
+-#if defined (QUAD_BAYER)
+-		fetch(center_pixel.x, ycoords[1]),	/* A1: (0,1) */
+-		fetch(xcoords[1], center_pixel.y),	/* B1: (1,0) */
+-#else
+-		fetch(center_bytes.x, ycoords[1]),	/* A1: (0,1) */
+-		fetch(xcoords[1], center_bytes.y),	/* B1: (1,0) */
+-#endif
+-		fetch(xcoords[1], ycoords[1]),		/* D3: (1,1) */
+-		fetch(xcoords[0], ycoords[1]));		/* D2: (-1,1) */
+-	patterns = (patterns + temp) * 0.5;
+-		/* .x = (A0 + A1) / 2.0, .y = (B0 + B1) / 2.0 */
+-		/* .z = (D0 + D3) / 2.0, .w = (D1 + D2) / 2.0 */
+-	patterns.w = (patterns.z + patterns.w) * 0.5;
+-	patterns.z = (patterns.x + patterns.y) * 0.5;
+-
+-	rgb = even_col ?
+-		(even_row ?
+-			vec3(C, patterns.zw) :
+-			vec3(patterns.x, C, patterns.y)) :
+-		(even_row ?
+-			vec3(patterns.y, C, patterns.x) :
+-			vec3(patterns.wz, C));
+-
+ 	/*
+ 	 * \todo: Black level normalising, AWB and digital gain could be
+ 	 * reworked into a single multiplication.
+diff --git a/src/libcamera/software_isp/debayer_egl.cpp b/src/libcamera/software_isp/debayer_egl.cpp
+index 17a594b..f3d5f9c 100644
+--- a/src/libcamera/software_isp/debayer_egl.cpp
++++ b/src/libcamera/software_isp/debayer_egl.cpp
+@@ -124,6 +124,7 @@ int DebayerEGL::getShaderVariableLocations(void)
+ 	ccmUniformDataIn_ = glGetUniformLocation(programId_, "ccm");
+ 	blackLevelUniformDataIn_ = glGetUniformLocation(programId_, "blacklevel");
+ 	gammaUniformDataIn_ = glGetUniformLocation(programId_, "gamma");
++	bayerDenoiseUniform_ = glGetUniformLocation(programId_, "bayer_denoise");
+ 	contrastExpUniformDataIn_ = glGetUniformLocation(programId_, "contrastExp");
+ 	lensShadingUniform_ = glGetUniformLocation(programId_, "lens_shading");
+ 	lensShadingCropUniform_ = glGetUniformLocation(programId_, "lens_shading_crop");
+@@ -425,6 +426,17 @@ void DebayerEGL::setShaderVariableValues(eGLImage &eglImageIn, const DebayerPara
+ 			      (GLfloat)height_ };
+ 	GLfloat Step[] = { static_cast<float>(bytesPerPixel_) / (inputConfig_.stride - 1),
+ 			   1.0f / (height_ - 1) };
++	if (inputPixelFormat_ == formats::SBGGR10_CSI2P ||
++	    inputPixelFormat_ == formats::SGBRG10_CSI2P ||
++	    inputPixelFormat_ == formats::SGRBG10_CSI2P ||
++	    inputPixelFormat_ == formats::SRGGB10_CSI2P ||
++	    inputPixelFormat_ == formats::SBGGR12_CSI2P ||
++	    inputPixelFormat_ == formats::SGBRG12_CSI2P ||
++	    inputPixelFormat_ == formats::SGRBG12_CSI2P ||
++	    inputPixelFormat_ == formats::SRGGB12_CSI2P) {
++		Step[0] = 1.0f / inputConfig_.stride;
++		Step[1] = 1.0f / height_;
++	}
+ 	GLfloat Stride = (GLfloat)width_ / (shaderStridePixels_ / bytesPerPixel_);
+ 	/*
+ 	 * Scale the output size from the native size the algorithm produces for
+@@ -544,6 +556,7 @@ void DebayerEGL::setShaderVariableValues(eGLImage &eglImageIn, const DebayerPara
+ 	 * Gamma
+ 	 */
+ 	glUniform1f(gammaUniformDataIn_, params.gamma);
++	glUniform1f(bayerDenoiseUniform_, params.bayerDenoise);
+ 	LOG(Debayer, Debug) << " gammaUniformDataIn_ " << gammaUniformDataIn_ << " data " << params.gamma;
+ 
+ 	/*
+diff --git a/src/libcamera/software_isp/debayer_egl.h b/src/libcamera/software_isp/debayer_egl.h
+index 44c7d8f..e8bfd62 100644
+--- a/src/libcamera/software_isp/debayer_egl.h
++++ b/src/libcamera/software_isp/debayer_egl.h
+@@ -110,6 +110,7 @@ private:
+ 
+ 	/* Gamma */
+ 	GLint gammaUniformDataIn_;
++	GLint bayerDenoiseUniform_;
+ 
+ 	/* Contrast */
+ 	GLint contrastExpUniformDataIn_;
+diff --git a/src/libcamera/software_isp/swstats_cpu.cpp b/src/libcamera/software_isp/swstats_cpu.cpp
+index f07e1e4..58d7d7f 100644
+--- a/src/libcamera/software_isp/swstats_cpu.cpp
++++ b/src/libcamera/software_isp/swstats_cpu.cpp
+@@ -304,18 +304,18 @@ void SwStatsCpu::statsBGGR10PLine0(const uint8_t *src[], SwIspStats &stats)
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
+ 
+-	SWSTATS_START_LINE_STATS(uint8_t)
++	SWSTATS_START_LINE_STATS(uint16_t)
+ 
+ 	/* x += 5 sample every other 2x2 block */
+ 	for (unsigned int x = 0; x < widthInBytes; x += 5) {
+ 		/* BGGR */
+-		b = src0[x];
+-		g = src0[x + 1];
+-		g2 = src1[x];
+-		r = src1[x + 1];
++		b = (src0[x] << 2) | ((src0[x + 4] >> 0) & 3);
++		g = (src0[x + 1] << 2) | ((src0[x + 4] >> 2) & 3);
++		g2 = (src1[x] << 2) | ((src1[x + 4] >> 0) & 3);
++		r = (src1[x + 1] << 2) | ((src1[x + 4] >> 2) & 3);
+ 		g = (g + g2) / 2;
+-		/* Data is already 8 bits, divide by 1 */
+-		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		/* Preserve low bits until sums are normalized in finishFrame(). */
++		SWSTATS_ACCUMULATE_LINE_STATS(4)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+@@ -330,18 +330,18 @@ void SwStatsCpu::statsGBRG10PLine0(const uint8_t *src[], SwIspStats &stats)
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
+ 
+-	SWSTATS_START_LINE_STATS(uint8_t)
++	SWSTATS_START_LINE_STATS(uint16_t)
+ 
+ 	/* x += 5 sample every other 2x2 block */
+ 	for (unsigned int x = 0; x < widthInBytes; x += 5) {
+ 		/* GBRG */
+-		g = src0[x];
+-		b = src0[x + 1];
+-		r = src1[x];
+-		g2 = src1[x + 1];
++		g = (src0[x] << 2) | ((src0[x + 4] >> 0) & 3);
++		b = (src0[x + 1] << 2) | ((src0[x + 4] >> 2) & 3);
++		r = (src1[x] << 2) | ((src1[x + 4] >> 0) & 3);
++		g2 = (src1[x + 1] << 2) | ((src1[x + 4] >> 2) & 3);
+ 		g = (g + g2) / 2;
+-		/* Data is already 8 bits, divide by 1 */
+-		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		/* Preserve low bits until sums are normalized in finishFrame(). */
++		SWSTATS_ACCUMULATE_LINE_STATS(4)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+@@ -381,21 +381,21 @@ void SwStatsCpu::statsBGGR12PLine0(const uint8_t *src[], SwIspStats &stats)
+ 	const uint8_t *src1 = src[2] + window_.x * 3 / 2;
+ 	const unsigned int widthInBytes = window_.width * 3 / 2;
+ 
+-	SWSTATS_START_LINE_STATS(uint8_t)
++	SWSTATS_START_LINE_STATS(uint16_t)
+ 
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
+ 
+ 	/* x += 6 sample every other 2x2 block */
+ 	for (unsigned int x = 0; x < widthInBytes; x += 6) {
+-		b = src0[x];
+-		g = src0[x + 1];
+-		g2 = src1[x];
+-		r = src1[x + 1];
++		b = (src0[x] << 4) | ((src0[x + 2] >> 0) & 15);
++		g = (src0[x + 1] << 4) | ((src0[x + 2] >> 4) & 15);
++		g2 = (src1[x] << 4) | ((src1[x + 2] >> 0) & 15);
++		r = (src1[x + 1] << 4) | ((src1[x + 2] >> 4) & 15);
+ 
+ 		g = (g + g2) / 2;
+ 
+-		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		SWSTATS_ACCUMULATE_LINE_STATS(16)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+@@ -407,21 +407,21 @@ void SwStatsCpu::statsGBRG12PLine0(const uint8_t *src[], SwIspStats &stats)
+ 	const uint8_t *src1 = src[2] + window_.x * 3 / 2;
+ 	const unsigned int widthInBytes = window_.width * 3 / 2;
+ 
+-	SWSTATS_START_LINE_STATS(uint8_t)
++	SWSTATS_START_LINE_STATS(uint16_t)
+ 
+ 	if (swapLines_)
+ 		std::swap(src0, src1);
+ 
+ 	/* x += 6 sample every other 2x2 block */
+ 	for (unsigned int x = 0; x < widthInBytes; x += 6) {
+-		g = src0[x];
+-		b = src0[x + 1];
+-		r = src1[x];
+-		g2 = src1[x + 1];
++		g = (src0[x] << 4) | ((src0[x + 2] >> 0) & 15);
++		b = (src0[x + 1] << 4) | ((src0[x + 2] >> 4) & 15);
++		r = (src1[x] << 4) | ((src1[x + 2] >> 0) & 15);
++		g2 = (src1[x + 1] << 4) | ((src1[x + 2] >> 4) & 15);
+ 
+ 		g = (g + g2) / 2;
+ 
+-		SWSTATS_ACCUMULATE_LINE_STATS(1)
++		SWSTATS_ACCUMULATE_LINE_STATS(16)
+ 	}
+ 
+ 	SWSTATS_FINISH_LINE_STATS()
+@@ -617,7 +617,7 @@ int SwStatsCpu::configure(const StreamConfiguration &inputCfg, unsigned int stat
+ 		/* Skip every 3th and 4th line, sample every other 2x2 block */
+ 		ySkipMask_ = 0x02;
+ 		xShift_ = 0;
+-		sumShift_ = 0;
++		sumShift_ = bitDepth - 8;
+ 		processFrame_ = &SwStatsCpu::processBayerFrame2;
+ 
+ 		if (bitDepth == 10) {
+diff --git a/test/meson.build b/test/meson.build
+index d41ce23..fd7a632 100644
+--- a/test/meson.build
++++ b/test/meson.build
+@@ -50,6 +50,7 @@ public_tests = [
+ ]
+ 
+ internal_tests = [
++    {'name': 'packed-bayer-stats', 'sources': ['packed-bayer-stats.cpp']},
+     {'name': 'bayer-format', 'sources': ['bayer-format.cpp']},
+     {'name': 'quad-bayer', 'sources': ['quad-bayer.cpp']},
+     {'name': 'byte-stream-buffer', 'sources': ['byte-stream-buffer.cpp']},
+diff --git a/test/packed-bayer-stats.cpp b/test/packed-bayer-stats.cpp
+new file mode 100644
+index 0000000..5bc6924
+--- /dev/null
++++ b/test/packed-bayer-stats.cpp
+@@ -0,0 +1,94 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* Check the actual CPU statistics path, including its shared-memory output. */
++#include <array>
++#include <iostream>
++#include <numeric>
++#include <sys/mman.h>
++#include <vector>
++
++#include <libcamera/camera_manager.h>
++#include <libcamera/formats.h>
++#include <libcamera/stream.h>
++#include "libcamera/internal/software_isp/swstats_cpu.h"
++#include "test.h"
++
++using namespace libcamera;
++
++class PackedBayerStatsTest : public Test
++{
++protected:
++	int run() override
++	{
++		CameraManager manager;
++		const std::array<std::array<PixelFormat, 4>, 2> formats = {{
++			{ formats::SRGGB10_CSI2P, formats::SGRBG10_CSI2P,
++					formats::SGBRG10_CSI2P, formats::SBGGR10_CSI2P },
++			{ formats::SRGGB12_CSI2P, formats::SGRBG12_CSI2P,
++					formats::SGBRG12_CSI2P, formats::SBGGR12_CSI2P },
++		}};
++		for (unsigned int depth = 0; depth < 2; depth++) {
++			unsigned int lowBits = depth ? 4 : 2;
++			unsigned int lanes = depth ? 2 : 4;
++			unsigned int divisor = 1 << lowBits;
++			for (unsigned int phase = 0; phase < 4; phase++) {
++				for (bool clipped : { false, true }) {
++					StreamConfiguration cfg;
++					cfg.pixelFormat = formats[depth][phase];
++					cfg.size = { 64, 16 };
++					cfg.stride = 64 * (lanes + 1) / lanes + 8;
++					SwStatsCpu stats(manager);
++					if (!stats.isValid() || stats.configure(cfg))
++						return TestFail;
++					stats.setWindow(Rectangle(cfg.size));
++					std::vector<uint8_t> bytes(cfg.stride * cfg.size.height, 0xa5);
++					const std::array<unsigned int, 3> rgb = {
++						16 * divisor + 3, 20 * divisor + 3, 24 * divisor + 3
++					};
++					for (unsigned int y = 0; y < cfg.size.height; y++) {
++						for (unsigned int x = 0; x < cfg.size.width; x += lanes) {
++							unsigned int low = 0;
++							for (unsigned int lane = 0; lane < lanes; lane++) {
++								unsigned int px = (x + lane + (phase & 1)) % 2;
++								unsigned int py = (y + (phase >> 1)) % 2;
++								unsigned int channel = px == py ? (px ? 2 : 0) : 1;
++								unsigned int value = clipped ? (256 * divisor - 1) : rgb[channel];
++								bytes[y * cfg.stride + x / lanes * (lanes + 1) + lane] = value >> lowBits;
++								low |= (value & (divisor - 1)) << (lane * lowBits);
++							}
++							bytes[y * cfg.stride + x / lanes * (lanes + 1) + lanes] = low;
++						}
++					}
++					stats.startFrame(0);
++					for (unsigned int y = 0; y < cfg.size.height; y += 2) {
++						const uint8_t *rows[] = { bytes.data() + y * cfg.stride,
++																															bytes.data() + y * cfg.stride,
++																															bytes.data() + (y + 1) * cfg.stride };
++						stats.processLine0(0, y, rows);
++					}
++					stats.finishFrame(0, 0);
++					auto *result = static_cast<const SwIspStats *>(mmap(nullptr, sizeof(SwIspStats),
++							PROT_READ, MAP_SHARED, stats.getStatsFD().get(), 0));
++					if (result == MAP_FAILED)
++						return TestFail;
++					unsigned int count = 64;
++					bool okay = result->valid && result->awbCount == (clipped ? 0 : count) &&
++							std::accumulate(result->yHistogram.begin(), result->yHistogram.end(), 0u) == count;
++					for (unsigned int c = 0; c < 3; c++) {
++						unsigned int value = clipped ? (256 * divisor - 1) : rgb[c];
++						okay &= result->sum_[c] == count * value / divisor;
++						okay &= result->awbSum[c] == (clipped ? 0 : count * value / divisor);
++					}
++					munmap(const_cast<SwIspStats *>(result), sizeof(SwIspStats));
++					if (!okay) {
++						std::cerr << "Packed stats mismatch: depth=" << (lowBits + 8)
++																<< " phase=" << phase << " clipped=" << clipped << std::endl;
++						return TestFail;
++					}
++				}
++			}
++		}
++		return TestPass;
++	}
++};
++
++TEST_REGISTER(PackedBayerStatsTest)

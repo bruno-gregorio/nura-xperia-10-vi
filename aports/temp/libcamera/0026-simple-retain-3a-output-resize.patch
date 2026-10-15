@@ -1,0 +1,67 @@
+--- a/src/ipa/simple/soft_simple.cpp
++++ b/src/ipa/simple/soft_simple.cpp
+@@ -9,6 +9,7 @@
+ #include <cmath>
+ #include <stdint.h>
+ #include <sys/mman.h>
++#include <tuple>
+ 
+ #include <linux/v4l2-controls.h>
+ 
+@@ -80,6 +81,7 @@
+ 	std::unique_ptr<CameraSensorHelper> camHelper_;
+ 	ControlInfoMap sensorInfoMap_;
+ 	ControlInfoMap lensInfoMap_;
++	bool configured_ = false;
+ 
+ 	/* Local parameter storage */
+ 	struct IPAContext context_;
+@@ -203,8 +205,40 @@
+ 
+ int IPASoftSimple::configure(const IPAConfigInfo &configInfo)
+ {
++	/* A preview/photo switch can change only the GPU output size. Do not
++	 * restart a settled autofocus scan or discard AWB/digital gain when the
++	 * sensor mode and control limits are identical. The algorithms use
++	 * statistics counts, not absolute request sequence numbers.
++	 */
++	auto modeKey = [](const IPACameraSensorInfo &s) {
++		return std::tie(s.model, s.bitsPerPixel, s.cfaPattern,
++				s.activeAreaSize, s.analogCrop, s.outputSize,
++				s.pixelRate, s.minLineLength, s.maxLineLength,
++				s.minFrameLength, s.maxFrameLength);
++	};
++	auto sameControls = [](const ControlInfoMap &a, const ControlInfoMap &b) {
++		if (a.size() != b.size())
++			return false;
++		for (const auto &[id, info] : a) {
++			auto it = b.find(id->id());
++			if (it == b.end() || it->second != info)
++				return false;
++		}
++		return true;
++	};
++	bool retain = configured_ && context_.activeState.agc.valid &&
++		modeKey(context_.sensorInfo) == modeKey(configInfo.sensorInfo) &&
++		sameControls(sensorInfoMap_, configInfo.sensorControls) &&
++		sameControls(lensInfoMap_, configInfo.lensControls);
++
+ 	sensorInfoMap_ = configInfo.sensorControls;
+ 	lensInfoMap_ = configInfo.lensControls;
++	if (retain) {
++		context_.frameContexts.clear();
++		LOG(IPASoft, Info) << "Retaining 3A state for unchanged sensor mode";
++		return 0;
++	}
++	configured_ = false;
+ 
+ 	const ControlInfo &exposureInfo = sensorInfoMap_.find(V4L2_CID_EXPOSURE)->second;
+ 	const ControlInfo &gainInfo = sensorInfoMap_.find(V4L2_CID_ANALOGUE_GAIN)->second;
+@@ -278,6 +312,7 @@
+ 		<< context_.configuration.agc.againMax
+ 		<< " (" << context_.configuration.agc.againMinStep << ")";
+ 
++	configured_ = true;
+ 	return 0;
+ }
+ 

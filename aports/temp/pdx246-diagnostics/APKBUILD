@@ -1,0 +1,22 @@
+maintainer="Bruno Gregorio <accounts@bruno.pw>"
+pkgname=pdx246-diagnostics
+pkgver=1
+pkgrel=0
+pkgdesc="Repeatable GPU checks for the Xperia 10 VI"
+url="https://postmarketos.org"
+arch="noarch"
+license="MIT"
+depends="foot glmark2"
+options="!check"
+source="pdx246-gpu-check pdx246-gpu-check.desktop"
+
+package() {
+	install -Dm755 "$srcdir"/pdx246-gpu-check "$pkgdir"/usr/bin/pdx246-gpu-check
+	install -Dm644 "$srcdir"/pdx246-gpu-check.desktop \
+		"$pkgdir"/usr/share/applications/pdx246-gpu-check.desktop
+}
+
+sha512sums="
+277c7d49d68dd5d7a960db87f6c651cde7330422e045335b67d0e7b763d54ba9a609a6532383e0d8944567c80e7872f0b0ed3561f131b3a1124c050a76e8748e  pdx246-gpu-check
+af72370cf0242f23d4106104b09e0338548565321af12a09b488fb0d96eff445ad4c468b231f2e388e69eaf444caf95722ff251d41eae6801a14b4973b65a894  pdx246-gpu-check.desktop
+"

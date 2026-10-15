@@ -26,7 +26,7 @@
 maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=firmware-sony-pdx246
 pkgver=1
-pkgrel=3
+pkgrel=6
 pkgdesc="Firmware for Sony Xperia 10 VI"
 url="https://postmarketos.org"
 arch="aarch64"
@@ -36,8 +36,11 @@ subpackages="
 	$pkgname-adreno
 	$pkgname-adsp
 	$pkgname-audio
+	$pkgname-cameras
 	$pkgname-cdsp
+	$pkgname-fingerprint
 	$pkgname-hexagonfs
+	$pkgname-modem
 	$pkgname-wlan
 	"
 source="
@@ -48,8 +51,26 @@ source="
 	aw88263_acf.bin
 	board-2.bin
 	cdsp.mbn
+	egisap64.mdt
+	egisap64.b00
+	egisap64.b01
+	egisap64.b02
+	egisap64.b03
+	egisap64.b04
+	egisap64.b05
+	egisap64.b06
+	egisap64.b07
+	egisap64.b08
 	gmu_gen70000.bin
 	hexagonfs.tar
+	hi846-front-init.bin
+	hi846-front-3264x2448.bin
+	hi846-front-1280x720.bin
+	hi846-back-init.bin
+	hi846-back-3264x2448.bin
+	hi846-back-2304x1728.bin
+	modem.mbn
+	modem-pr.tar
 	wpss.mbn
 	"
 
@@ -81,10 +102,20 @@ audio() {
 		-t "$subpkgdir"/usr/lib/firmware/
 }
 
+cameras() {
+	pkgdesc="Sony Xperia 10 VI stock Hi846 sensor programs"
+	install -Dm644 "$srcdir"/hi846-*.bin -t "$subpkgdir"/usr/lib/firmware/hynix/pdx246/
+}
+
 cdsp() {
 	pkgdesc="Sony Xperia 10 VI CDSP firmware"
 
 	install -Dm644 "$srcdir"/cdsp.mbn -t "$subpkgdir/$_fwdir"/
+}
+
+fingerprint() {
+	pkgdesc="Sony Xperia 10 VI signed Egis fingerprint trusted app"
+	install -Dm644 "$srcdir"/egisap64.* -t "$subpkgdir"/usr/lib/firmware/
 }
 
 hexagonfs() {
@@ -96,6 +127,12 @@ hexagonfs() {
 		"$subpkgdir"/usr/share/qcom/sm6450/Sony/columbia/
 	find "$subpkgdir"/usr/share/qcom -type d -exec chmod 0755 {} +
 	find "$subpkgdir"/usr/share/qcom -type f -exec chmod 0644 {} +
+}
+
+modem() {
+	pkgdesc="Sony Xperia 10 VI modem firmware and read-only remote files"
+	install -Dm644 "$srcdir"/modem.mbn -t "$subpkgdir/$_fwdir"/
+	cp -R "$srcdir"/modem_pr "$subpkgdir/$_fwdir"/
 }
 
 wlan() {
@@ -113,7 +150,25 @@ cc0136741bef9e0702fc7513357a4ebe617dffc94678badd7c6653e789dadea9e48babd73a23a7e7
 1ca1911533dc430c1b72095b526836fd6abbae37178882e8ad13c8de3786f6c98516b3266bbc90bee53c0fbdcdb7a10d289723e915bc78103e8971232564a89d  aw88263_acf.bin
 741b14e4fb2a336e99d1801bca064d4d0a13728c34dc735a16ffc53244adf054f42be43b6c6d359d64dda79e90fd7a2c9e24775db55763f926bdfd60e2e8f099  board-2.bin
 eca621a3310f51a31c85c83d9a0b23cf71624971507d3297104578b51ceafde6704be4b77cd16882ce7de570ea70fb92f3ae6b4922eb113b07075b4b13f38c11  cdsp.mbn
+2dd35fccd9c8cd38091936f3b7056c251e71f19c026efb46b22c7763274fad03c9f9f4c25ecdfbf34a4450fec0269b2211577c7391f960a22879329107a66ad2  egisap64.mdt
+a64623051e02ff2e21788dffd8b18903f60b32394280a51cf7cb20f3c8eb31e5be25b80a7eecbc5308550f3e025b71b4bb667e6012c6ae47aea8230fd7ec4cce  egisap64.b00
+39ba005fa4dae429d1171e18b0b4817e85c4ffdb3f7fe9059768e8770cd7d0958655164cdf38c2f668eb013dbacdd1e1a504b7c06b348b024b92d4cb6fd5235a  egisap64.b01
+502fa26be07923226850ef2f6f7f76d26fc6fd07f5632beea40c026373441df34cd85e16656ce0274f41e57d8bf1a6dac5508be26d21ef2bad0e1308ffa43b04  egisap64.b02
+27405e06a6e1521d0bc3a69e5063edd530bf9753053cfa4e18836d9fa9612a24a738fe6d5ff867704971668a4822e8e7f3a4ba32adfabe1f617fd0b4aa655c5f  egisap64.b03
+534f125dc2c39e7171263065d7d219b0d7b86d3b7e9ae2ed6927a59f8d2e931334b600bf3b40f7cf1ab007ee7e757ee0757834d3bba7ae54715def2f39e88e9b  egisap64.b04
+082a757c5d06aa90ec05d92437a47b23e0389ce87b82917ce439a1aff0d60b153f44a33180cc0510cd5e7932ddc67d22e66285dcdab2700aec10a4a64d07ce29  egisap64.b05
+1dc0b888205347bdd0c86f81b208c6caace3e1936d09ec1d2a0367fe1335923ba62bbd68598a28b5ad2f63d99a2856263867e16b29d8d685f420c7642dbff2fc  egisap64.b06
+27405e06a6e1521d0bc3a69e5063edd530bf9753053cfa4e18836d9fa9612a24a738fe6d5ff867704971668a4822e8e7f3a4ba32adfabe1f617fd0b4aa655c5f  egisap64.b07
+f7ba030d85a01394512cced4cd02185f1fad2153a35f62c03c7e2e9dab8a38648a68de4bb1ccbc8a4b0463f13a2d474dc7f11ef93142d2d0958e03f2f3218336  egisap64.b08
 aba0678425a75f124eead6f960b3703669719a7c95273d4938e32c98445d1c640bc9509298099ea203aefa052ebe3ceace340bc6532796591a5d48ae244cf665  gmu_gen70000.bin
 346830c3d7e5a284a0c8c29ae81dd0f5ff54af88106f44294bfa8f438dcfb1cc81c5d72d31158b0650433681639b31cc41146d5570ae4abbb05c3b0530cacb77  hexagonfs.tar
+cabb0a3a4c5447ae4d15fd860007fbc85911519be9eaf34b00c67e83acfb3e4afffa14eb838a549e7c3492aee64b26ce57a64b08f600849437814adb6e9c77d8  hi846-front-init.bin
+8a836af683de986e57d76cc0227552b8f8e2d2ceda3e940a939e590b52134f603d4ee7cd698648858d69e9a25d8f3b639e7915dc7adbce5df5bb75895bbc9150  hi846-front-3264x2448.bin
+3baa7442f26014ddaf2eb7bf8c005fe5e4fa5408e3f9c802a162ac1bc0fa1c67ba0338f4f7d2df90ad5ad2595c9afffad838b34f231eb1fa57e2ce925f5ad3d1  hi846-front-1280x720.bin
+86355703e4ce079c83b4c5253557cb28805b75312747d2c6f7f0cef251d5c09529136d4b6d5bcc20d4f3a11a20537229f58d808fe4ca05586bde56ff028e026e  hi846-back-init.bin
+916a47966d446483e7818490eaa6dd94668617852ea6f30e1319a89d09cf035a411c19904f4bdd6b6ced3a7fedf7d7f32facbeae1cf0e524d3e1dd42d319ab30  hi846-back-3264x2448.bin
+313a781c9ab4d783a1c9262ceaa406b30ed657404a5ddf494a5e64638c00c9b6d7fd6f596f8c4fc914c54166f10c827d1dcd7d913d51cf6909a8075fb8f68d64  hi846-back-2304x1728.bin
+21844403340ee0ff907f08f1397633c4ea082b78775f71fb334bf94f2c00a2205c50ced7ef6848ae8c66acae6d57a91213e96ac66cf58d8969fd52ad79a1131b  modem.mbn
+c91ff70febc37daf57b66b1eff887a184a041dc27e24a828f7135819d88693dfa828abb4667f9f6514ef305214da3c5e66cf269577f1472022ff595bd2ff7695  modem-pr.tar
 1d4b7c7f9f3e2c2dfefd594c46fdff1478cc07d1f70eb5c071264b67a9c801b91d52e030e43fea608bbe570e868a6efc1444142042266e1eb2d1014af2380de5  wpss.mbn
 "

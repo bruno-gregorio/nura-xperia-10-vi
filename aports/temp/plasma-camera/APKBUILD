@@ -1,0 +1,73 @@
+# The group tag is just to easily find this APKBUILD by some scripts for automation
+# group=kde-other
+maintainer="Bart Ribbers <bribbers@disroot.org>"
+pkgname=plasma-camera
+pkgver=2.1.1
+pkgrel=103
+pkgdesc="Camera application for Plasma Mobile"
+# armhf blocked by qt6-qtdeclarative
+arch="all !armhf"
+url="https://invent.kde.org/plasma-mobile/plasma-camera"
+license="GPL-3.0-or-later AND BSD-3-Clause"
+depends="
+	gst-plugins-bad
+	gst-plugins-good
+	kirigami
+	kirigami-addons
+	libcamera
+	qt6-qtmultimedia
+	qt6-qtsensors
+	"
+makedepends="
+	extra-cmake-modules
+	kcoreaddons-dev
+	ki18n-dev
+	kirigami-dev
+	libcamera-dev
+	linux-headers
+	libkexiv2-dev
+	qt6-qtbase-dev
+	qt6-qtdeclarative-dev
+	qt6-qtmultimedia-dev
+	qt6-qtsensors-dev
+	qt6-qtsvg-dev
+	samurai
+	"
+checkdepends="appstream"
+subpackages="$pkgname-lang $pkgname-pipeline-test:pipeline_test"
+source="https://download.kde.org/stable/plasma-camera/plasma-camera-$pkgver.tar.xz
+	0001-responsive-preview.patch
+	pipeline-test.cpp
+	"
+
+prepare() {
+	default_prepare
+	cp "$srcdir/pipeline-test.cpp" src/
+}
+
+build() {
+	cmake -B build -G Ninja \
+		-DCMAKE_BUILD_TYPE=RelWithDebInfo \
+		-DCMAKE_INSTALL_PREFIX=/usr \
+		-DCMAKE_INSTALL_LIBDIR=lib
+	cmake --build build
+}
+
+check() {
+	ctest --test-dir build
+}
+
+package() {
+	DESTDIR="$pkgdir" cmake --install build
+}
+
+pipeline_test() {
+	pkgdesc="On-device camera preview and full-resolution capture integration test"
+	amove usr/bin/plasma-camera-pipeline-test
+}
+
+sha512sums="
+0a7a6e4bcce5fcb483291e15bca3a4537a4f00a8b7ab4fbd3f38e775ec8757a4b99e4fd4124435e734f865a167a61e836945520005c4058bc41757216e8a325f  plasma-camera-2.1.1.tar.xz
+20b61aee44e4e22ebb1154d4d98a9721e785228411e9d9064b0133a1f87018cf3a56a0640c4f7d1c67a8e23d0d100e5e6d0129008c96654158466dd5d59216b4  0001-responsive-preview.patch
+6437326a14c1c85ba84bfe6967822be909c4625e4aa9fcf213efef802f32fb086e18c161722afc964f4ade046f5d4ef3ffabb9856167a3fe923f32c43d0f3a6d  pipeline-test.cpp
+"

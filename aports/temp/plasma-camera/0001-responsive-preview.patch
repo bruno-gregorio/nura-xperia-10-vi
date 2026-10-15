@@ -1,0 +1,566 @@
+--- a/src/plasmacamera/worker.cpp
++++ b/src/plasmacamera/worker.cpp
+@@ -2,6 +2,43 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
+ #include "worker.h"
++#include <time.h>
++#include <linux/dma-buf.h>
++#include <sys/ioctl.h>
++#include <cerrno>
++#include <set>
++
++namespace {
++class CpuReadSync {
++public:
++    explicit CpuReadSync(const libcamera::FrameBuffer &buffer)
++    {
++        for (const auto &plane : buffer.planes()) {
++            int fd = plane.fd.get();
++            if (fds.count(fd)) continue;
++            if (!sync(fd, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ)) return;
++            fds.insert(fd);
++        }
++        valid = true;
++    }
++    ~CpuReadSync()
++    {
++        for (int fd : fds) sync(fd, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
++    }
++    bool valid = false;
++private:
++    static bool sync(int fd, uint64_t flags)
++    {
++        dma_buf_sync arg{flags};
++        int ret;
++        do { ret = ioctl(fd, DMA_BUF_IOCTL_SYNC, &arg); } while (ret < 0 && errno == EINTR);
++        if (ret < 0) qWarning() << "DMA buffer CPU read sync failed" << errno;
++        return ret == 0;
++    }
++    std::set<int> fds;
++};
++} // namespace
++
+ 
+ static const QMap<libcamera::PixelFormat, QImage::Format> NATIVE_FORMATS{
+     {libcamera::formats::ABGR8888, QImage::Format_RGBX8888},
+@@ -19,11 +56,6 @@
+ 
+ void Worker::init()
+ {
+-    // start init after we have moved to the other thread
+-    m_framePollTimer = new QTimer(this);
+-    m_framePollTimer->setInterval(1000 / 60); // manually set 60 fps
+-    connect(m_framePollTimer, &QTimer::timeout, this, &Worker::requestNextFrame);
+-
+     setState(State::Ready);
+ }
+ 
+@@ -43,7 +75,9 @@
+     case State::Ready:
+         // if state is ready then go to running
+         m_camera = camera;
+-        startViewFinder();
++        m_fullResolution = false;
++        if (!startViewFinder())
++            return;
+ 
+         setState(State::Running);
+         setMode(CaptureMode::ViewFinder);
+@@ -58,7 +92,9 @@
+         // if state is running then switch out the camera
+         stopViewFinder();
+         m_camera = camera;
+-        startViewFinder();
++        m_fullResolution = false;
++        if (!startViewFinder())
++            return;
+ 
+         setState(State::Running);
+         setMode(CaptureMode::ViewFinder);
+@@ -86,8 +122,17 @@
+ 
+ void Worker::capture()
+ {
++    if (m_state != State::Running || m_mode != CaptureMode::ViewFinder)
++        return;
+     m_stillCaptureFrames.clear();
++    // Keep camera ownership while changing only the stream configuration.
++    stopViewFinder(false);
++    m_fullResolution = true;
+     setMode(CaptureMode::StillImage);
++    m_settleFrames = 0;
++    m_settleTimer.start();
++    if (!startViewFinder())
++        setMode(CaptureMode::None);
+ }
+ 
+ void Worker::setSettings(const Settings& settings)
+@@ -147,7 +192,7 @@
+ 
+ void Worker::requestNextFrame()
+ {
+-    if (!m_camera) {
++    if (!m_camera || !m_started) {
+         return;
+     }
+ 
+@@ -169,7 +214,8 @@
+     m_settings.set(request->controls());
+ 
+     // Queue request in camera for frame
+-    m_camera->queueRequest(request);
++    if (int ret = m_camera->queueRequest(request); ret < 0)
++        setError(ret);
+ }
+ 
+ void Worker::requestComplete(libcamera::Request *request)
+@@ -180,123 +226,128 @@
+         return;
+     }
+ 
+-    {
+-        // Add finished request to queue to be processed
++    bool notify;
++    {
+         const QMutexLocker lock(&m_doneMutex);
++        notify = m_doneQueue.isEmpty();
+         m_doneQueue.enqueue(request);
+     }
+-
+-    // We are currently on the libcamera thread so we need to go back to the Worker thread.
+-    QMetaObject::invokeMethod(this, "processRequestDataAndEmit", Qt::QueuedConnection);
++    // A single wakeup drains the queue. Never accumulate one Qt event per frame.
++    if (notify)
++        QMetaObject::invokeMethod(this, "processRequestDataAndEmit", Qt::QueuedConnection);
+ }
+ 
+ void Worker::processRequestDataAndEmit()
+ {
+-    // Populates m_image
+-    processRequestData();
+-
+-    // Implement photo capture
++    if (!processRequestData())
++        return;
++
+     if (m_mode == CaptureMode::StillImage) {
+-        const QMutexLocker lock(&m_stillCaptureFramesMutex);
+-
+-        if (m_stillCaptureFrames.length() >= 5) {
++        // Reconfiguration restarts AE/AWB: discard settling frames, not a
++        // burst of stale previews. The photo consumer only uses the first image.
++        if (++m_settleFrames < 20 || m_settleTimer.elapsed() < 1000)
+             return;
+-        }
+-
+-        // Add image to frames used for shot
+-        m_stillCaptureFrames.enqueue(m_image.copy());
+-
+-        // Once we reach 5 frames, emit the photo
+-        if (m_stillCaptureFrames.length() == 5) {
+-            setMode(CaptureMode::ViewFinder);
+-            Q_EMIT stillCaptureFrames(m_stillCaptureFrames);
+-        }
+-    }
+-
+-    // Emit view finder frame, m_image is moved for performance
+-    Q_EMIT viewFinderFrame(std::move(m_image));
+-}
+-
+-void Worker::processRequestData()
++        m_stillCaptureFrames.enqueue(m_image);
++        Q_EMIT stillCaptureFrames(m_stillCaptureFrames);
++        m_stillCaptureFrames.clear();
++        stopViewFinder(false);
++        m_fullResolution = false;
++        setMode(CaptureMode::ViewFinder);
++        startViewFinder();
++        return;
++    }
++
++    m_previewPending.store(true);
++    Q_EMIT viewFinderFrame(m_image);
++}
++
++bool Worker::processRequestData()
+ {
+     libcamera::Request *request;
+     {
+-        // Obtain a finished request from the queue
+         const QMutexLocker lock(&m_doneMutex);
+-        if (m_doneQueue.isEmpty()) {
+-            return;
++        if (m_doneQueue.isEmpty())
++            return false;
++        // The viewfinder wants the newest available frame. Return older
++        // completed buffers immediately without copying or presenting them.
++        while (m_doneQueue.size() > 1) {
++            const QMutexLocker freeLock(&m_freeMutex);
++            m_freeQueue.enqueue(m_doneQueue.dequeue());
+         }
+         request = m_doneQueue.dequeue();
+     }
+ 
+-    if (!request->buffers().count(m_stream)) {
+-        return;
+-    }
+-
+-    libcamera::FrameBuffer *buffer = request->buffers().at(m_stream);
+-    Image *image = m_mappedBuffers[buffer].get();
+-
+-    // Load frame into m_image
+-    size_t size = buffer->metadata().planes()[0].bytesused;
+-    if (getNativeFormats().contains(m_format)) {
+-        m_image = QImage(image->data(0).data(), m_size.width(), m_size.height(), static_cast<qsizetype>(size) / m_size.height(), NATIVE_FORMATS[m_format]);
+-    } else {
+-        m_converter.convert(image, size, &m_image);
+-    }
+-
+-    {
+-        // Return request to the free queue to be used for new requests
++    bool copied = false;
++    if (request->buffers().count(m_stream) &&
++        (m_mode == CaptureMode::StillImage || !m_previewPending.load())) {
++        libcamera::FrameBuffer *buffer = request->buffers().at(m_stream);
++        CpuReadSync sync(*buffer);
++        if (sync.valid && buffer->metadata().status == libcamera::FrameMetadata::FrameSuccess) {
++            Image *image = m_mappedBuffers[buffer].get();
++            size_t size = buffer->metadata().planes()[0].bytesused;
++            if (getNativeFormats().contains(m_format)) {
++                // Qt must own the pixels before libcamera reuses the DMA buffer.
++                m_image = QImage(image->data(0).data(), m_size.width(), m_size.height(),
++                                 static_cast<qsizetype>(size) / m_size.height(),
++                                 NATIVE_FORMATS[m_format]).copy();
++            } else {
++                m_converter.convert(image, size, &m_image);
++                m_image.detach();
++            }
++            copied = !m_image.isNull();
++            if (m_trace) {
++                timespec now{};
++                clock_gettime(CLOCK_MONOTONIC, &now);
++                qInfo() << "PreviewTrace" << (m_fullResolution ? "still" : "preview")
++                        << buffer->metadata().sequence
++                        << qint64(now.tv_sec) * 1000000000 + now.tv_nsec
++                        << buffer->metadata().timestamp << m_size;
++            }
++        }
++    }
++    {
+         const QMutexLocker lock(&m_freeMutex);
+         m_freeQueue.enqueue(request);
+     }
+-}
+-
+-void Worker::startViewFinder()
+-{
+-    if (!m_camera) {
+-        return;
+-    }
+-
+-    qDebug() << "Starting view finder in worker";
+-
+-    /*
+-     * https://libcamera.org/api-html/namespacelibcamera.html#a295d1f5e7828d95c0b0aabc0a8baac03
+-     * The StillCapture and Viewfinder roles both generate a config that uses the same resolution
+-     * while the documentation states that the image will be captured in higher quality I prefer
+-     * the Viewfinder config because it appears that the higher resource usage of StillCapture
+-     * makes app more unstable (it could also be related to the demands of restarting the camera)
+-     */
+-    m_config = m_camera->generateConfiguration({libcamera::StreamRole::Viewfinder});
+-
+-    configure();
+-
+-    // Connect signal for when a frame request is complete
++    // Recycle on completion, without a 16 ms polling delay.
++    for (;;) {
++        { const QMutexLocker lock(&m_freeMutex); if (m_freeQueue.isEmpty()) break; }
++        requestNextFrame();
++        if (!m_started || m_error) break;
++    }
++    return copied;
++}
++
++bool Worker::startViewFinder()
++{
++    if (!m_camera)
++        return false;
++    unsetError();
++    m_config = m_camera->generateConfiguration({m_fullResolution ?
++        libcamera::StreamRole::StillCapture : libcamera::StreamRole::Viewfinder});
++    if (!configure())
++        return false;
+     m_camera->requestCompleted.connect(this, &Worker::requestComplete);
+-
+-    // Start camera
+     if (int ret = m_camera->start(); ret < 0) {
+         setError(ret);
+-        return;
+-    }
+-
+-    // Add all requests
+-    for (std::unique_ptr<libcamera::Request> &request : m_requests) {
++        return false;
++    }
++    m_started = true;
++    for (auto &request : m_requests) {
+         if (int ret = m_camera->queueRequest(request.get()); ret < 0) {
+             setError(ret);
+-            return;
+-        }
+-    }
+-
+-    // Start polling for frames
+-    m_framePollTimer->start();
+-}
+-
+-void Worker::stopViewFinder()
++            return false;
++        }
++    }
++    return true;
++}
++
++void Worker::stopViewFinder(bool release)
+ {
+     qDebug() << "stop view finder";
+-    m_framePollTimer->stop();
+-
+-    if (m_camera) {
++
++
++    if (m_camera && m_started) {
+         // All pending requests are cancelled
+         int ret = m_camera->stop();
+         if (ret < 0) {
+@@ -304,21 +355,23 @@
+             return;
+         }
+ 
+-        // Cleanup signals
++    }
++    m_started = false;
++    if (m_camera)
+         m_camera->requestCompleted.disconnect(this);
+-    }
+ 
+     // Must be cleared before following variables are cleared
+     m_requests.clear();
+ 
+-    m_config.reset();
++    m_mappedBuffers.clear();
+ 
+     if (m_allocator) {
+         m_allocator->free(m_stream);
+         delete m_allocator;
+-    }
+-
+-    m_mappedBuffers.clear();
++        m_allocator = nullptr;
++    }
++
++    m_config.reset();
+ 
+     {
+         const QMutexLocker lock(&m_freeMutex);
+@@ -335,7 +388,7 @@
+         m_doneQueue.clear();
+     }
+ 
+-    if (m_camera) {
++    if (m_camera && release) {
+         int ret = m_camera->release();
+         if (ret < 0) {
+             setError(ret);
+@@ -343,7 +396,8 @@
+         }
+     }
+ 
+-    m_camera.reset();
++    if (release)
++        m_camera.reset();
+ }
+ 
+ void Worker::setState(const State state)
+@@ -435,15 +489,26 @@
+     }
+ }
+ 
+-void Worker::configure()
++bool Worker::configure()
+ {
+     if (!m_config || !m_camera) {
+-        return;
++        return false;
+     }
+ 
+     // Add stream configuration
+     libcamera::StreamConfiguration &streamConfig = m_config->at(0);
+     qDebug() << "Default camera configuration is: " << streamConfig.toString();
++
++    if (!m_fullResolution) {
++        // Preserve aspect ratio and sensor field of view, but do not run the
++        // ISP, CPU copy and texture upload at photo resolution for every frame.
++        QSize preview(streamConfig.size.width, streamConfig.size.height);
++        if (preview.width() > 1280 || preview.height() > 960)
++            preview.scale(1280, 960, Qt::KeepAspectRatio);
++        streamConfig.size = {unsigned(preview.width()) & ~3U,
++                             unsigned(preview.height()) & ~1U};
++    }
++    streamConfig.bufferCount = m_fullResolution ? 3 : 2;
+ 
+     const QList<libcamera::PixelFormat> wantFormats = getNativeFormats();
+     for (const libcamera::PixelFormat &format : wantFormats) {
+@@ -473,8 +538,8 @@
+         qInfo() << "Adjusted viewfinder configuration is: " << streamConfig.toString();
+     }
+     if (validation == libcamera::CameraConfiguration::Invalid) {
+-        qWarning() << QString::fromStdString("Failed to validate camera configuration");
+-        return;
++        setError(QStringLiteral("Failed to validate camera configuration"));
++        return false;
+     }
+ 
+     // TODO: it might actually be possible to quick switch the config of the camera
+@@ -483,7 +548,7 @@
+     int ret = m_camera->configure(m_config.get());
+     if (ret < 0) {
+         setError(ret);
+-        return;
++        return false;
+     }
+ 
+     m_stream = m_config->at(0).stream();
+@@ -494,14 +559,15 @@
+                     streamConfig.stride);
+     if (ret < 0) {
+         setError(ret);
+-        return;
++        return false;
+     }
+ 
+     ret = createRequests();
+     if (ret < 0) {
+         setError(ret);
+-        return;
+-    }
++        return false;
++    }
++    return true;
+ }
+ 
+ const QList<libcamera::PixelFormat>& Worker::getNativeFormats()
+--- a/src/plasmacamera/worker.h
++++ b/src/plasmacamera/worker.h
+@@ -13,6 +13,8 @@
+ #include <QCameraFormat>
+ 
+ #include <memory>
++#include <atomic>
++#include <QElapsedTimer>
+ #include <libcamera/libcamera.h>
+ #include <libcamera/framebuffer.h>
+ 
+@@ -31,6 +33,7 @@
+ public:
+ 	explicit Worker();
+ 	~Worker() override;
++    void acknowledgePreview() { m_previewPending.store(false); }
+ 
+ Q_SIGNALS:
+ 	void ready();
+@@ -77,7 +80,7 @@
+     void unsetError();
+ 
+     // Photo capture
+-    void requestNextFrame(); // triggered by timer, queues a frame request to libcamera
++    void requestNextFrame(); // recycle a completed request immediately
+     void processRequestDataAndEmit(); // triggered when libcamera processes the current data into a QImage and emits
+ 
+ private:
+@@ -98,13 +101,13 @@
+         Video,
+     };
+ 
+-    void startViewFinder();
+-    void stopViewFinder();
++    bool startViewFinder();
++    void stopViewFinder(bool release = true);
+ 
+     void setState(State state);
+     void setMode(CaptureMode mode);
+ 
+-    void configure();
++    bool configure();
+ 
+     static const QList<libcamera::PixelFormat> &getNativeFormats();
+     int setFormat(const QSize &size, const libcamera::PixelFormat &format, const libcamera::ColorSpace &colorSpace, unsigned int stride);
+@@ -115,18 +118,23 @@
+      * 2. Whenever libcamera finishes a request, it will call the appropriate requestComplete
+      * 3. requestComplete will queue that request onto the doneQueue_ then issue newData signal
+      * 4. newData will be processed by the appropriate processing method, then buffer will be placed on freeQueue_
+-     * 5. Once the timer expires, we move the free buffer to the libcamera request queue
++     * 5. Immediately return the free buffer to the libcamera request queue
+      */
+     int createRequests();
+ 
+     void requestComplete(libcamera::Request *request);
+-    void processRequestData(); // convert buffers to QImage stored at m_image
++    bool processRequestData(); // convert buffers to QImage stored at m_image
+ 
+     bool m_error = false;
+     QString m_errorString;
+ 
+     // viewfinder
+-    QTimer *m_framePollTimer = nullptr;
++    bool m_started = false;
++    bool m_fullResolution = false;
++    unsigned int m_settleFrames = 0;
++    QElapsedTimer m_settleTimer;
++    std::atomic<bool> m_previewPending{false};
++    bool m_trace = qEnvironmentVariableIsSet("PLASMA_CAMERA_TRACE");
+ 
+     State m_state = State::None;
+     CaptureMode m_mode = CaptureMode::None;
+--- a/src/plasmacamera.cpp
++++ b/src/plasmacamera.cpp
+@@ -4,6 +4,7 @@
+ 
+ #include <map>
+ #include <unistd.h>
++#include <time.h>
+ #include <sys/mman.h>
+ #include <plasmacameramanager.h>
+ 
+@@ -53,7 +54,15 @@
+     });
+ 
+     // resend frames that we received from the camera worker
+-    connect(m_cameraWorker, &Worker::viewFinderFrame, this, &PlasmaCamera::viewFinderFrame);
++    connect(m_cameraWorker, &Worker::viewFinderFrame, this, [this](const QImage &frame) {
++        Q_EMIT viewFinderFrame(frame);
++        if (qEnvironmentVariableIsSet("PLASMA_CAMERA_TRACE")) {
++            timespec now{};
++            clock_gettime(CLOCK_MONOTONIC, &now);
++            qInfo() << "PreviewSinkTrace" << qint64(now.tv_sec) * 1000000000 + now.tv_nsec;
++        }
++        m_cameraWorker->acknowledgePreview();
++    });
+     connect(m_cameraWorker, &Worker::stillCaptureFrames, this, &PlasmaCamera::stillCaptureFrames);
+     connect(m_cameraWorker, &Worker::stillCaptureFrames, this, [this]() {
+         // Finished taking image
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -64,3 +64,11 @@
+ 
+ target_include_directories(plasma-camera PRIVATE ${CMAKE_BINARY_DIR})
+ install(TARGETS plasma-camera ${KDE_INSTALL_TARGETS_DEFAULT_ARGS})
++
++# Exercise the actual camera worker on hardware, including still transitions.
++add_executable(plasma-camera-pipeline-test
++    pipeline-test.cpp plasmacamera/worker.cpp plasmacamera/image.cpp
++    plasmacamera/converter.cpp plasmacamera/settings.cpp)
++target_link_libraries(plasma-camera-pipeline-test
++    Qt::Core Qt::Gui Qt6::Multimedia PkgConfig::LIBCAMERA)
++install(TARGETS plasma-camera-pipeline-test RUNTIME DESTINATION bin)

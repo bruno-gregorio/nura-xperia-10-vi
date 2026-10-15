@@ -1,0 +1,362 @@
+From 1b9603828bd0f125b60482b5d98947adef19d04f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Dawid=20Wr=C3=B3bel?= <me@dawidwrobel.com>
+Date: Sat, 8 Aug 2026 09:59:55 +0200
+Subject: [PATCH] core: discover firmware-described misc devices
+
+Taken from https://github.com/wrobelda/libfprint commit 214bcd1 and
+rebased onto 1.94.9: the only conflict is context in fpi-device.h.
+---
+ libfprint/fp-context.c                    | 48 ++++++++++++++++++++++-
+ libfprint/fp-device-private.h             |  2 +
+ libfprint/fp-device.c                     | 46 ++++++++++++++++++++++
+ libfprint/fpi-device.c                    | 16 +++++++-
+ libfprint/fpi-device.h                    |  6 +++
+ libfprint/fprint-list-supported-devices.c | 29 +++++++++++++-
+ 6 files changed, 143 insertions(+), 4 deletions(-)
+
+diff --git a/libfprint/fp-context.c b/libfprint/fp-context.c
+index 70d4062..89e31ea 100644
+--- a/libfprint/fp-context.c
++++ b/libfprint/fp-context.c
+@@ -29,6 +29,29 @@
+ 
+ #ifdef HAVE_UDEV
+ #include <gudev/gudev.h>
++
++static gboolean
++udev_device_has_compatible (GUdevDevice *device, const gchar *compatible)
++{
++  g_autoptr(GUdevDevice) current = g_object_ref (device);
++
++  if (!compatible)
++    return TRUE;
++  while (current)
++    {
++      const gchar *of_compatible = g_udev_device_get_property (current, "OF_COMPATIBLE_0");
++      const gchar *modalias = g_udev_device_get_property (current, "MODALIAS");
++      g_autoptr(GUdevDevice) parent = NULL;
++
++      if (g_strcmp0 (of_compatible, compatible) == 0 ||
++          (modalias && strstr (modalias, compatible)))
++        return TRUE;
++      parent = g_udev_device_get_parent (current);
++      g_set_object (&current, parent);
++    }
++  return FALSE;
++}
++
+ #endif
+ 
+ /**
+@@ -479,6 +502,7 @@ fp_context_enumerate (FpContext *context)
+ 
+     g_autoptr(GList) spidev_devices = g_udev_client_query_by_subsystem (udev_client, "spidev");
+     g_autoptr(GList) hidraw_devices = g_udev_client_query_by_subsystem (udev_client, "hidraw");
++    g_autoptr(GList) misc_devices = g_udev_client_query_by_subsystem (udev_client, "misc");
+ 
+     /* for each potential driver, try to match all requested resources. */
+     for (i = 0; i < priv->drivers->len; i++)
+@@ -492,7 +516,7 @@ fp_context_enumerate (FpContext *context)
+ 
+         for (entry = cls->id_table; entry->udev_types; entry++)
+           {
+-            GList *matched_spidev = NULL, *matched_hidraw = NULL;
++            GList *matched_spidev = NULL, *matched_hidraw = NULL, *matched_misc = NULL;
+ 
+             if (entry->udev_types & FPI_DEVICE_UDEV_SUBTYPE_SPIDEV)
+               {
+@@ -530,6 +554,20 @@ fp_context_enumerate (FpContext *context)
+                 if (matched_hidraw == NULL)
+                   continue;
+               }
++            if (entry->udev_types & FPI_DEVICE_UDEV_SUBTYPE_MISC)
++              {
++                for (matched_misc = misc_devices; matched_misc; matched_misc = matched_misc->next)
++                  {
++                    const gchar *name = g_udev_device_get_name (matched_misc->data);
++
++                    if (g_strcmp0 (name, entry->misc_name) == 0 &&
++                        udev_device_has_compatible (matched_misc->data,
++                                                    entry->misc_compatible))
++                      break;
++                  }
++                if (matched_misc == NULL)
++                  continue;
++              }
+             priv->pending_devices++;
+             g_async_initable_new_async (driver,
+                                         G_PRIORITY_LOW,
+@@ -539,6 +577,8 @@ fp_context_enumerate (FpContext *context)
+                                         "fpi-driver-data", entry->driver_data,
+                                         "fpi-udev-data-spidev", (matched_spidev ? g_udev_device_get_device_file (matched_spidev->data) : NULL),
+                                         "fpi-udev-data-hidraw", (matched_hidraw ? g_udev_device_get_device_file (matched_hidraw->data) : NULL),
++                                        "fpi-udev-data-misc", (matched_misc ? g_udev_device_get_device_file (matched_misc->data) : NULL),
++                                        "fpi-udev-data-misc-sysfs", (matched_misc ? g_udev_device_get_sysfs_path (matched_misc->data) : NULL),
+                                         NULL);
+             /* remove entries from list to avoid conflicts */
+             if (matched_spidev)
+@@ -551,12 +591,18 @@ fp_context_enumerate (FpContext *context)
+                 g_object_unref (matched_hidraw->data);
+                 hidraw_devices = g_list_delete_link (hidraw_devices, matched_hidraw);
+               }
++            if (matched_misc)
++              {
++                g_object_unref (matched_misc->data);
++                misc_devices = g_list_delete_link (misc_devices, matched_misc);
++              }
+           }
+       }
+ 
+     /* free all unused elemnts in both lists */
+     g_list_foreach (spidev_devices, (GFunc) g_object_unref, NULL);
+     g_list_foreach (hidraw_devices, (GFunc) g_object_unref, NULL);
++    g_list_foreach (misc_devices, (GFunc) g_object_unref, NULL);
+   }
+ #endif
+ 
+diff --git a/libfprint/fp-device-private.h b/libfprint/fp-device-private.h
+index 1c3702f..6de0dc9 100644
+--- a/libfprint/fp-device-private.h
++++ b/libfprint/fp-device-private.h
+@@ -49,6 +49,8 @@ typedef struct
+   {
+     gchar *spidev_path;
+     gchar *hidraw_path;
++    gchar *misc_path;
++    gchar *misc_sysfs_path;
+   } udev_data;
+ 
+   gboolean        is_removed;
+diff --git a/libfprint/fp-device.c b/libfprint/fp-device.c
+index ab06e7f..da54f38 100644
+--- a/libfprint/fp-device.c
++++ b/libfprint/fp-device.c
+@@ -53,6 +53,8 @@ enum {
+   PROP_FPI_USB_DEVICE,
+   PROP_FPI_UDEV_DATA_SPIDEV,
+   PROP_FPI_UDEV_DATA_HIDRAW,
++  PROP_FPI_UDEV_DATA_MISC,
++  PROP_FPI_UDEV_DATA_MISC_SYSFS,
+   PROP_FPI_DRIVER_DATA,
+   N_PROPS
+ };
+@@ -234,6 +236,8 @@ fp_device_finalize (GObject *object)
+   g_clear_pointer (&priv->virtual_env, g_free);
+   g_clear_pointer (&priv->udev_data.spidev_path, g_free);
+   g_clear_pointer (&priv->udev_data.hidraw_path, g_free);
++  g_clear_pointer (&priv->udev_data.misc_path, g_free);
++  g_clear_pointer (&priv->udev_data.misc_sysfs_path, g_free);
+ 
+   G_OBJECT_CLASS (fp_device_parent_class)->finalize (object);
+ }
+@@ -304,6 +308,20 @@ fp_device_get_property (GObject    *object,
+         g_value_set_string (value, NULL);
+       break;
+ 
++    case PROP_FPI_UDEV_DATA_MISC:
++      if (cls->type == FP_DEVICE_TYPE_UDEV)
++        g_value_set_string (value, priv->udev_data.misc_path);
++      else
++        g_value_set_string (value, NULL);
++      break;
++
++    case PROP_FPI_UDEV_DATA_MISC_SYSFS:
++      if (cls->type == FP_DEVICE_TYPE_UDEV)
++        g_value_set_string (value, priv->udev_data.misc_sysfs_path);
++      else
++        g_value_set_string (value, NULL);
++      break;
++
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+     }
+@@ -350,6 +368,20 @@ fp_device_set_property (GObject      *object,
+         g_assert (g_value_get_string (value) == NULL);
+       break;
+ 
++    case PROP_FPI_UDEV_DATA_MISC:
++      if (cls->type == FP_DEVICE_TYPE_UDEV)
++        priv->udev_data.misc_path = g_value_dup_string (value);
++      else
++        g_assert (g_value_get_string (value) == NULL);
++      break;
++
++    case PROP_FPI_UDEV_DATA_MISC_SYSFS:
++      if (cls->type == FP_DEVICE_TYPE_UDEV)
++        priv->udev_data.misc_sysfs_path = g_value_dup_string (value);
++      else
++        g_assert (g_value_get_string (value) == NULL);
++      break;
++
+     case PROP_FPI_DRIVER_DATA:
+       priv->driver_data = g_value_get_uint64 (value);
+       break;
+@@ -578,6 +610,20 @@ fp_device_class_init (FpDeviceClass *klass)
+                          NULL,
+                          G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
+ 
++  properties[PROP_FPI_UDEV_DATA_MISC] =
++    g_param_spec_string ("fpi-udev-data-misc",
++                         "Udev data: misc path",
++                         "Private: The path to a misc device node",
++                         NULL,
++                         G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
++
++  properties[PROP_FPI_UDEV_DATA_MISC_SYSFS] =
++    g_param_spec_string ("fpi-udev-data-misc-sysfs",
++                         "Udev data: misc sysfs path",
++                         "Private: The sysfs path of a misc device",
++                         NULL,
++                         G_PARAM_STATIC_STRINGS | G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY);
++
+   /**
+    * FpDevice::fpi-driver-data: (skip)
+    *
+diff --git a/libfprint/fpi-device.c b/libfprint/fpi-device.c
+index a1be30c..bf4524a 100644
+--- a/libfprint/fpi-device.c
++++ b/libfprint/fpi-device.c
+@@ -421,7 +421,7 @@ fpi_device_get_usb_device (FpDevice *device)
+  * Get a subtype-specific hardware resource for this #FpDevice. Only permissible to call if the
+  * #FpDevice is of type %FP_DEVICE_TYPE_UDEV.
+  *
+- * Returns: Depends on @subtype; for SPIDEV/HIDRAW returns a path to the relevant device.
++ * Returns: A path to the relevant SPIDEV, HIDRAW, or MISC device.
+  */
+ gpointer
+ fpi_device_get_udev_data (FpDevice *device, FpiDeviceUdevSubtypeFlags subtype)
+@@ -439,12 +439,26 @@ fpi_device_get_udev_data (FpDevice *device, FpiDeviceUdevSubtypeFlags subtype)
+     case FPI_DEVICE_UDEV_SUBTYPE_SPIDEV:
+       return priv->udev_data.spidev_path;
+ 
++    case FPI_DEVICE_UDEV_SUBTYPE_MISC:
++      return priv->udev_data.misc_path;
++
+     default:
+       g_return_val_if_reached (NULL);
+       return NULL;
+     }
+ }
+ 
++const gchar *
++fpi_device_get_udev_sysfs_path (FpDevice *device, FpiDeviceUdevSubtypeFlags subtype)
++{
++  FpDevicePrivate *priv = fp_device_get_instance_private (device);
++
++  g_return_val_if_fail (FP_IS_DEVICE (device), NULL);
++  g_return_val_if_fail (priv->type == FP_DEVICE_TYPE_UDEV, NULL);
++  g_return_val_if_fail (subtype == FPI_DEVICE_UDEV_SUBTYPE_MISC, NULL);
++  return priv->udev_data.misc_sysfs_path;
++}
++
+ /**
+  * fpi_device_get_virtual_env:
+  * @device: The #FpDevice
+diff --git a/libfprint/fpi-device.h b/libfprint/fpi-device.h
+index ab154bc..3a0f08f 100644
+--- a/libfprint/fpi-device.h
++++ b/libfprint/fpi-device.h
+@@ -28,12 +28,14 @@
+  * FpiDeviceUdevSubtypeFlags:
+  * @FPI_DEVICE_UDEV_SUBTYPE_SPIDEV: The device requires an spidev node
+  * @FPI_DEVICE_UDEV_SUBTYPE_HIDRAW: The device requires a hidraw node
++ * @FPI_DEVICE_UDEV_SUBTYPE_MISC: The device requires a named misc node
+  *
+  * Bitfield of required hardware resources for a udev-backed device.
+  */
+ typedef enum {
+   FPI_DEVICE_UDEV_SUBTYPE_SPIDEV = 1 << 0,
+   FPI_DEVICE_UDEV_SUBTYPE_HIDRAW = 1 << 1,
++  FPI_DEVICE_UDEV_SUBTYPE_MISC = 1 << 2,
+ } FpiDeviceUdevSubtypeFlags;
+ 
+ /**
+@@ -64,6 +66,8 @@ struct _FpIdEntry
+         guint pid;
+         guint vid;
+       } hid_id;
++      const gchar *misc_name;
++      const gchar *misc_compatible;
+     };
+   };
+   guint64 driver_data;
+@@ -221,6 +225,8 @@ GUsbDevice  *fpi_device_get_usb_device (FpDevice *device);
+ const gchar *fpi_device_get_virtual_env (FpDevice *device);
+ gpointer     fpi_device_get_udev_data (FpDevice                 *device,
+                                        FpiDeviceUdevSubtypeFlags subtype);
++const gchar *fpi_device_get_udev_sysfs_path (FpDevice                 *device,
++                                             FpiDeviceUdevSubtypeFlags subtype);
+ //const gchar *fpi_device_get_spi_dev (FpDevice *device);
+ 
+ 
+diff --git a/libfprint/fprint-list-supported-devices.c b/libfprint/fprint-list-supported-devices.c
+index 1b02c0b..5382c1a 100644
+--- a/libfprint/fprint-list-supported-devices.c
++++ b/libfprint/fprint-list-supported-devices.c
+@@ -29,7 +29,7 @@
+ GHashTable *printed = NULL;
+ 
+ static void
+-insert_drivers (GList **usb_list, GList **spi_list)
++insert_drivers (GList **usb_list, GList **spi_list, GList **misc_list)
+ {
+   g_autoptr(GArray) drivers = fpi_get_driver_types ();
+   gint i;
+@@ -69,6 +69,21 @@ insert_drivers (GList **usb_list, GList **spi_list)
+             {
+               char *key;
+ 
++              if (entry->udev_types & FPI_DEVICE_UDEV_SUBTYPE_MISC)
++                {
++                  key = g_strdup_printf ("MISC:%s:%s", entry->misc_name,
++                                         entry->misc_compatible ?: "-");
++                  if (g_hash_table_lookup (printed, key) == NULL)
++                    {
++                      g_hash_table_insert (printed, key, GINT_TO_POINTER (1));
++                      *misc_list = g_list_prepend (*misc_list,
++                          g_strdup_printf ("%s | %s | %s\n", entry->misc_name,
++                                           entry->misc_compatible ?: "-", cls->full_name));
++                    }
++                  else
++                    g_free (key);
++                }
++
+               /* Need SPI device */
+               if ((entry->udev_types & FPI_DEVICE_UDEV_SUBTYPE_SPIDEV) == 0)
+                 continue;
+@@ -104,6 +119,7 @@ main (int argc, char **argv)
+ {
+   GList *usb_list = NULL;
+   GList *spi_list = NULL;
++  GList *misc_list = NULL;
+   GList *l;
+ 
+   setlocale (LC_ALL, "");
+@@ -120,7 +136,7 @@ main (int argc, char **argv)
+   g_print ("This is a list of supported devices in libfprint's development version. Those drivers might not all be available in the stable, released version. If in doubt, contact your distribution or systems integrator for details.\n");
+   g_print ("\n");
+ 
+-  insert_drivers (&usb_list, &spi_list);
++  insert_drivers (&usb_list, &spi_list, &misc_list);
+ 
+   g_print ("## USB devices\n");
+   g_print ("\n");
+@@ -148,6 +164,15 @@ main (int argc, char **argv)
+ 
+   g_list_free_full (g_steal_pointer (&spi_list), g_free);
+ 
++  g_print ("## Platform/misc devices\n\n");
++  g_print ("Device node | Firmware compatible | Driver\n");
++  g_print ("------------ | ------------ | ------------\n");
++  misc_list = g_list_sort (misc_list, (GCompareFunc) g_strcmp0);
++  for (l = misc_list; l != NULL; l = l->next)
++    g_print ("%s", (char *) l->data);
++  g_print ("\n");
++  g_list_free_full (g_steal_pointer (&misc_list), g_free);
++
+ 
+   g_hash_table_destroy (printed);
+ 
+-- 
+2.55.0
+

@@ -1,0 +1,2337 @@
+From 0ce4d5017b3782de8a41381fd25271aa0600b2ef Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 15 Oct 2026 00:25:01 -0300
+Subject: [PATCH] drivers: add egisqsee, for Egis sensors behind Qualcomm
+ TrustZone
+
+TrustZone owns the SPI bus of the Egis EC617 in the Sony Xperia 10 VI;
+Egis' trusted application egisap64 captures, matches and stores the
+templates. The driver reaches it through the Linux TEE subsystem's
+QSEECom device, attaching to the TA that qsee-supplicant's loader keeps
+loaded, and drives the sensor's power, reset and finger interrupt through
+the kernel's egisfp misc device. Prints name a template on the TA by its
+finger id.
+
+The enroll, verify and remove flows follow the vendor's Android agent,
+from which they were recovered for interoperability.
+---
+ libfprint/drivers/egisqsee/egisqsee-bix.c     | 677 ++++++++++++++
+ libfprint/drivers/egisqsee/egisqsee-bix.h     | 148 +++
+ libfprint/drivers/egisqsee/egisqsee-hw.c      | 102 +++
+ libfprint/drivers/egisqsee/egisqsee-hw.h      |  27 +
+ libfprint/drivers/egisqsee/egisqsee-records.h | 176 ++++
+ libfprint/drivers/egisqsee/egisqsee-tee.c     | 176 ++++
+ libfprint/drivers/egisqsee/egisqsee-tee.h     |  36 +
+ libfprint/drivers/egisqsee/egisqsee.c         | 866 ++++++++++++++++++
+ libfprint/meson.build                         |   3 +
+ meson.build                                   |   7 +
+ 10 files changed, 2218 insertions(+)
+ create mode 100644 libfprint/drivers/egisqsee/egisqsee-bix.c
+ create mode 100644 libfprint/drivers/egisqsee/egisqsee-bix.h
+ create mode 100644 libfprint/drivers/egisqsee/egisqsee-hw.c
+ create mode 100644 libfprint/drivers/egisqsee/egisqsee-hw.h
+ create mode 100644 libfprint/drivers/egisqsee/egisqsee-records.h
+ create mode 100644 libfprint/drivers/egisqsee/egisqsee-tee.c
+ create mode 100644 libfprint/drivers/egisqsee/egisqsee-tee.h
+ create mode 100644 libfprint/drivers/egisqsee/egisqsee.c
+
+diff --git a/libfprint/drivers/egisqsee/egisqsee-bix.c b/libfprint/drivers/egisqsee/egisqsee-bix.c
+new file mode 100644
+index 0000000..19fe09e
+--- /dev/null
++++ b/libfprint/drivers/egisqsee/egisqsee-bix.c
+@@ -0,0 +1,677 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#define FP_COMPONENT "egisqsee"
++
++#include "drivers_api.h"
++#include "egisqsee-bix.h"
++
++#include <errno.h>
++#include <string.h>
++#include <unistd.h>
++
++/*
++ * The request is libets' 64-bit QSEECom message: u32 0xE0 at 0, the data
++ * buffer's capacity at 24, and the BIX message inline from 0x68, whose
++ * command id lands at 108, payload length at 120 and payload at 124.
++ * TrustZone patches the data buffer's address in at 8. The response holds
++ * the BIX status at 16 and the output length at 36.
++ */
++#define REQUEST_SIZE 0x880
++#define RESPONSE_SIZE 0x840
++#define DATA_SIZE 4096
++#define PAYLOAD_OFFSET 124
++#define PAYLOAD_MAX (REQUEST_SIZE - PAYLOAD_OFFSET)
++
++#define CMD_CALLBACK_REPLY 0x5000u
++#define CMD_PENDING 0x5001u
++#define CMD_TOKEN 0x6000u
++#define CMD_HELLO 0xfffu
++#define CMD_SENSOR_INIT 0x8001u
++#define CMD_SET_GROUP 0x8003u
++#define CMD_SPI_POWER 0x8004u
++#define CMD_SET_PROP 0xfffffffeu
++#define CMD_GET_PROP 0xffffffffu
++
++#define PROP_SPI_POWER 0x20070103u
++#define PROP_GROUP_PATH 0x20040101u
++#define PROP_GROUP_ID 0x2004010au
++#define PROP_IDENTITY 0x40040105u
++#define PROP_TOKEN 0x21040105u
++
++#define IDENTITY_SIZE 0x10d
++#define IDENTITY_HEADER 13
++
++/* Callback codes the TA asks the client to serve, and the reply results. */
++#define CALLBACK_TEST 1u
++#define CALLBACK_USER_NAME 2u
++#define CALLBACK_PLATFORM_NAME 3u
++#define CALLBACK_HARDWARE_RESET 8u
++#define CALLBACK_RESULT_OK 0u
++#define CALLBACK_RESULT_UNHANDLED 2u
++#define CALLBACK_RESULT_BAD_HANDLE 0x12u
++#define CALLBACK_ROUNDS_MAX 64
++
++/* Keymaster's get-secure-key command, for the fingerprint authenticator. */
++#define KEYMASTER_GET_KEY 0x205u
++#define KEYMASTER_FINGERPRINT 2u
++#define KEYMASTER_REQUEST 64
++#define KEYMASTER_RESPONSE 1088
++
++struct writer {
++  guint8 *buffer;
++  gsize size, length;
++  gboolean overflow;
++};
++
++static void
++put (struct writer *w, const void *data, gsize size)
++{
++  if (w->overflow || size > w->size - w->length)
++    {
++      w->overflow = TRUE;
++      return;
++    }
++  if (data)
++    memcpy (w->buffer + w->length, data, size);
++  else
++    memset (w->buffer + w->length, 0, size);
++  w->length += size;
++}
++
++static void
++put_u32 (struct writer *w, guint32 value)
++{
++  value = GUINT32_TO_LE (value);
++  put (w, &value, sizeof (value));
++}
++
++static void
++set_u32 (guint8 *buffer, gsize offset, guint32 value)
++{
++  value = GUINT32_TO_LE (value);
++  memcpy (buffer + offset, &value, sizeof (value));
++}
++
++guint32
++egisqsee_bix_u32 (const guint8 *buffer, gsize offset)
++{
++  guint32 value;
++
++  memcpy (&value, buffer + offset, sizeof (value));
++  return GUINT32_FROM_LE (value);
++}
++
++static GError *
++proto_error (const char *format, ...) G_GNUC_PRINTF (1, 2);
++
++static GError *
++proto_error (const char *format, ...)
++{
++  g_autofree char *message = NULL;
++  va_list args;
++
++  va_start (args, format);
++  message = g_strdup_vprintf (format, args);
++  va_end (args);
++  return fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO, "%s", message);
++}
++
++static GError *
++transport_error (const char *operation)
++{
++  return fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "%s: %s",
++                                   operation, g_strerror (errno));
++}
++
++/* A property list: {u32 count, u32 bytes, {u32 id, u32 size, value}...},
++ * optionally after a u32 event, as the agent's gen_bix_event_data. */
++static gboolean
++serialize (EgisqseeBix *bix, struct writer *w, gboolean with_event,
++           guint32 event, const struct egisqsee_record *records,
++           gsize count, GError **error)
++{
++  static const guint8 no_token[EGISQSEE_AUTH_TOKEN_SIZE];
++  gsize header, i;
++
++  if (with_event)
++    put_u32 (w, event);
++  header = w->length;
++  put_u32 (w, count);
++  put_u32 (w, 0);
++  for (i = 0; i < count; i++)
++    {
++      const guint8 *value = records[i].value;
++      guint32 size = records[i].size;
++
++      if (size == EGISQSEE_RECORD_PATH)
++        {
++          value = (const guint8 *) bix->path;
++          size = strlen (bix->path) + 1;
++        }
++      else if (size == EGISQSEE_RECORD_AUTH_TOKEN)
++        {
++          /* Android's hw_auth_token, which only the keystore uses. */
++          value = no_token;
++          size = sizeof (no_token);
++        }
++      put_u32 (w, records[i].id);
++      put_u32 (w, size);
++      put (w, value, size);
++    }
++  if (w->overflow)
++    {
++      g_propagate_error (error, proto_error ("BIX payload too large"));
++      return FALSE;
++    }
++  set_u32 (w->buffer, header + 4, w->length - header - 8);
++  return TRUE;
++}
++
++static gboolean
++transact (EgisqseeBix *bix, guint32 command, const guint8 *payload,
++          gsize length, guint32 *status, GError **error)
++{
++  guint32 output;
++
++  if (length > PAYLOAD_MAX)
++    {
++      g_propagate_error (error, proto_error ("BIX payload too large"));
++      return FALSE;
++    }
++  memset (bix->request, 0, sizeof (bix->request));
++  memset (bix->response, 0, sizeof (bix->response));
++  memset (bix->data, 0, sizeof (bix->data));
++  set_u32 (bix->request, 0, 0xe0);
++  set_u32 (bix->request, 24, DATA_SIZE);
++  set_u32 (bix->request, 108, command);
++  set_u32 (bix->request, 120, length);
++  if (length)
++    memcpy (bix->request + PAYLOAD_OFFSET, payload, length);
++  if (egisqsee_tee_send (&bix->tee, bix->request, REQUEST_SIZE,
++                         bix->response, RESPONSE_SIZE,
++                         bix->data, DATA_SIZE))
++    {
++      g_propagate_error (error, transport_error ("QSEECom invoke"));
++      return FALSE;
++    }
++  *status = egisqsee_bix_u32 (bix->response, 16);
++  output = egisqsee_bix_u32 (bix->response, 36);
++  fp_dbg ("BIX 0x%x: status %u, output %u", command, *status, output);
++  if (output > DATA_SIZE)
++    {
++      g_propagate_error (error, proto_error ("BIX 0x%x output length %u",
++                                             command, output));
++      return FALSE;
++    }
++  return TRUE;
++}
++
++static guint32
++hardware_reset (EgisqseeBix *bix, guint32 mode)
++{
++  /* As the vendor agent: mode 1 power-cycles the sensor, mode 2 pulses
++   * its reset line. */
++  fp_dbg ("TA asks for a hardware reset, mode %u", mode);
++  if (mode == 1)
++    {
++      if (egisqsee_hw_power (bix->hw, FALSE))
++        return 1;
++      g_usleep (G_USEC_PER_SEC);
++      if (egisqsee_hw_power (bix->hw, TRUE))
++        return 1;
++      g_usleep (50000);
++    }
++  if (mode == 1 || mode == 2)
++    {
++      if (egisqsee_hw_reset (bix->hw))
++        return 1;
++      g_usleep (20000);
++    }
++  return 0;
++}
++
++/* The TA answered status 10: its request is a property, id 1, in the
++ * output. Serve it and send the reply, which yields the next status. */
++static gboolean
++answer_callback (EgisqseeBix *bix, guint32 *status, GError **error)
++{
++  guint8 reply[PAYLOAD_MAX];
++  guint8 *output = reply + 16;
++  guint32 length = egisqsee_bix_u32 (bix->response, 36);
++  guint32 token, code, input_length, capacity, result, output_length;
++  const guint8 *input;
++
++  if (length >= 16 && egisqsee_bix_u32 (bix->data, 4))
++    {
++      /* The request did not fit in the output; fetch it. */
++      if (!transact (bix, CMD_PENDING, NULL, 0, status, error))
++        return FALSE;
++      length = egisqsee_bix_u32 (bix->response, 36);
++    }
++  if (length < 0x28 || egisqsee_bix_u32 (bix->data, 0x10) != 1)
++    {
++      g_propagate_error (error, proto_error ("Malformed TA callback request"));
++      return FALSE;
++    }
++  token = egisqsee_bix_u32 (bix->data, 0x18);
++  code = egisqsee_bix_u32 (bix->data, 0x1c);
++  input_length = egisqsee_bix_u32 (bix->data, 0x20);
++  capacity = egisqsee_bix_u32 (bix->data, 0x24);
++  input = bix->data + 0x28;
++  if (input_length > length - 0x28)
++    {
++      g_propagate_error (error, proto_error ("Malformed TA callback request"));
++      return FALSE;
++    }
++  fp_dbg ("TA callback 0x%x, input %u, output capacity %u", code,
++          input_length, capacity);
++
++  output_length = MIN (capacity, sizeof (reply) - 16);
++  memset (output, 0, output_length);
++  result = CALLBACK_RESULT_UNHANDLED;
++  switch (code)
++    {
++    case CALLBACK_TEST:
++      {
++        guint32 n = input_length >= 4 ? egisqsee_bix_u32 (input, 0) : 0;
++        guint32 sum = 0, i;
++
++        if (n > input_length - 4 || n + 8 > output_length)
++          break;
++        for (i = 0; i < n; i++)
++          {
++            output[8 + i] = ~input[4 + i];
++            sum += output[8 + i];
++          }
++        set_u32 (output, 0, sum);
++        set_u32 (output, 4, n);
++        output_length = n + 8;
++        result = CALLBACK_RESULT_OK;
++        break;
++      }
++
++    case CALLBACK_PLATFORM_NAME:
++      /* The TA's behaviour is tuned per platform; it knows "Android". */
++      if (output_length < 12)
++        break;
++      set_u32 (output, 0, 8);
++      memcpy (output + 4, "Android", 8);
++      output_length = 12;
++      result = CALLBACK_RESULT_OK;
++      break;
++
++    case CALLBACK_HARDWARE_RESET:
++      if (input_length < 4 || output_length < 4)
++        break;
++      set_u32 (output, 0, hardware_reset (bix, egisqsee_bix_u32 (input, 0)));
++      output_length = 4;
++      result = CALLBACK_RESULT_OK;
++      break;
++
++    default:
++      /* Group 2 is the REE datastore, which this TA build does not use;
++       * the agent has no handle registered for it either. */
++      if (code >> 16 == 2)
++        result = CALLBACK_RESULT_BAD_HANDLE;
++      break;
++    }
++
++  set_u32 (reply, 0, token);
++  set_u32 (reply, 4, result);
++  set_u32 (reply, 8, input_length);
++  set_u32 (reply, 12, output_length);
++  return transact (bix, CMD_CALLBACK_REPLY, reply, 16 + output_length,
++                   status, error);
++}
++
++/* A command, with the TA's callbacks served. */
++static gboolean
++command (EgisqseeBix *bix, guint32 cmd, const guint8 *payload,
++         gsize length, guint32 *status, GError **error)
++{
++  guint rounds;
++
++  if (!transact (bix, cmd, payload, length, status, error))
++    return FALSE;
++  for (rounds = 0; *status == EGISQSEE_BIX_CALLBACK; rounds++)
++    {
++      if (rounds == CALLBACK_ROUNDS_MAX)
++        {
++          g_propagate_error (error, proto_error ("BIX 0x%x: callbacks without end", cmd));
++          return FALSE;
++        }
++      if (!answer_callback (bix, status, error))
++        return FALSE;
++    }
++  return TRUE;
++}
++
++static gboolean
++command_ok (EgisqseeBix *bix, guint32 cmd, const guint8 *payload,
++            gsize length, GError **error)
++{
++  guint32 status;
++
++  if (!command (bix, cmd, payload, length, &status, error))
++    return FALSE;
++  if (status != EGISQSEE_BIX_OK)
++    {
++      g_propagate_error (error, proto_error ("BIX 0x%x failed with status %u",
++                                             cmd, status));
++      return FALSE;
++    }
++  return TRUE;
++}
++
++static gboolean
++records_ok (EgisqseeBix *bix, guint32 cmd,
++            const struct egisqsee_record *records, gsize count,
++            GError **error)
++{
++  guint8 payload[PAYLOAD_MAX];
++  struct writer w = { payload, sizeof (payload) };
++
++  return serialize (bix, &w, FALSE, 0, records, count, error) &&
++         command_ok (bix, cmd, payload, w.length, error);
++}
++
++gboolean
++egisqsee_bix_open (EgisqseeBix *bix, struct egisqsee_hw *hw, GError **error)
++{
++  memset (bix, 0, sizeof (*bix));
++  bix->hw = hw;
++  g_strlcpy (bix->path, "PATH:/sdcard", sizeof (bix->path));
++  /* Attach to the TA qsee-app-loader holds; loading it a second time
++   * fails in TrustZone. */
++  if (egisqsee_tee_open (&bix->tee, "egisap64"))
++    {
++      g_propagate_error (error, transport_error ("Attaching to egisap64"));
++      return FALSE;
++    }
++  return TRUE;
++}
++
++void
++egisqsee_bix_close (EgisqseeBix *bix)
++{
++  egisqsee_tee_close (&bix->tee);
++  explicit_bzero (bix->request, sizeof (bix->request));
++  explicit_bzero (bix->response, sizeof (bix->response));
++  explicit_bzero (bix->data, sizeof (bix->data));
++}
++
++gboolean
++egisqsee_bix_spi_power (EgisqseeBix *bix, gboolean on, GError **error)
++{
++  const guint8 value[4] = { on ? 1 : 0 };
++  const struct egisqsee_record record = { PROP_SPI_POWER, 4, value };
++
++  return records_ok (bix, CMD_SPI_POWER, &record, 1, error);
++}
++
++/* The authenticator key context: Keymaster wraps it for the fingerprint
++ * TA, which takes it before sensor initialisation. Never logged or kept. */
++static gboolean
++token_context (EgisqseeBix *bix, GError **error)
++{
++  struct egisqsee_tee keymaster;
++  guint8 request[KEYMASTER_REQUEST] = { 0 };
++  guint8 response[KEYMASTER_RESPONSE] = { 0 };
++  guint8 payload[PAYLOAD_MAX];
++  guint32 status, offset, length;
++  gboolean ok = FALSE;
++
++  if (egisqsee_tee_open (&keymaster, "keymaster64") &&
++      egisqsee_tee_open (&keymaster, "keymaster"))
++    {
++      g_propagate_error (error, transport_error ("Attaching to Keymaster"));
++      return FALSE;
++    }
++  set_u32 (request, 0, KEYMASTER_GET_KEY);
++  set_u32 (request, 4, KEYMASTER_FINGERPRINT);
++  if (egisqsee_tee_send (&keymaster, request, sizeof (request),
++                         response, sizeof (response), NULL, 0))
++    {
++      g_propagate_error (error, transport_error ("Keymaster invoke"));
++      goto out;
++    }
++  status = egisqsee_bix_u32 (response, 0);
++  offset = egisqsee_bix_u32 (response, 4);
++  length = egisqsee_bix_u32 (response, 8);
++  if (status || offset != 12 || !length || length > 256)
++    {
++      g_propagate_error (error, proto_error ("Keymaster key context: status %u, length %u",
++                                             status, length));
++      goto out;
++    }
++  set_u32 (payload, 0, 1);
++  set_u32 (payload, 4, 8 + length);
++  set_u32 (payload, 8, PROP_TOKEN);
++  set_u32 (payload, 12, length);
++  memcpy (payload + 16, response + offset, length);
++  ok = command_ok (bix, CMD_TOKEN, payload, 16 + length, error);
++  explicit_bzero (payload, sizeof (payload));
++
++out:
++  explicit_bzero (response, sizeof (response));
++  egisqsee_tee_close (&keymaster);
++  return ok;
++}
++
++gboolean
++egisqsee_bix_init_sensor (EgisqseeBix *bix, GError **error)
++{
++  /* ree_init_sensor's records: secure capture backend 2 for sensor family
++   * 7, then capture timing. */
++  static const guint8 backend[8] = { 2, 0, 0, 0, 7, 0, 0, 0 };
++  const struct egisqsee_record sensor[] = {
++    { 0x46040101, 8, backend },
++    { 0x62040101, 4, (const guint8[]) { 48, 0, 0, 0 } },
++    { 0x62040118, 4, (const guint8[]) { 0x20, 0x03, 0, 0 } },
++    { 0x62040119, 4, (const guint8[]) { 0xf4, 0x01, 0, 0 } },
++    { 0x62040106, 4, (const guint8[]) { 50, 0, 0, 0 } },
++    { 0x23000101, 4, (const guint8[]) { 1, 0, 0, 0 } },
++  };
++  guint8 echo[REQUEST_SIZE] = { 0 };
++  guint32 status;
++
++  /* The TA's own echo: 7 comes back times ten. */
++  set_u32 (echo, 0, 1);
++  set_u32 (echo, 8, 7);
++  if (egisqsee_tee_send (&bix->tee, echo, sizeof (echo), bix->response,
++                         RESPONSE_SIZE, NULL, 0))
++    {
++      g_propagate_error (error, transport_error ("egisap64 echo"));
++      return FALSE;
++    }
++  if (egisqsee_bix_u32 (bix->response, 0) != 70)
++    {
++      g_propagate_error (error, proto_error ("egisap64 echo returned %u",
++                                             egisqsee_bix_u32 (bix->response, 0)));
++      return FALSE;
++    }
++
++  if (!egisqsee_bix_spi_power (bix, TRUE, error))
++    return FALSE;
++  if (egisqsee_hw_reset (bix->hw))
++    {
++      g_propagate_error (error, transport_error ("Resetting the sensor"));
++      return FALSE;
++    }
++  /* The post-load hello. It answers 1 on a TA that has been initialised
++   * before, which is not an error. */
++  if (!command (bix, CMD_HELLO, NULL, 0, &status, error))
++    return FALSE;
++  if (!token_context (bix, error))
++    return FALSE;
++  return records_ok (bix, CMD_SENSOR_INIT, sensor, G_N_ELEMENTS (sensor),
++                     error);
++}
++
++gboolean
++egisqsee_bix_set_path (EgisqseeBix *bix, const char *path, GError **error)
++{
++  if (g_snprintf (bix->path, sizeof (bix->path), "PATH:%s", path) >=
++      (int) sizeof (bix->path))
++    {
++      g_propagate_error (error, proto_error ("Template path too long"));
++      return FALSE;
++    }
++  return TRUE;
++}
++
++gboolean
++egisqsee_bix_set_active_group (EgisqseeBix *bix, guint32 gid, GError **error)
++{
++  guint8 padded[256] = { 0 };
++  guint8 id[4];
++  struct egisqsee_record records[] = {
++    { PROP_GROUP_PATH, sizeof (padded), padded },
++    { PROP_GROUP_ID, sizeof (id), id },
++  };
++
++  memcpy (padded, bix->path, strlen (bix->path));
++  set_u32 (id, 0, gid);
++  return records_ok (bix, CMD_SET_GROUP, records, G_N_ELEMENTS (records),
++                     error);
++}
++
++gboolean
++egisqsee_bix_get_prop (EgisqseeBix *bix, guint32 id, void *value,
++                       gsize size, GError **error)
++{
++  guint8 payload[4];
++  guint32 length;
++
++  set_u32 (payload, 0, id);
++  if (!command_ok (bix, CMD_GET_PROP, payload, sizeof (payload), error))
++    return FALSE;
++  length = egisqsee_bix_u32 (bix->response, 36);
++  fp_dbg ("Property 0x%08x: %u bytes", id, length);
++  memset (value, 0, size);
++  memcpy (value, bix->data, MIN (size, length));
++  return TRUE;
++}
++
++gboolean
++egisqsee_bix_set_prop (EgisqseeBix *bix, guint32 id, const void *value,
++                       gsize size, GError **error)
++{
++  guint8 payload[PAYLOAD_MAX];
++
++  if (size > sizeof (payload) - 4)
++    {
++      g_propagate_error (error, proto_error ("Property too large"));
++      return FALSE;
++    }
++  set_u32 (payload, 0, id);
++  memcpy (payload + 4, value, size);
++  return command_ok (bix, CMD_SET_PROP, payload, 4 + size, error);
++}
++
++gboolean
++egisqsee_bix_start (EgisqseeBix *bix, guint32 cmd,
++                    const struct egisqsee_record *records, gsize count,
++                    GError **error)
++{
++  return records_ok (bix, cmd, records, count, error);
++}
++
++gboolean
++egisqsee_bix_capture (EgisqseeBix *bix, guint32 cmd, guint32 event,
++                      const struct egisqsee_record *records, gsize count,
++                      guint8 result[EGISQSEE_RESULT_SIZE], GError **error)
++{
++  guint8 payload[PAYLOAD_MAX];
++  struct writer w = { payload, sizeof (payload) };
++  guint32 status, length, drained;
++
++  /* Only the store event carries properties. */
++  if (!serialize (bix, &w, TRUE, event, records, count, error) ||
++      !command (bix, cmd, payload, w.length, &status, error))
++    return FALSE;
++  if (status != EGISQSEE_BIX_OK && status != EGISQSEE_BIX_MORE_DATA)
++    {
++      g_propagate_error (error, proto_error ("BIX 0x%x event 0x%x failed with status %u",
++                                             cmd, event, status));
++      return FALSE;
++    }
++
++  /* The output is a property list; the result is the first value. */
++  memset (result, 0, EGISQSEE_RESULT_SIZE);
++  if (egisqsee_bix_u32 (bix->response, 36) >= 0x18)
++    {
++      length = MIN (egisqsee_bix_u32 (bix->data, 0x14), DATA_SIZE - 0x18);
++      memcpy (result, bix->data + 0x18, MIN (length, EGISQSEE_RESULT_SIZE));
++    }
++
++  /* The rest, the Android auth token and scores, is of no use here; the
++   * TA keeps it pending until it is fetched. */
++  for (drained = 0; status == EGISQSEE_BIX_MORE_DATA && drained < 8; drained++)
++    if (!transact (bix, CMD_PENDING, NULL, 0, &status, error))
++      return FALSE;
++
++  fp_dbg ("BIX 0x%x event 0x%x: status %u image %u capture %u process %u match %u update %u slot %u",
++          cmd, event, egisqsee_bix_u32 (result, EGISQSEE_RESULT_STATUS),
++          egisqsee_bix_u32 (result, EGISQSEE_RESULT_IMAGE),
++          egisqsee_bix_u32 (result, EGISQSEE_RESULT_CAPTURE),
++          egisqsee_bix_u32 (result, EGISQSEE_RESULT_PROCESS),
++          egisqsee_bix_u32 (result, EGISQSEE_RESULT_MATCH),
++          egisqsee_bix_u32 (result, EGISQSEE_RESULT_UPDATE),
++          result[EGISQSEE_RESULT_MATCH_SLOT]);
++  return TRUE;
++}
++
++gboolean
++egisqsee_bix_end (EgisqseeBix *bix, guint32 cmd, GError **error)
++{
++  guint8 payload[8] = { 0 };
++  guint32 status;
++
++  if (!command (bix, cmd, payload, sizeof (payload), &status, error))
++    return FALSE;
++  if (status != EGISQSEE_BIX_OK)
++    fp_dbg ("Workflow end 0x%x: status %u", cmd, status);
++  return TRUE;
++}
++
++gsize
++egisqsee_bix_identity (guint8 *record, gsize size, guint8 slot,
++                       const char *name)
++{
++  gsize length = strnlen (name, IDENTITY_SIZE - IDENTITY_HEADER - 1) + 1;
++
++  g_assert (size >= IDENTITY_SIZE);
++  memset (record, 0, IDENTITY_SIZE);
++  set_u32 (record, 0, IDENTITY_HEADER + length);
++  set_u32 (record, 4, 1);
++  record[8] = slot;
++  set_u32 (record, 9, length);
++  memcpy (record + IDENTITY_HEADER, name, length - 1);
++  return IDENTITY_SIZE;
++}
++
++gboolean
++egisqsee_bix_remove (EgisqseeBix *bix, guint8 slot, const char *name,
++                     GError **error)
++{
++  /* bix_remove's workflow: identity management, mode 1. */
++  const struct egisqsee_record manage[] = {
++    { 0x21040104, 8, (const guint8[]) { 0, 0, 0, 0, 0, 0, 0, 0 } },
++    { 0x42040101, 8, (const guint8[]) { 1, 0, 0, 0, 0, 0, 0, 0 } },
++    { 0x42048102, 8, (const guint8[]) { 3, 0, 0, 0, 1, 0, 0, 0 } },
++    { 0xa0040101, EGISQSEE_RECORD_PATH, NULL },
++    { 0xa1040102, 4, (const guint8[]) { 1, 0, 0, 0 } },
++    { 0x20040102, 4, (const guint8[]) { 0, 0, 0, 0 } },
++    { 0x00000000, 0, NULL },
++  };
++  guint8 identity[IDENTITY_SIZE];
++  struct egisqsee_record record = { PROP_IDENTITY, IDENTITY_SIZE, identity };
++  gboolean ok;
++
++  egisqsee_bix_identity (identity, sizeof (identity), slot, name);
++  if (!records_ok (bix, EGISQSEE_CMD_VERIFY_START, manage,
++                   G_N_ELEMENTS (manage), error))
++    return FALSE;
++  ok = records_ok (bix, EGISQSEE_CMD_IDENTITY, &record, 1, error);
++  return egisqsee_bix_end (bix, EGISQSEE_CMD_VERIFY_END, ok ? error : NULL) && ok;
++}
+diff --git a/libfprint/drivers/egisqsee/egisqsee-bix.h b/libfprint/drivers/egisqsee/egisqsee-bix.h
+new file mode 100644
+index 0000000..65534cd
+--- /dev/null
++++ b/libfprint/drivers/egisqsee/egisqsee-bix.h
+@@ -0,0 +1,148 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++
++#include <gio/gio.h>
++
++#include "egisqsee-hw.h"
++#include "egisqsee-tee.h"
++
++/*
++ * BIX, the message protocol of Egis' trusted application egisap64. A
++ * message is a command id and a payload, inline in a 0x880-byte request;
++ * the reply is a status in the response and an output in the data buffer.
++ * While the TA works it may ask the client for help (status 10): a sensor
++ * reset, a platform name. Templates never leave the TA; it stores them,
++ * encrypted, through the GP file listener qsee-supplicant serves.
++ */
++
++#define EGISQSEE_BIX_OK 0u
++#define EGISQSEE_BIX_FAIL 1u
++#define EGISQSEE_BIX_BAD_PARAM 3u
++#define EGISQSEE_BIX_CALLBACK 10u
++#define EGISQSEE_BIX_MORE_DATA 14u
++
++/* Workflow start and end commands, and the capture command of each. */
++#define EGISQSEE_CMD_ENROLL_START 0x10u
++#define EGISQSEE_CMD_ENROLL_CAPTURE 0x11u
++#define EGISQSEE_CMD_ENROLL_END 0x1fu
++#define EGISQSEE_CMD_VERIFY_START 0x20u
++#define EGISQSEE_CMD_VERIFY_CAPTURE 0x21u
++#define EGISQSEE_CMD_VERIFY_END 0x2fu
++#define EGISQSEE_CMD_IDENTITY 0x3003u
++
++/* Events of the capture commands. */
++#define EGISQSEE_EVENT_CAPTURE 1u
++#define EGISQSEE_EVENT_FINGER_OFF 2u
++#define EGISQSEE_EVENT_PROCESS 3u
++#define EGISQSEE_EVENT_STORE 6u
++#define EGISQSEE_EVENT_LEARN 0xfeu
++
++/* The capture result, the value of a capture command's first output
++ * property. Offsets and values from the vendor agent's reads of it. */
++#define EGISQSEE_RESULT_SIZE 0x160
++#define EGISQSEE_RESULT_STATUS 0x00     /* 0x56: retry */
++#define EGISQSEE_RESULT_IMAGE 0x04      /* EGISQSEE_IMAGE_* */
++#define EGISQSEE_RESULT_CAPTURE 0x30    /* FTC: 4 done */
++#define EGISQSEE_RESULT_PROCESS 0x38    /* FTX: enrollment progress */
++#define EGISQSEE_RESULT_MATCH 0x3c      /* FTM: 1 no match, 2 matched */
++#define EGISQSEE_RESULT_UPDATE 0x40     /* FTU: 2 template updated */
++#define EGISQSEE_RESULT_MATCH_SLOT 0x4c /* u8, index into the fid table */
++
++#define EGISQSEE_IMAGE_EMPTY 1u
++#define EGISQSEE_IMAGE_FUZZY_EMPTY 2u
++#define EGISQSEE_IMAGE_NON_FINGER 3u
++#define EGISQSEE_IMAGE_WATER 4u
++#define EGISQSEE_IMAGE_SLIDE 5u
++#define EGISQSEE_IMAGE_NORMAL 0x10u
++#define EGISQSEE_IMAGE_WET 0x11u
++#define EGISQSEE_IMAGE_DRY 0x12u
++#define EGISQSEE_IMAGE_TOO_PARTIAL 0x15u
++#define EGISQSEE_IMAGE_PARTIAL 0x16u
++
++#define EGISQSEE_CAPTURE_DONE 4u
++
++#define EGISQSEE_PROCESS_NONE 0u
++#define EGISQSEE_PROCESS_NOT_COMPLETE 1u
++#define EGISQSEE_PROCESS_DUPLICATE 2u
++#define EGISQSEE_PROCESS_QC_FAIL 3u
++#define EGISQSEE_PROCESS_REDUNDANT 4u
++#define EGISQSEE_PROCESS_DONE 5u
++
++#define EGISQSEE_MATCH_NO 1u
++#define EGISQSEE_MATCH_YES 2u
++
++/* Properties, as the u32 the agent puts on the wire. */
++#define EGISQSEE_PROP_REGISTRATION 0x01022005u /* struct below */
++#define EGISQSEE_PROP_NEW_FID 0x01022006u      /* u32 */
++#define EGISQSEE_PROP_VBT 0x011a6204u          /* u8, sensor health */
++#define EGISQSEE_PROP_TRIGGER 0x010b4204u      /* u32, 1: wait for IRQ */
++#define EGISQSEE_PROP_OPERATION 0x01012006u    /* u64 */
++#define EGISQSEE_PROP_ENROLL_TRIGGER 0x01084004u /* u32, 3 */
++#define EGISQSEE_PROP_ENROLL_PERCENT 0x01074004u /* u8, 0..100 */
++
++#define EGISQSEE_VBT_BAD 0xd6u
++
++/* The registration property: the active group's fid table and identity. */
++#define EGISQSEE_REGISTRATION_SIZE 0x138
++#define EGISQSEE_SLOTS 10
++#define EGISQSEE_REGISTRATION_NAME 0x36
++
++/* A capture or workflow record whose value the driver supplies. */
++#define EGISQSEE_RECORD_PATH 0xfffffff0u
++#define EGISQSEE_RECORD_AUTH_TOKEN 0xfffffff1u
++#define EGISQSEE_AUTH_TOKEN_SIZE 72
++
++struct egisqsee_record {
++  guint32 id;
++  guint32 size;
++  const guint8 *value;
++};
++
++typedef struct {
++  struct egisqsee_tee tee;
++  struct egisqsee_hw *hw;
++  char path[256];
++  guint8 request[0x880];
++  guint8 response[0x840];
++  guint8 data[4096];
++} EgisqseeBix;
++
++gboolean egisqsee_bix_open (EgisqseeBix *bix, struct egisqsee_hw *hw,
++                            GError **error);
++void egisqsee_bix_close (EgisqseeBix *bix);
++
++gboolean egisqsee_bix_init_sensor (EgisqseeBix *bix, GError **error);
++gboolean egisqsee_bix_spi_power (EgisqseeBix *bix, gboolean on,
++                                 GError **error);
++gboolean egisqsee_bix_set_path (EgisqseeBix *bix, const char *path,
++                                GError **error);
++/* Only inside a workflow; see select_group. */
++gboolean egisqsee_bix_set_active_group (EgisqseeBix *bix, guint32 gid,
++                                        GError **error);
++
++gboolean egisqsee_bix_get_prop (EgisqseeBix *bix, guint32 id, void *value,
++                                gsize size, GError **error);
++gboolean egisqsee_bix_set_prop (EgisqseeBix *bix, guint32 id,
++                                const void *value, gsize size,
++                                GError **error);
++
++gboolean egisqsee_bix_start (EgisqseeBix *bix, guint32 command,
++                             const struct egisqsee_record *records,
++                             gsize count, GError **error);
++gboolean egisqsee_bix_capture (EgisqseeBix *bix, guint32 command,
++                               guint32 event,
++                               const struct egisqsee_record *records,
++                               gsize count,
++                               guint8 result[EGISQSEE_RESULT_SIZE],
++                               GError **error);
++/* Ends a workflow; the TA's status is not an error, it may have none. */
++gboolean egisqsee_bix_end (EgisqseeBix *bix, guint32 command,
++                           GError **error);
++
++/* An identity record: the group's name and a slot of its fid table. */
++gsize egisqsee_bix_identity (guint8 *record, gsize size, guint8 slot,
++                             const char *name);
++gboolean egisqsee_bix_remove (EgisqseeBix *bix, guint8 slot,
++                              const char *name, GError **error);
++
++guint32 egisqsee_bix_u32 (const guint8 *buffer, gsize offset);
+diff --git a/libfprint/drivers/egisqsee/egisqsee-hw.c b/libfprint/drivers/egisqsee/egisqsee-hw.c
+new file mode 100644
+index 0000000..01994f9
+--- /dev/null
++++ b/libfprint/drivers/egisqsee/egisqsee-hw.c
+@@ -0,0 +1,102 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#include "egisqsee-hw.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <poll.h>
++#include <stdint.h>
++#include <sys/eventfd.h>
++#include <sys/ioctl.h>
++#include <unistd.h>
++
++/* drivers/misc/egisfp/egisfp.h in the kernel this phone runs. */
++#define EGISFP_POWER _IOW ('E', 0x81, uint32_t)
++#define EGISFP_RESET _IO ('E', 0x82)
++#define EGISFP_EVENTFD _IOW ('E', 0x83, int32_t)
++#define EGISFP_IRQ_ARM _IOW ('E', 0x84, uint32_t)
++
++int
++egisqsee_hw_open (struct egisqsee_hw *hw, const char *path)
++{
++  int32_t event_fd;
++
++  hw->fd = open (path, O_RDWR | O_CLOEXEC);
++  hw->event_fd = -1;
++  if (hw->fd < 0)
++    return -1;
++  hw->event_fd = eventfd (0, EFD_CLOEXEC | EFD_NONBLOCK);
++  event_fd = hw->event_fd;
++  if (hw->event_fd < 0 || ioctl (hw->fd, EGISFP_EVENTFD, &event_fd))
++    {
++      egisqsee_hw_close (hw);
++      return -1;
++    }
++  return 0;
++}
++
++void
++egisqsee_hw_close (struct egisqsee_hw *hw)
++{
++  /* Closing the device powers the sensor off and drops the eventfd. */
++  if (hw->fd >= 0)
++    close (hw->fd);
++  if (hw->event_fd >= 0)
++    close (hw->event_fd);
++  hw->fd = hw->event_fd = -1;
++}
++
++int
++egisqsee_hw_power (struct egisqsee_hw *hw, gboolean on)
++{
++  uint32_t value = on ? 1 : 0;
++
++  return ioctl (hw->fd, EGISFP_POWER, &value);
++}
++
++int
++egisqsee_hw_reset (struct egisqsee_hw *hw)
++{
++  return ioctl (hw->fd, EGISFP_RESET);
++}
++
++int
++egisqsee_hw_arm (struct egisqsee_hw *hw, guint32 mode)
++{
++  uint64_t stale;
++  uint32_t value = mode;
++
++  /* A notification from an earlier arm must not satisfy this one. */
++  while (read (hw->event_fd, &stale, sizeof (stale)) == sizeof (stale))
++    ;
++  return ioctl (hw->fd, EGISFP_IRQ_ARM, &value);
++}
++
++int
++egisqsee_hw_wait (struct egisqsee_hw *hw, int timeout_ms,
++                  GCancellable *cancellable)
++{
++  struct pollfd fds[2] = {
++    { .fd = hw->event_fd, .events = POLLIN },
++    { .fd = -1, .events = POLLIN },
++  };
++  uint64_t count;
++  int result;
++
++  if (cancellable)
++    fds[1].fd = g_cancellable_get_fd (cancellable);
++  do
++    result = poll (fds, fds[1].fd >= 0 ? 2 : 1, timeout_ms);
++  while (result < 0 && errno == EINTR);
++  if (cancellable)
++    g_cancellable_release_fd (cancellable);
++  if (result <= 0)
++    return result;
++  if (g_cancellable_is_cancelled (cancellable))
++    {
++      errno = ECANCELED;
++      return -1;
++    }
++  if (read (hw->event_fd, &count, sizeof (count)) != sizeof (count))
++    return errno == EAGAIN ? 0 : -1;
++  return 1;
++}
+diff --git a/libfprint/drivers/egisqsee/egisqsee-hw.h b/libfprint/drivers/egisqsee/egisqsee-hw.h
+new file mode 100644
+index 0000000..d036d9a
+--- /dev/null
++++ b/libfprint/drivers/egisqsee/egisqsee-hw.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++
++#include <gio/gio.h>
++
++/*
++ * The sensor's power, reset and interrupt line, through the kernel's egisfp
++ * driver. Its SPI bus belongs to TrustZone, so this is all Linux controls.
++ */
++struct egisqsee_hw {
++  int fd;
++  int event_fd;
++};
++
++#define EGISQSEE_IRQ_RISING 1u
++#define EGISQSEE_IRQ_FALLING 2u
++#define EGISQSEE_IRQ_HIGH 4u
++#define EGISQSEE_IRQ_LOW 8u
++
++int egisqsee_hw_open (struct egisqsee_hw *hw, const char *path);
++void egisqsee_hw_close (struct egisqsee_hw *hw);
++int egisqsee_hw_power (struct egisqsee_hw *hw, gboolean on);
++int egisqsee_hw_reset (struct egisqsee_hw *hw);
++int egisqsee_hw_arm (struct egisqsee_hw *hw, guint32 mode);
++/* 1 on an interrupt, 0 on timeout, -1 with errno set, ECANCELED included. */
++int egisqsee_hw_wait (struct egisqsee_hw *hw, int timeout_ms,
++                      GCancellable *cancellable);
+diff --git a/libfprint/drivers/egisqsee/egisqsee-records.h b/libfprint/drivers/egisqsee/egisqsee-records.h
+new file mode 100644
+index 0000000..0167819
+--- /dev/null
++++ b/libfprint/drivers/egisqsee/egisqsee-records.h
+@@ -0,0 +1,176 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/* Generated by gen_records.py from the property records the vendor agent
++ * sends to start a verification (command 0x20) and an enrollment (0x10).
++ * The two 644-byte records are capture configuration. */
++#pragma once
++
++static const guint8 egisqsee_config_61040108[644] = {
++  0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x10, 0x00, 0x61, 0x00, 0x00, 0x2d, 0x2d, 0x00, 0x48, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x55, 0x32, 0x00, 0x00,
++  0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x61, 0x00, 0x00, 0x2d, 0x2d, 0x00,
++  0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x55, 0x32, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x30, 0x00, 0x63, 0x00, 0x00, 0x2d, 0x2d, 0x00, 0x48, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x55, 0x23, 0x00, 0x00,
++  0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x61, 0x00, 0x00, 0x2d, 0x2d, 0x00,
++  0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x55, 0x23, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0x00, 0x63, 0x00,
++  0x00, 0x2d, 0x2d, 0x00, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x55, 0x23, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x10, 0x00, 0x61, 0x00, 0x00, 0x2d, 0x2d, 0x00, 0x48, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x55, 0x50, 0x00, 0x00,
++  0x00, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++};
++
++static const guint8 egisqsee_config_6104010b[644] = {
++  0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
++  0x00, 0x2d, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x28, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x10, 0x00, 0x00, 0x00, 0x00, 0x2d, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x28, 0x00, 0x00,
++  0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
++  0x00, 0x2d, 0x00, 0x00, 0x48, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x10, 0x00, 0x00, 0x00, 0x00, 0x2d, 0x00, 0x00, 0x48, 0x00, 0xff, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
++  0x00, 0x2d, 0x00, 0x00, 0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++};
++
++static const guint8 egisqsee_config_40040106[36] = {
++  0x14, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x1e, 0x00, 0x00, 0x00,
++  0xff, 0xff, 0xff, 0x7f, 0x00, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,
++  0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,
++};
++
++static const struct egisqsee_record egisqsee_verify_start[] = {
++  { 0x42040101, 8, (const guint8[]) { 0x02, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00 } },
++  { 0x42048102, 8, (const guint8[]) { 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 } },
++  { 0x42040105, 4, (const guint8[]) { 0x01, 0x00, 0x00, 0x00 } },
++  { 0x42040106, 4, (const guint8[]) { 0x01, 0x00, 0x00, 0x00 } },
++  { 0x42040109, 4, (const guint8[]) { 0x01, 0x00, 0x00, 0x00 } },
++  { 0x4204010e, 4, (const guint8[]) { 0x0a, 0x00, 0x00, 0x00 } },
++  { 0x4204010f, 4, (const guint8[]) { 0xf4, 0x01, 0x00, 0x00 } },
++  { 0xa0040102, 4, (const guint8[]) { 0x00, 0x70, 0x17, 0x00 } },
++  { 0x61040108, 644, egisqsee_config_61040108 },
++  { 0x6104010b, 644, egisqsee_config_6104010b },
++  { 0x6104010e, 4, (const guint8[]) { 0x00, 0x00, 0x00, 0x00 } },
++  { 0x6104010f, 4, (const guint8[]) { 0x00, 0x00, 0x00, 0x00 } },
++  { 0x62040101, 4, (const guint8[]) { 0x30, 0x00, 0x00, 0x00 } },
++  { 0x62040118, 4, (const guint8[]) { 0x20, 0x03, 0x00, 0x00 } },
++  { 0x62040119, 4, (const guint8[]) { 0xf4, 0x01, 0x00, 0x00 } },
++  { 0x62040106, 4, (const guint8[]) { 0x32, 0x00, 0x00, 0x00 } },
++  { 0x6204011b, 4, (const guint8[]) { 0x55, 0x00, 0x00, 0x00 } },
++  { 0x6204011d, 4, (const guint8[]) { 0x04, 0x00, 0x00, 0x00 } },
++  { 0x6204011f, 1, (const guint8[]) { 0xff } },
++  { 0xa0040101, EGISQSEE_RECORD_PATH, NULL },
++  { 0xa1040102, 4, (const guint8[]) { 0x01, 0x00, 0x00, 0x00 } },
++  { 0x20040102, 4, (const guint8[]) { 0x00, 0x00, 0x00, 0x00 } },
++  { 0x00000000, 0, NULL },
++  { 0x86018101, 4, (const guint8[]) { 0x01, 0x00, 0x00, 0x00 } },
++  { 0x86018102, 4, (const guint8[]) { 0x01, 0x00, 0x00, 0x00 } },
++};
++
++static const struct egisqsee_record egisqsee_enroll_start[] = {
++  { 0x21040101, EGISQSEE_RECORD_AUTH_TOKEN, NULL },
++  { 0x40040101, 8, (const guint8[]) { 0x02, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00 } },
++  { 0x40048102, 8, (const guint8[]) { 0x03, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00 } },
++  { 0x40040106, 36, egisqsee_config_40040106 },
++  { 0x61040108, 644, egisqsee_config_61040108 },
++  { 0x6104010b, 644, egisqsee_config_6104010b },
++  { 0x6104010e, 4, (const guint8[]) { 0x00, 0x00, 0x00, 0x00 } },
++  { 0x6104010f, 4, (const guint8[]) { 0x00, 0x00, 0x00, 0x00 } },
++  { 0x62040101, 4, (const guint8[]) { 0x30, 0x00, 0x00, 0x00 } },
++  { 0x62040118, 4, (const guint8[]) { 0x20, 0x03, 0x00, 0x00 } },
++  { 0x62040119, 4, (const guint8[]) { 0xf4, 0x01, 0x00, 0x00 } },
++  { 0x62040106, 4, (const guint8[]) { 0x32, 0x00, 0x00, 0x00 } },
++  { 0x6204011b, 4, (const guint8[]) { 0x55, 0x00, 0x00, 0x00 } },
++  { 0x6204011d, 4, (const guint8[]) { 0x04, 0x00, 0x00, 0x00 } },
++  { 0x6204011f, 1, (const guint8[]) { 0xff } },
++  { 0xa0040101, EGISQSEE_RECORD_PATH, NULL },
++  { 0xa1040102, 4, (const guint8[]) { 0x01, 0x00, 0x00, 0x00 } },
++  { 0x20040102, 4, (const guint8[]) { 0x00, 0x00, 0x00, 0x00 } },
++  { 0x00000000, 0, NULL },
++  { 0x86018101, 4, (const guint8[]) { 0x01, 0x00, 0x00, 0x00 } },
++};
+diff --git a/libfprint/drivers/egisqsee/egisqsee-tee.c b/libfprint/drivers/egisqsee/egisqsee-tee.c
+new file mode 100644
+index 0000000..9193e05
+--- /dev/null
++++ b/libfprint/drivers/egisqsee/egisqsee-tee.c
+@@ -0,0 +1,176 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#include "egisqsee-tee.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <linux/tee.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/ioctl.h>
++#include <sys/mman.h>
++#include <unistd.h>
++
++#define TEE_IMPL_ID_QSEECOM 5u
++#define MEMORY_SIZE (EGISQSEE_TEE_DATA + EGISQSEE_TEE_DATA_MAX)
++
++static int
++open_client_device (void)
++{
++  struct tee_ioctl_version_data version;
++  char path[32];
++  int i, fd;
++
++  for (i = 0; i < 16; i++)
++    {
++      snprintf (path, sizeof (path), "/dev/tee%d", i);
++      fd = open (path, O_RDWR | O_CLOEXEC);
++      if (fd < 0)
++        continue;
++      if (!ioctl (fd, TEE_IOC_VERSION, &version) &&
++          version.impl_id == TEE_IMPL_ID_QSEECOM)
++        return fd;
++      close (fd);
++    }
++  errno = ENODEV;
++  return -1;
++}
++
++void
++egisqsee_tee_close (struct egisqsee_tee *tee)
++{
++  int saved = errno;
++
++  if (tee->session_open)
++    {
++      struct tee_ioctl_close_session_arg arg = { .session = tee->session };
++      ioctl (tee->fd, TEE_IOC_CLOSE_SESSION, &arg);
++    }
++  if (tee->memory)
++    {
++      /* Requests carry the Keymaster token context; leave none behind. */
++      explicit_bzero (tee->memory, tee->memory_size);
++      munmap (tee->memory, tee->memory_size);
++    }
++  if (tee->shm_fd >= 0)
++    close (tee->shm_fd);
++  if (tee->fd >= 0)
++    close (tee->fd);
++  *tee = (struct egisqsee_tee) { .fd = -1, .shm_fd = -1 };
++  errno = saved;
++}
++
++int
++egisqsee_tee_open (struct egisqsee_tee *tee, const char *application)
++{
++  struct tee_ioctl_shm_alloc_data allocation = { .size = MEMORY_SIZE };
++  guint64 storage[(sizeof (struct tee_ioctl_open_session_arg) +
++                   sizeof (struct tee_ioctl_param) + 7) / 8] = { 0 };
++  struct tee_ioctl_open_session_arg *arg = (void *) storage;
++  struct tee_ioctl_buf_data buffer;
++  void *memory;
++
++  *tee = (struct egisqsee_tee) { .fd = -1, .shm_fd = -1 };
++  if (strlen (application) >= EGISQSEE_TEE_RSP)
++    {
++      errno = ENAMETOOLONG;
++      return -1;
++    }
++  tee->fd = open_client_device ();
++  if (tee->fd < 0)
++    return -1;
++  tee->shm_fd = ioctl (tee->fd, TEE_IOC_SHM_ALLOC, &allocation);
++  if (tee->shm_fd < 0)
++    goto fail;
++  tee->shm_id = allocation.id;
++  memory = mmap (NULL, MEMORY_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED,
++                 tee->shm_fd, 0);
++  if (memory == MAP_FAILED)
++    goto fail;
++  tee->memory = memory;
++  tee->memory_size = MEMORY_SIZE;
++  memset (tee->memory, 0, MEMORY_SIZE);
++  memcpy (tee->memory, application, strlen (application) + 1);
++
++  arg->num_params = 1;
++  arg->params[0].attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT;
++  arg->params[0].b = strlen (application) + 1;
++  arg->params[0].c = tee->shm_id;
++  buffer.buf_ptr = (uintptr_t) storage;
++  buffer.buf_len = sizeof (storage);
++  if (ioctl (tee->fd, TEE_IOC_OPEN_SESSION, &buffer))
++    goto fail;
++  if (arg->ret)
++    {
++      errno = EIO;
++      goto fail;
++    }
++  tee->session = arg->session;
++  tee->session_open = TRUE;
++  return 0;
++
++fail:
++  egisqsee_tee_close (tee);
++  return -1;
++}
++
++int
++egisqsee_tee_send (struct egisqsee_tee *tee,
++                   const guint8 *request, gsize request_size,
++                   guint8 *response, gsize response_size,
++                   guint8 *data, gsize data_size)
++{
++  guint64 storage[(sizeof (struct tee_ioctl_invoke_arg) +
++                   4 * sizeof (struct tee_ioctl_param) + 7) / 8] = { 0 };
++  struct tee_ioctl_invoke_arg *arg = (void *) storage;
++  struct tee_ioctl_buf_data buffer;
++
++  if (!tee->session_open || request_size > EGISQSEE_TEE_RSP ||
++      response_size > EGISQSEE_TEE_DATA - EGISQSEE_TEE_RSP ||
++      data_size > EGISQSEE_TEE_DATA_MAX || (!data && data_size))
++    {
++      errno = EINVAL;
++      return -1;
++    }
++  memset (tee->memory, 0, tee->memory_size);
++  memcpy (tee->memory, request, request_size);
++  if (data)
++    memcpy (tee->memory + EGISQSEE_TEE_DATA, data, data_size);
++
++  arg->session = tee->session;
++  arg->num_params = data ? 4 : 2;
++  arg->params[0].attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INPUT;
++  arg->params[0].b = request_size;
++  arg->params[0].c = tee->shm_id;
++  arg->params[1].attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_OUTPUT;
++  arg->params[1].a = EGISQSEE_TEE_RSP;
++  arg->params[1].b = response_size;
++  arg->params[1].c = tee->shm_id;
++  if (data)
++    {
++      /* A patch: the value is where in the request to write the next
++       * buffer's address, and how wide. Egis' 0xE0 message carries its
++       * payload pointer at offset 8, 64 bits. */
++      arg->params[2].attr = TEE_IOCTL_PARAM_ATTR_TYPE_VALUE_INPUT;
++      arg->params[2].a = 8;
++      arg->params[2].b = 8;
++      arg->params[3].attr = TEE_IOCTL_PARAM_ATTR_TYPE_MEMREF_INOUT;
++      arg->params[3].a = EGISQSEE_TEE_DATA;
++      arg->params[3].b = data_size;
++      arg->params[3].c = tee->shm_id;
++    }
++  /* The kernel wants the length of exactly num_params parameters. */
++  buffer.buf_ptr = (uintptr_t) storage;
++  buffer.buf_len = sizeof (*arg) + arg->num_params * sizeof (arg->params[0]);
++  if (ioctl (tee->fd, TEE_IOC_INVOKE, &buffer))
++    return -1;
++  if (arg->ret || arg->params[1].b != response_size ||
++      (data && arg->params[3].b != data_size))
++    {
++      errno = EIO;
++      return -1;
++    }
++  memcpy (response, tee->memory + EGISQSEE_TEE_RSP, response_size);
++  if (data)
++    memcpy (data, tee->memory + EGISQSEE_TEE_DATA, data_size);
++  return 0;
++}
+diff --git a/libfprint/drivers/egisqsee/egisqsee-tee.h b/libfprint/drivers/egisqsee/egisqsee-tee.h
+new file mode 100644
+index 0000000..5d0a383
+--- /dev/null
++++ b/libfprint/drivers/egisqsee/egisqsee-tee.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++#pragma once
++
++#include <glib.h>
++
++/*
++ * A session with a QSEECom trusted application through the Linux TEE
++ * subsystem's QSEECom driver: /dev/teeN, implementation ID 5. The session
++ * attaches to a TA something else keeps loaded (qsee-app-loader); it never
++ * loads one. A command is a request and a response buffer and, for Egis'
++ * messages, a data buffer whose address TrustZone patches into the request.
++ *
++ * One shared-memory block holds all three: request at 0, response at
++ * EGISQSEE_TEE_RSP, data at EGISQSEE_TEE_DATA.
++ */
++#define EGISQSEE_TEE_RSP 4096
++#define EGISQSEE_TEE_DATA 8192
++#define EGISQSEE_TEE_DATA_MAX 4096
++
++struct egisqsee_tee {
++  int fd;
++  int shm_fd;
++  gint32 shm_id;
++  guint32 session;
++  gboolean session_open;
++  guint8 *memory;
++  gsize memory_size;
++};
++
++int egisqsee_tee_open (struct egisqsee_tee *tee, const char *application);
++void egisqsee_tee_close (struct egisqsee_tee *tee);
++/* @data may be NULL for a command without one; it is updated in place. */
++int egisqsee_tee_send (struct egisqsee_tee *tee,
++                       const guint8 *request, gsize request_size,
++                       guint8 *response, gsize response_size,
++                       guint8 *data, gsize data_size);
+diff --git a/libfprint/drivers/egisqsee/egisqsee.c b/libfprint/drivers/egisqsee/egisqsee.c
+new file mode 100644
+index 0000000..299d3d2
+--- /dev/null
++++ b/libfprint/drivers/egisqsee/egisqsee.c
+@@ -0,0 +1,866 @@
++/* SPDX-License-Identifier: LGPL-2.1-or-later */
++/*
++ * Egis fingerprint sensors behind Qualcomm TrustZone, such as the EC617 in
++ * the Sony Xperia 10 VI. TrustZone owns the sensor's SPI bus; Egis' trusted
++ * application egisap64 captures, matches and stores templates, encrypted,
++ * through the GP file listener of qsee-supplicant, whose loader keeps the TA
++ * loaded. Linux holds the sensor's power, reset and finger interrupt, through
++ * the kernel's egisfp driver. Matching happens on the TA's own templates, so
++ * prints here only name a template: its group and finger id.
++ *
++ * The flows follow the vendor's Android agent, which these were recovered
++ * from for interoperability; the TA expects them.
++ */
++#define FP_COMPONENT "egisqsee"
++
++#include "drivers_api.h"
++#include "egisqsee-bix.h"
++#include "egisqsee-hw.h"
++#include "egisqsee-records.h"
++
++#include <errno.h>
++#include <string.h>
++
++/* The TA's template storage. One group holds every Linux user's fingers;
++ * fprintd keeps track of whose they are. The path is Android's, which the
++ * TA was built for; qsee-supplicant keeps it under its state directory. */
++#define GROUP_ID 0u
++#define GROUP_PATH "/data/vendor_de/0/fpdata"
++#define IDENTITY_NAME "User-0"
++
++/* The TA finishes an enrollment by itself once it has enough coverage, at
++ * most after its configured 20 touches. */
++#define ENROLL_STAGES 20
++
++/* The finger interrupt fires on its rising edge. */
++#define FINGER_IRQ EGISQSEE_IRQ_RISING
++/* Finger waits also capture again when the interrupt stays quiet. The
++ * agent relies on the interrupt alone; until it is proven for every flow
++ * here, a missed one costs a second, not the whole operation. */
++#define FINGER_ON_POLL_MS 1000
++#define FINGER_OFF_POLL_MS 250
++
++/* The agent's enrollment trigger, impl[312], 3 unless configured. With 0
++ * the sensor never raised its interrupt for a touch. */
++#define ENROLL_TRIGGER 3
++
++struct _FpiDeviceEgisqsee {
++  FpDevice parent;
++  struct egisqsee_hw hw;
++  EgisqseeBix *bix;
++};
++
++G_DECLARE_FINAL_TYPE (FpiDeviceEgisqsee, fpi_device_egisqsee, FPI,
++                      DEVICE_EGISQSEE, FpDevice)
++G_DEFINE_TYPE (FpiDeviceEgisqsee, fpi_device_egisqsee, FP_TYPE_DEVICE)
++
++static const FpIdEntry id_table[] = {
++  { .udev_types = FPI_DEVICE_UDEV_SUBTYPE_MISC, .misc_name = "egisfp0" },
++  { .udev_types = 0 }
++};
++
++enum operation {
++  OP_OPEN, OP_CLOSE, OP_LIST, OP_DELETE, OP_CLEAR, OP_ENROLL, OP_MATCH,
++};
++
++struct work {
++  enum operation operation;
++  guint32 fid;
++};
++
++struct match {
++  gboolean matched;
++  guint32 fid;
++  GError *retry;
++};
++
++struct progress {
++  FpiDeviceEgisqsee *self;
++  FpFingerStatusFlags finger;
++  gint stage;   /* an enrollment stage passed, or -1 */
++  GError *retry;
++};
++
++/* Main-thread reports from the worker. */
++static gboolean
++progress_in_main (gpointer data)
++{
++  struct progress *p = data;
++  FpDevice *device = FP_DEVICE (p->self);
++
++  fpi_device_report_finger_status (device, p->finger);
++  if ((p->stage >= 0 || p->retry) &&
++      fpi_device_get_current_action (device) == FPI_DEVICE_ACTION_ENROLL)
++    fpi_device_enroll_progress (device, MAX (p->stage, 0), NULL,
++                                g_steal_pointer (&p->retry));
++  g_clear_error (&p->retry);
++  g_object_unref (p->self);
++  g_free (p);
++  return G_SOURCE_REMOVE;
++}
++
++static void
++report (FpiDeviceEgisqsee *self, FpFingerStatusFlags finger, gint stage,
++        GError *retry)
++{
++  struct progress *p = g_new0 (struct progress, 1);
++
++  p->self = g_object_ref (self);
++  p->finger = finger;
++  p->stage = stage;
++  p->retry = retry;
++  g_main_context_invoke (NULL, progress_in_main, p);
++}
++
++static GError *
++hw_error (const char *operation)
++{
++  if (errno == ECANCELED)
++    return g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED,
++                                "Operation cancelled");
++  return fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "%s: %s",
++                                   operation, g_strerror (errno));
++}
++
++/* Waits for a finger to come or go, with the SPI bus released meanwhile, as
++ * the vendor agent does; with a timeout, returns when it runs out too. */
++static gboolean
++wait_finger (FpiDeviceEgisqsee *self, int timeout_ms,
++             GCancellable *cancellable, GError **error)
++{
++  gboolean seen = FALSE;
++  int rc;
++
++  if (!egisqsee_bix_spi_power (self->bix, FALSE, error))
++    return FALSE;
++  if (egisqsee_hw_arm (&self->hw, FINGER_IRQ))
++    {
++      g_propagate_error (error, hw_error ("Arming the finger interrupt"));
++    }
++  else
++    {
++      rc = egisqsee_hw_wait (&self->hw, timeout_ms, cancellable);
++      if (rc > 0 || (rc == 0 && timeout_ms >= 0))
++        seen = TRUE;
++      else
++        g_propagate_error (error, hw_error ("Waiting for the finger"));
++      fp_dbg ("Finger wait: %s", rc > 0 ? "interrupt" : rc == 0 ? "timed out" : "failed");
++      egisqsee_hw_arm (&self->hw, 0);
++    }
++  /* The bus goes back on even after a cancel: the workflow end needs it. */
++  if (!egisqsee_bix_spi_power (self->bix, TRUE, seen ? error : NULL))
++    return FALSE;
++  return seen;
++}
++
++static gboolean
++get_registration (FpiDeviceEgisqsee *self,
++                  guint8 registration[EGISQSEE_REGISTRATION_SIZE],
++                  GError **error)
++{
++  return egisqsee_bix_get_prop (self->bix, EGISQSEE_PROP_REGISTRATION,
++                                registration, EGISQSEE_REGISTRATION_SIZE,
++                                error);
++}
++
++static guint32
++slot_fid (const guint8 *registration, guint slot)
++{
++  return egisqsee_bix_u32 (registration, 4 * slot);
++}
++
++static gboolean
++check_sensor (FpiDeviceEgisqsee *self, GError **error)
++{
++  guint8 vbt;
++
++  if (!egisqsee_bix_get_prop (self->bix, EGISQSEE_PROP_VBT, &vbt, 1, error))
++    return FALSE;
++  fp_dbg ("Sensor vbt 0x%02x", vbt);
++  if (vbt >= EGISQSEE_VBT_BAD)
++    {
++      g_set_error (error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_GENERAL,
++                   "Sensor reports a fault (vbt 0x%02x)", vbt);
++      return FALSE;
++    }
++  return TRUE;
++}
++
++/* Captures until the TA has a usable image, waiting for the finger between
++ * tries. */
++static gboolean
++capture_finger (FpiDeviceEgisqsee *self, guint32 command,
++                guint8 result[EGISQSEE_RESULT_SIZE],
++                GCancellable *cancellable, GError **error)
++{
++  for (;;)
++    {
++      if (g_cancellable_set_error_if_cancelled (cancellable, error))
++        return FALSE;
++      if (!egisqsee_bix_capture (self->bix, command, EGISQSEE_EVENT_CAPTURE,
++                                 NULL, 0, result, error))
++        return FALSE;
++      if (egisqsee_bix_u32 (result, EGISQSEE_RESULT_CAPTURE) ==
++          EGISQSEE_CAPTURE_DONE)
++        {
++          report (self, FP_FINGER_STATUS_PRESENT, -1, NULL);
++          return TRUE;
++        }
++      report (self, FP_FINGER_STATUS_NEEDED, -1, NULL);
++      if (!wait_finger (self, FINGER_ON_POLL_MS, cancellable, error))
++        return FALSE;
++    }
++}
++
++/* Waits for the finger to lift, so that the next touch is a new one. */
++static gboolean
++await_finger_off (FpiDeviceEgisqsee *self, guint32 command,
++                  GCancellable *cancellable, GError **error)
++{
++  guint8 result[EGISQSEE_RESULT_SIZE];
++
++  for (;;)
++    {
++      if (!egisqsee_bix_capture (self->bix, command, EGISQSEE_EVENT_FINGER_OFF,
++                                 NULL, 0, result, error))
++        return FALSE;
++      if (egisqsee_bix_u32 (result, EGISQSEE_RESULT_IMAGE) ==
++          EGISQSEE_IMAGE_EMPTY)
++        {
++          report (self, FP_FINGER_STATUS_NONE, -1, NULL);
++          return TRUE;
++        }
++      /* Whether lifting the finger raises the interrupt is not known;
++       * look again now and then either way. */
++      if (!wait_finger (self, FINGER_OFF_POLL_MS, cancellable, error))
++        return FALSE;
++    }
++}
++
++static GError *
++enroll_retry (guint32 process)
++{
++  switch (process)
++    {
++    case EGISQSEE_PROCESS_REDUNDANT:
++      return fpi_device_retry_new_msg (FP_DEVICE_RETRY_REMOVE_FINGER,
++                                       "This part of the finger was already scanned");
++    case EGISQSEE_PROCESS_DUPLICATE:
++      return fpi_device_retry_new_msg (FP_DEVICE_RETRY_REMOVE_FINGER,
++                                       "This finger looks already enrolled");
++    default:
++      return fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL);
++    }
++}
++
++static gboolean
++enroll (FpiDeviceEgisqsee *self, GCancellable *cancellable, guint32 *fid,
++        GError **error)
++{
++  guint8 registration[EGISQSEE_REGISTRATION_SIZE];
++  guint8 result[EGISQSEE_RESULT_SIZE];
++  guint8 identity[0x10d], store_flag[4] = { 0 };
++  const struct egisqsee_record store[] = {
++    { 0x40040105, sizeof (identity), identity },
++    { 0x20050101, sizeof (store_flag), store_flag },
++  };
++  const guint32 trigger = ENROLL_TRIGGER;
++  gboolean started = FALSE, ok = FALSE;
++  gint touches = 0;
++  guint slot;
++
++  if (!get_registration (self, registration, error))
++    return FALSE;
++  for (slot = 0; slot < EGISQSEE_SLOTS && slot_fid (registration, slot); slot++)
++    ;
++  if (slot == EGISQSEE_SLOTS)
++    {
++      g_propagate_error (error, fpi_device_error_new (FP_DEVICE_ERROR_DATA_FULL));
++      return FALSE;
++    }
++
++  if (!egisqsee_bix_start (self->bix, EGISQSEE_CMD_ENROLL_START,
++                           egisqsee_enroll_start,
++                           G_N_ELEMENTS (egisqsee_enroll_start), error))
++    return FALSE;
++  started = TRUE;
++  if (!check_sensor (self, error) ||
++      !egisqsee_bix_set_prop (self->bix, EGISQSEE_PROP_ENROLL_TRIGGER,
++                              &trigger, sizeof (trigger), error) ||
++      !egisqsee_bix_get_prop (self->bix, EGISQSEE_PROP_NEW_FID, fid,
++                              sizeof (*fid), error))
++    goto out;
++  *fid = GUINT32_FROM_LE (*fid);
++  fp_dbg ("Enrolling finger id %u", *fid);
++
++  for (;;)
++    {
++      guint32 process;
++
++      if (!capture_finger (self, EGISQSEE_CMD_ENROLL_CAPTURE, result,
++                           cancellable, error) ||
++          !egisqsee_bix_capture (self->bix, EGISQSEE_CMD_ENROLL_CAPTURE,
++                                 EGISQSEE_EVENT_PROCESS, NULL, 0, result,
++                                 error))
++        goto out;
++      process = egisqsee_bix_u32 (result, EGISQSEE_RESULT_PROCESS);
++      if (process == EGISQSEE_PROCESS_DONE)
++        break;
++      if (process == EGISQSEE_PROCESS_NOT_COMPLETE)
++        {
++          guint8 percent;
++
++          /* The TA's own coverage, which the agent polls too. Its sample
++           * target is not known yet; 19 good touches were not enough. */
++          if (egisqsee_bix_get_prop (self->bix, EGISQSEE_PROP_ENROLL_PERCENT,
++                                     &percent, sizeof (percent), NULL))
++            {
++              fp_dbg ("Enrollment at %u%% after %d touches", percent, touches + 1);
++              if (percent >= 100)
++                break;
++            }
++          report (self, FP_FINGER_STATUS_PRESENT, MIN (++touches, ENROLL_STAGES - 1), NULL);
++        }
++      else
++        report (self, FP_FINGER_STATUS_PRESENT, touches, enroll_retry (process));
++      if (!await_finger_off (self, EGISQSEE_CMD_ENROLL_CAPTURE, cancellable,
++                             error))
++        goto out;
++    }
++
++  /* The TA picks the slot; the identity names the group. */
++  egisqsee_bix_identity (identity, sizeof (identity), 0, IDENTITY_NAME);
++  if (!egisqsee_bix_capture (self->bix, EGISQSEE_CMD_ENROLL_CAPTURE,
++                             EGISQSEE_EVENT_STORE, store, G_N_ELEMENTS (store),
++                             result, error))
++    goto out;
++  if (egisqsee_bix_u32 (result, EGISQSEE_RESULT_STATUS))
++    {
++      g_set_error (error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_PROTO,
++                   "Storing the template failed with status %u",
++                   egisqsee_bix_u32 (result, EGISQSEE_RESULT_STATUS));
++      goto out;
++    }
++  ok = TRUE;
++
++out:
++  if (started)
++    egisqsee_bix_end (self->bix, EGISQSEE_CMD_ENROLL_END, ok ? error : NULL);
++  report (self, FP_FINGER_STATUS_NONE, -1, NULL);
++  return ok && !(error && *error);
++}
++
++static gboolean
++match (FpiDeviceEgisqsee *self, GCancellable *cancellable,
++       struct match *outcome, GError **error)
++{
++  guint8 registration[EGISQSEE_REGISTRATION_SIZE];
++  guint8 result[EGISQSEE_RESULT_SIZE];
++  const guint32 trigger = 1;
++  const guint64 operation = 0;
++  gboolean started = FALSE, ok = FALSE;
++  guint32 decision;
++  guint slot;
++
++  if (!get_registration (self, registration, error))
++    return FALSE;
++  /* With nothing enrolled there is nothing to match against, and fprintd
++   * identifies before every enrollment, the first one included. */
++  for (slot = 0; slot < EGISQSEE_SLOTS && !slot_fid (registration, slot); slot++)
++    ;
++  if (slot == EGISQSEE_SLOTS)
++    return TRUE;
++  if (!egisqsee_bix_start (self->bix, EGISQSEE_CMD_VERIFY_START,
++                           egisqsee_verify_start,
++                           G_N_ELEMENTS (egisqsee_verify_start), error))
++    return FALSE;
++  started = TRUE;
++  /* Trigger 1: the TA expects the client to wait for the interrupt
++   * between captures, rather than poll. */
++  if (!check_sensor (self, error) ||
++      !egisqsee_bix_set_prop (self->bix, EGISQSEE_PROP_TRIGGER, &trigger,
++                              sizeof (trigger), error) ||
++      !egisqsee_bix_set_prop (self->bix, EGISQSEE_PROP_OPERATION, &operation,
++                              sizeof (operation), error) ||
++      !capture_finger (self, EGISQSEE_CMD_VERIFY_CAPTURE, result, cancellable,
++                       error) ||
++      !egisqsee_bix_capture (self->bix, EGISQSEE_CMD_VERIFY_CAPTURE,
++                             EGISQSEE_EVENT_PROCESS, NULL, 0, result, error))
++    goto out;
++
++  decision = egisqsee_bix_u32 (result, EGISQSEE_RESULT_MATCH);
++  slot = result[EGISQSEE_RESULT_MATCH_SLOT];
++  if (decision == EGISQSEE_MATCH_YES)
++    {
++      if (slot >= EGISQSEE_SLOTS || !slot_fid (registration, slot))
++        {
++          g_set_error (error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_PROTO,
++                       "Match in an empty slot %u", slot);
++          goto out;
++        }
++      outcome->matched = TRUE;
++      outcome->fid = slot_fid (registration, slot);
++      /* Let the TA refine the template from this touch, as on Android. */
++      {
++        g_autoptr(GError) learn_error = NULL;
++        if (!egisqsee_bix_capture (self->bix, EGISQSEE_CMD_VERIFY_CAPTURE,
++                                   EGISQSEE_EVENT_LEARN, NULL, 0, result,
++                                   &learn_error))
++          fp_warn ("Template update failed: %s", learn_error->message);
++      }
++    }
++  else
++    {
++      if (decision != EGISQSEE_MATCH_NO)
++        outcome->retry = fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL);
++      /* As on Android: the next attempt is a new touch, not the same one
++       * scanned again. */
++      if (!await_finger_off (self, EGISQSEE_CMD_VERIFY_CAPTURE, cancellable,
++                             error))
++        goto out;
++    }
++  ok = TRUE;
++
++out:
++  if (started)
++    egisqsee_bix_end (self->bix, EGISQSEE_CMD_VERIFY_END, ok ? error : NULL);
++  report (self, FP_FINGER_STATUS_NONE, -1, NULL);
++  return ok && !(error && *error);
++}
++
++static gboolean
++remove_fid (FpiDeviceEgisqsee *self, guint32 fid, GError **error)
++{
++  guint8 registration[EGISQSEE_REGISTRATION_SIZE];
++  char name[EGISQSEE_REGISTRATION_SIZE - EGISQSEE_REGISTRATION_NAME + 1] = { 0 };
++  guint slot;
++
++  if (!get_registration (self, registration, error))
++    return FALSE;
++  memcpy (name, registration + EGISQSEE_REGISTRATION_NAME,
++          EGISQSEE_REGISTRATION_SIZE - EGISQSEE_REGISTRATION_NAME);
++  for (slot = 0; slot < EGISQSEE_SLOTS; slot++)
++    {
++      if (!slot_fid (registration, slot) ||
++          (fid && slot_fid (registration, slot) != fid))
++        continue;
++      if (!egisqsee_bix_remove (self->bix, slot, name, error))
++        return FALSE;
++      if (fid)
++        return TRUE;
++    }
++  if (fid)
++    {
++      g_propagate_error (error, fpi_device_error_new (FP_DEVICE_ERROR_DATA_NOT_FOUND));
++      return FALSE;
++    }
++  return TRUE;
++}
++
++static void
++close_hardware (FpiDeviceEgisqsee *self)
++{
++  if (self->bix)
++    {
++      egisqsee_bix_spi_power (self->bix, FALSE, NULL);
++      egisqsee_bix_close (self->bix);
++      g_clear_pointer (&self->bix, g_free);
++    }
++  if (self->hw.fd >= 0)
++    egisqsee_hw_power (&self->hw, FALSE);
++  egisqsee_hw_close (&self->hw);
++}
++
++/* The TA refuses the group (status 4) outside a workflow. bix_set_active_group
++ * arms a verification and checks the sensor first, as here. */
++static gboolean
++select_group (FpiDeviceEgisqsee *self, GError **error)
++{
++  gboolean ok;
++
++  if (!egisqsee_bix_set_path (self->bix, GROUP_PATH, error) ||
++      !egisqsee_bix_start (self->bix, EGISQSEE_CMD_VERIFY_START,
++                           egisqsee_verify_start,
++                           G_N_ELEMENTS (egisqsee_verify_start), error))
++    return FALSE;
++  ok = check_sensor (self, error) &&
++       egisqsee_bix_set_active_group (self->bix, GROUP_ID, error);
++  return egisqsee_bix_end (self->bix, EGISQSEE_CMD_VERIFY_END,
++                           ok ? error : NULL) && ok;
++}
++
++static gboolean
++open_hardware (FpiDeviceEgisqsee *self, GError **error)
++{
++  const char *node = fpi_device_get_udev_data (FP_DEVICE (self),
++                                               FPI_DEVICE_UDEV_SUBTYPE_MISC);
++
++  if (egisqsee_hw_open (&self->hw, node) ||
++      egisqsee_hw_power (&self->hw, TRUE) ||
++      egisqsee_hw_reset (&self->hw))
++    {
++      g_propagate_error (error, hw_error ("Powering the sensor"));
++      return FALSE;
++    }
++  self->bix = g_new0 (EgisqseeBix, 1);
++  return egisqsee_bix_open (self->bix, &self->hw, error) &&
++         egisqsee_bix_init_sensor (self->bix, error) &&
++         select_group (self, error);
++}
++
++static GPtrArray *
++list_fids (FpiDeviceEgisqsee *self, GError **error)
++{
++  guint8 registration[EGISQSEE_REGISTRATION_SIZE];
++  GPtrArray *fids;
++  guint slot;
++
++  if (!get_registration (self, registration, error))
++    return NULL;
++  fids = g_ptr_array_new ();
++  for (slot = 0; slot < EGISQSEE_SLOTS; slot++)
++    if (slot_fid (registration, slot))
++      g_ptr_array_add (fids, GUINT_TO_POINTER (slot_fid (registration, slot)));
++  return fids;
++}
++
++static void
++worker (GTask *task, gpointer object, gpointer data, GCancellable *cancellable)
++{
++  FpiDeviceEgisqsee *self = object;
++  struct work *work = data;
++  g_autoptr(GError) error = NULL;
++
++  switch (work->operation)
++    {
++    case OP_OPEN:
++      if (open_hardware (self, &error))
++        {
++          g_task_return_boolean (task, TRUE);
++          return;
++        }
++      close_hardware (self);
++      break;
++
++    case OP_CLOSE:
++      close_hardware (self);
++      g_task_return_boolean (task, TRUE);
++      return;
++
++    case OP_LIST:
++      {
++        GPtrArray *fids = list_fids (self, &error);
++        if (!fids)
++          break;
++        g_task_return_pointer (task, fids, (GDestroyNotify) g_ptr_array_unref);
++        return;
++      }
++
++    case OP_DELETE:
++    case OP_CLEAR:
++      if (!remove_fid (self, work->fid, &error))
++        break;
++      g_task_return_boolean (task, TRUE);
++      return;
++
++    case OP_ENROLL:
++      {
++        guint32 fid = 0;
++        if (!enroll (self, cancellable, &fid, &error))
++          break;
++        g_task_return_pointer (task, GUINT_TO_POINTER (fid), NULL);
++        return;
++      }
++
++    case OP_MATCH:
++      {
++        struct match *outcome = g_new0 (struct match, 1);
++        if (!match (self, cancellable, outcome, &error))
++          {
++            g_free (outcome);
++            break;
++          }
++        g_task_return_pointer (task, outcome, g_free);
++        return;
++      }
++    }
++  g_task_return_error (task, g_steal_pointer (&error));
++}
++
++static void
++start (FpDevice *device, enum operation operation, guint32 fid,
++       GAsyncReadyCallback done)
++{
++  g_autoptr(GTask) task = NULL;
++  struct work *work = g_new0 (struct work, 1);
++
++  task = g_task_new (device, operation == OP_OPEN || operation == OP_CLOSE ?
++                     NULL : fpi_device_get_cancellable (device), done, NULL);
++  work->operation = operation;
++  work->fid = fid;
++  g_task_set_task_data (task, work, g_free);
++  g_task_run_in_thread (task, worker);
++}
++
++static FpPrint *
++print_new (FpDevice *device, FpPrint *print, guint32 fid)
++{
++  if (!print)
++    print = fp_print_new (device);
++  fpi_print_set_type (print, FPI_PRINT_RAW);
++  fpi_print_set_device_stored (print, TRUE);
++  g_object_set (print, "fpi-data", g_variant_new ("(uu)", GROUP_ID, fid),
++                NULL);
++  return print;
++}
++
++static gboolean
++print_fid (FpPrint *print, guint32 *fid)
++{
++  g_autoptr(GVariant) data = NULL;
++  guint32 gid;
++
++  g_object_get (print, "fpi-data", &data, NULL);
++  if (!data || !g_variant_is_of_type (data, G_VARIANT_TYPE ("(uu)")))
++    return FALSE;
++  g_variant_get (data, "(uu)", &gid, fid);
++  return gid == GROUP_ID && *fid;
++}
++
++static void
++open_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  GError *error = NULL;
++
++  g_task_propagate_boolean (G_TASK (result), &error);
++  fpi_device_open_complete (FP_DEVICE (object), error);
++}
++
++static void
++close_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  GError *error = NULL;
++
++  g_task_propagate_boolean (G_TASK (result), &error);
++  fpi_device_close_complete (FP_DEVICE (object), error);
++}
++
++static void
++delete_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  GError *error = NULL;
++
++  g_task_propagate_boolean (G_TASK (result), &error);
++  fpi_device_delete_complete (FP_DEVICE (object), error);
++}
++
++static void
++clear_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  GError *error = NULL;
++
++  g_task_propagate_boolean (G_TASK (result), &error);
++  fpi_device_clear_storage_complete (FP_DEVICE (object), error);
++}
++
++static void
++list_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  FpDevice *device = FP_DEVICE (object);
++  GError *error = NULL;
++  g_autoptr(GPtrArray) fids = g_task_propagate_pointer (G_TASK (result), &error);
++  GPtrArray *prints;
++  guint i;
++
++  if (!fids)
++    {
++      fpi_device_list_complete (device, NULL, error);
++      return;
++    }
++  prints = g_ptr_array_new_with_free_func (g_object_unref);
++  for (i = 0; i < fids->len; i++)
++    g_ptr_array_add (prints, g_object_ref_sink (
++                       print_new (device, NULL, GPOINTER_TO_UINT (g_ptr_array_index (fids, i)))));
++  fpi_device_list_complete (device, prints, NULL);
++}
++
++static void
++enroll_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  FpDevice *device = FP_DEVICE (object);
++  GError *error = NULL;
++  guint32 fid = GPOINTER_TO_UINT (g_task_propagate_pointer (G_TASK (result), &error));
++  FpPrint *print = NULL;
++
++  if (error)
++    {
++      fpi_device_enroll_complete (device, NULL, error);
++      return;
++    }
++  fpi_device_get_enroll_data (device, &print);
++  fpi_device_enroll_progress (device, ENROLL_STAGES, NULL, NULL);
++  fpi_device_enroll_complete (device, g_object_ref (print_new (device, print, fid)),
++                              NULL);
++}
++
++static void
++match_done (GObject *object, GAsyncResult *result, gpointer data)
++{
++  FpDevice *device = FP_DEVICE (object);
++  GError *error = NULL;
++  g_autofree struct match *outcome = g_task_propagate_pointer (G_TASK (result), &error);
++  gboolean verifying = fpi_device_get_current_action (device) == FPI_DEVICE_ACTION_VERIFY;
++  FpPrint *found = NULL;
++  g_autoptr(FpPrint) scan = NULL;
++
++  if (!outcome)
++    {
++      if (verifying)
++        fpi_device_verify_complete (device, error);
++      else
++        fpi_device_identify_complete (device, error);
++      return;
++    }
++
++  if (outcome->matched)
++    {
++      g_autoptr(GPtrArray) gallery = NULL;
++      FpPrint *print = NULL;
++      guint32 fid;
++      guint i;
++
++      scan = g_object_ref_sink (print_new (device, NULL, outcome->fid));
++      if (verifying)
++        {
++          fpi_device_get_verify_data (device, &print);
++          gallery = g_ptr_array_new ();
++          g_ptr_array_add (gallery, print);
++        }
++      else
++        {
++          fpi_device_get_identify_data (device, &gallery);
++          g_ptr_array_ref (gallery);
++        }
++      for (i = 0; i < gallery->len && !found; i++)
++        if (print_fid (g_ptr_array_index (gallery, i), &fid) && fid == outcome->fid)
++          found = g_ptr_array_index (gallery, i);
++    }
++
++  if (verifying)
++    {
++      if (outcome->retry)
++        fpi_device_verify_report (device, FPI_MATCH_ERROR, NULL,
++                                  g_steal_pointer (&outcome->retry));
++      else
++        fpi_device_verify_report (device, found ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL,
++                                  g_steal_pointer (&scan), NULL);
++      fpi_device_verify_complete (device, NULL);
++    }
++  else
++    {
++      if (outcome->retry)
++        fpi_device_identify_report (device, NULL, NULL,
++                                    g_steal_pointer (&outcome->retry));
++      else
++        fpi_device_identify_report (device, found, g_steal_pointer (&scan), NULL);
++      fpi_device_identify_complete (device, NULL);
++    }
++}
++
++static void
++dev_probe (FpDevice *device)
++{
++  fpi_device_probe_complete (device, "egisap64", NULL, NULL);
++}
++
++static void
++dev_open (FpDevice *device)
++{
++  start (device, OP_OPEN, 0, open_done);
++}
++
++static void
++dev_close (FpDevice *device)
++{
++  start (device, OP_CLOSE, 0, close_done);
++}
++
++static void
++dev_list (FpDevice *device)
++{
++  start (device, OP_LIST, 0, list_done);
++}
++
++static void
++dev_delete (FpDevice *device)
++{
++  FpPrint *print = NULL;
++  guint32 fid;
++
++  fpi_device_get_delete_data (device, &print);
++  if (!print_fid (print, &fid))
++    {
++      fpi_device_delete_complete (device,
++                                  fpi_device_error_new (FP_DEVICE_ERROR_DATA_INVALID));
++      return;
++    }
++  start (device, OP_DELETE, fid, delete_done);
++}
++
++static void
++dev_clear_storage (FpDevice *device)
++{
++  start (device, OP_CLEAR, 0, clear_done);
++}
++
++static void
++dev_enroll (FpDevice *device)
++{
++  start (device, OP_ENROLL, 0, enroll_done);
++}
++
++static void
++dev_match (FpDevice *device)
++{
++  start (device, OP_MATCH, 0, match_done);
++}
++
++static void
++dev_cancel (FpDevice *device)
++{
++  /* The worker watches the action's cancellable, also while it waits for
++   * the finger, and ends the TA workflow before it returns. */
++}
++
++static void
++fpi_device_egisqsee_init (FpiDeviceEgisqsee *self)
++{
++  self->hw.fd = self->hw.event_fd = -1;
++}
++
++static void
++fpi_device_egisqsee_class_init (FpiDeviceEgisqseeClass *klass)
++{
++  FpDeviceClass *dev_class = FP_DEVICE_CLASS (klass);
++
++  dev_class->id = FP_COMPONENT;
++  dev_class->full_name = "Egis fingerprint sensor (Qualcomm TrustZone)";
++  dev_class->type = FP_DEVICE_TYPE_UDEV;
++  dev_class->id_table = id_table;
++  dev_class->scan_type = FP_SCAN_TYPE_PRESS;
++  dev_class->nr_enroll_stages = ENROLL_STAGES;
++  dev_class->temp_hot_seconds = -1;
++
++  dev_class->probe = dev_probe;
++  dev_class->open = dev_open;
++  dev_class->close = dev_close;
++  dev_class->list = dev_list;
++  dev_class->delete = dev_delete;
++  dev_class->clear_storage = dev_clear_storage;
++  dev_class->enroll = dev_enroll;
++  dev_class->verify = dev_match;
++  dev_class->identify = dev_match;
++  dev_class->cancel = dev_cancel;
++
++  fpi_device_class_auto_initialize_features (dev_class);
++}
+diff --git a/libfprint/meson.build b/libfprint/meson.build
+index 0ca1767..623ae62 100644
+--- a/libfprint/meson.build
++++ b/libfprint/meson.build
+@@ -153,6 +153,9 @@ driver_sources = {
+         [ 'drivers/realtek/realtek.c' ],
+     'focaltech_moc' :
+         [ 'drivers/focaltech_moc/focaltech_moc.c' ],
++    'egisqsee' :
++        [ 'drivers/egisqsee/egisqsee.c', 'drivers/egisqsee/egisqsee-bix.c',
++          'drivers/egisqsee/egisqsee-hw.c', 'drivers/egisqsee/egisqsee-tee.c' ],
+ }
+ 
+ helper_sources = {
+diff --git a/meson.build b/meson.build
+index baafa19..d9db788 100644
+--- a/meson.build
++++ b/meson.build
+@@ -150,8 +150,14 @@ spi_drivers = [
+     'elanspi'
+ ]
+ 
++# Sensors behind a Linux TEE device and a kernel misc device.
++tee_drivers = [
++    'egisqsee'
++]
++
+ if have_spi
+     default_drivers += spi_drivers
++    default_drivers += tee_drivers
+ endif
+ 
+ # FIXME: All the drivers should be fixed by adjusting the byte order.
+@@ -211,6 +217,7 @@ driver_helper_mapping = {
+     'aes4000' : [ 'aeslib', 'aes3k' ],
+     'uru4000' : [ 'openssl' ],
+     'elanspi' : [ 'udev' ],
++    'egisqsee' : [ 'udev' ],
+     'virtual_image'          : [ 'virtual' ],
+     'virtual_device'         : [ 'virtual' ],
+     'virtual_device_storage' : [ 'virtual' ],
+-- 
+2.47.3
+

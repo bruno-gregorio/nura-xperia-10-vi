@@ -1,0 +1,76 @@
+# Contributor: Timo Teräs <timo.teras@iki.fi>
+# Contributor: Jakub Jirutka <jakub@jirutka.cz>
+# Maintainer: Timo Teräs <timo.teras@iki.fi>
+#
+# Forked from Alpine's community/libfprint 1.94.9-r1 for the Xperia 10 VI's
+# fingerprint sensor, an Egis EC617 whose SPI bus belongs to TrustZone and
+# which only Egis' trusted application, egisap64, talks to. 0001 is Dawid
+# Wróbel's misc device discovery from https://github.com/wrobelda/libfprint,
+# rebased; 0002 adds egisqsee, a driver that reaches the sensor through the
+# kernel's /dev/egisfp0 and the QSEECom TEE device, with egisap64 held
+# loaded by qsee-supplicant's loader. Drop this fork once libfprint has
+# both. pkgrel is Alpine's plus 100.
+pkgname=libfprint
+pkgver=1.94.9
+pkgrel=106
+pkgdesc="Library for fingerprint readers"
+url="https://fprint.freedesktop.org/"
+arch="all"
+license="LGPL-2.1-or-later"
+makedepends="
+	eudev-dev
+	glib-dev
+	gobject-introspection-dev
+	libgudev-dev
+	libgusb-dev
+	linux-headers
+	meson
+	openssl-dev
+	pixman-dev
+	"
+checkdepends="
+	py3-cairo
+	py3-gobject3
+	umockdev
+	"
+subpackages="$pkgname-dev $pkgname-udev"
+source="https://gitlab.freedesktop.org/libfprint/libfprint/-/archive/v$pkgver/libfprint-v$pkgver.tar.gz
+	hack-generate-rules-instead-of-hwdb.patch
+	0001-core-discover-firmware-described-misc-devices.patch
+	0002-drivers-add-egisqsee.patch
+	"
+builddir="$srcdir/$pkgname-v$pkgver"
+
+build() {
+	abuild-meson \
+		-Dgtk-examples=false \
+		-Ddoc=false \
+		-Dudev_hwdb=disabled \
+		-Dudev_rules=enabled \
+		-Dinstalled-tests=false \
+		output
+	meson compile -C output
+
+	# See comment in hack-generate-rules-instead-of-hwdb.patch.
+	HACK_GEN_RULES=1 ./output/libfprint/fprint-list-udev-hwdb > 60-fprint-autosuspend.rules
+}
+
+check() {
+	# elanspi's umockdev recording needs a pty, and pmbootstrap's build
+	# chroot has no /dev/pts, so its openpty() fails before the test runs.
+	meson test -C output --print-errorlogs --no-stdsplit --timeout-multiplier 5 \
+		$(meson test -C output --list | sed 's/.* - //' | grep -vx 'libfprint:elanspi')
+}
+
+package() {
+	DESTDIR="$pkgdir" meson install -C output --no-rebuild
+
+	install -Dm644 60-fprint-autosuspend.rules -t "$pkgdir"/usr/lib/udev/rules.d/
+}
+
+sha512sums="
+f8debcc1277e6112ed450c04a40cf6113afd7b38377b3fd259bedb1f553b29db758f3519491940bf9cd4ade0f8e70b68040d5bef4c8dbf5f7c2afc1802086397  libfprint-v1.94.9.tar.gz
+5997cb0e3bfc0f625a0803d2d59fa55ce34baf7aee7c4fb3d82c74ea680d916a4e1294bbaf97a4567053672f1115d51f2a8b887927af063e2750e6a0e40d8d64  hack-generate-rules-instead-of-hwdb.patch
+c39e82eab365ba223dadb652fe500591392d555cda6121b34732213ea9a8e025ddf371211b598042458b47e637d0010f6b6a606070f1436cce1befb06a097af5  0001-core-discover-firmware-described-misc-devices.patch
+bf84691418976e381b0cf6cdccabb166809575c76febc1e29cfe2e2676e3ab822ae311e65bfa770a61f3615bd51cb57084bcacfca0ebeb493a4f744e914178a0  0002-drivers-add-egisqsee.patch
+"

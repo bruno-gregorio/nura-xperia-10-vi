@@ -18,21 +18,23 @@
 //   5. sendRequest with a trivial top command (0x01 or 0x00). These
 //      dereference no pointer inside the TA, so they are the safe first
 //      invocations - unlike the 0xE0 ETS path, which carries an embedded
-//      pointer QTEE must fix up and which this tool refuses to send.
+//      pointer QTEE must fix up. --protocol gates a read-only version
+//      query behind ping, inline framing and memory-object checks.
 //   6. unload, so the single-residency "fingerprint" app name is freed.
 //
 // It never touches RPMB and registers no listeners.
 //
 // On this phone, load and unload over UID 122 work (QTEE accepts Sony's
-// chain), and sendRequest round-trips. Command 0x01 leaves the response
-// buffer untouched, though: its "len*10" is a C return value the compat path
-// does not surface, so 0x01 cannot confirm the in-TA handler ran. Real data
-// needs the 0xE0/BIX path and its pointer fix-up (see docs/05-status.md).
+// chain). The original 64-byte request/response buffers were rejected by
+// the TA's entry checks before dispatch. Disassembly at 0x4c8 and 0x54c
+// requires response >= 0x814 and request >= 0x868 bytes. Command 1 really
+// does store operand*10 at response offset 0 (0x694), and status at 16.
 //
 // Usage: egisfp-load <firmware-dir> [operand] [cmd_id]
 //   <firmware-dir> holds egisap64.b00 .. egisap64.b08.
 //   [operand] is the u32 at request offset 8 (default 7).
-//   [cmd_id]  is the top command (default 0x01); 0xE0 is refused.
+//   [cmd_id]  is the top command (default 0x01); arbitrary 0xE0 is refused.
+//   --protocol instead of operand: run the bounded read-only BIX checks.
 
 #include <errno.h>
 #include <pthread.h>
@@ -44,8 +46,7 @@
 #include <sys/ioctl.h>
 
 #include <qcomtee_object_types.h>
-
-#define DEV_TEE "/dev/tee0"
+#include "qseecom-transport.h"
 
 /* IClientEnv (root op 2 registers a client; env op 0 opens a service). */
 #define IClientEnv_OP_registerAsClient 2
@@ -67,10 +68,11 @@
 
 /* Command 0x01 request/response framing, from the TA handler (RE findings):
  * request: u32 cmd_id @0, u32 operand @8; response: u32 result @0 (=operand*10),
- * u32 status @16 (0 on success). We give each buffer room to spare.
+ * u32 status @16 (0 on success). The vendor transport passes the aligned
+ * lengths 0x880/0x840 (libets_teeclient_v2.so at 0x2344/0x2348).
  */
-#define REQ_SIZE 64
-#define RSP_SIZE 64
+#define REQ_SIZE 0x880
+#define RSP_SIZE 0x840
 #define CMD_PING 0x01
 
 #define MSG(...) printf(__VA_ARGS__)
@@ -133,15 +135,31 @@ static struct qcomtee_object *get_root(void)
 	struct qcomtee_object *root;
 	struct supplicant *sup;
 	pthread_t thread;
+	char tee_path[32] = {0};
+	int found = 0;
+	/* TEE numbering changes when the legacy transport is also loaded. */
+	for (unsigned int i = 0; i < 16; i++) {
+		struct tee_ioctl_version_data version = {0};
+		snprintf(tee_path, sizeof(tee_path), "/dev/tee%u", i);
+		int fd = open(tee_path, O_RDWR | O_CLOEXEC);
+		if (fd < 0) continue;
+		int matched = !ioctl(fd, TEE_IOC_VERSION, &version) && version.impl_id == 4;
+		close(fd);
+		if (matched) { found = 1; break; }
+	}
+	if (!found) {
+		MSG("  QTEE object transport is not present\n");
+		return QCOMTEE_OBJECT_NULL;
+	}
 
 	sup = calloc(1, sizeof(*sup));
 	if (!sup)
 		return QCOMTEE_OBJECT_NULL;
 
-	root = qcomtee_object_root_init(DEV_TEE, tee_call, supplicant_release,
+	root = qcomtee_object_root_init(tee_path, tee_call, supplicant_release,
 					sup);
 	if (root == QCOMTEE_OBJECT_NULL) {
-		MSG("  cannot open %s\n", DEV_TEE);
+		MSG("  cannot open QTEE object transport\n");
 		free(sup);
 		return QCOMTEE_OBJECT_NULL;
 	}
@@ -161,7 +179,7 @@ static struct qcomtee_object *get_client_env(struct qcomtee_object *root)
 {
 	struct qcomtee_object *creds;
 	struct qcomtee_param params[2];
-	qcomtee_result_t result;
+	qcomtee_result_t result = -1;
 
 	if (qcomtee_object_credentials_init(root, &creds)) {
 		MSG("  cannot build credentials object\n");
@@ -190,7 +208,7 @@ static struct qcomtee_object *get_service(struct qcomtee_object *env,
 					  uint32_t uid)
 {
 	struct qcomtee_param params[2];
-	qcomtee_result_t result;
+	qcomtee_result_t result = -1;
 
 	params[0].attr = QCOMTEE_UBUF_INPUT;
 	params[0].ubuf.addr = &uid;
@@ -348,7 +366,7 @@ static struct qcomtee_object *load_ta(struct qcomtee_object *loader,
 				      unsigned char *image, size_t image_size)
 {
 	struct qcomtee_param params[4];
-	qcomtee_result_t result;
+	qcomtee_result_t result = -1;
 	char dist_name[MAX_FW_APP_SIZE] = { 0 };
 
 	params[0].attr = QCOMTEE_UBUF_INPUT;        /* appElf */
@@ -388,40 +406,41 @@ static void hexdump(const char *tag, const unsigned char *b, size_t n)
 	MSG("\n");
 }
 
-static int send_ping(struct qcomtee_object *app, uint32_t cmd_id,
-		     uint32_t operand)
+/* One embedded output buffer, matching IQSEEComCompat.sendRequest's
+ * offset array and smo1 argument. A null smo means no pointer fix-up.
+ */
+static size_t response_input_size = RSP_SIZE;
+static size_t request_output_size = REQ_SIZE;
+static int legacy_transport;
+
+static int send_request(struct qcomtee_object *app, unsigned char *req,
+                        unsigned char *rsp, struct qcomtee_object *smo)
 {
-	struct qcomtee_param params[10];
-	qcomtee_result_t result;
-	unsigned char req[REQ_SIZE];
-	unsigned char rsp[RSP_SIZE];
-	uint32_t is64 = 1;              /* egisap64 is ELFCLASS64 */
-	uint32_t embedded_none = 0;    /* no embedded pointers for 0x01 */
-	uint32_t res_val, status;
-
-	/* request: cmd_id @0, operand @8; rest a sentinel so we can see what the
-	 * TA leaves untouched. The response buffer is a sentinel too, so a byte
-	 * that comes back != 0xAA is one QTEE/the TA actually wrote.
-	 */
-	memset(req, 0xAA, sizeof(req));
-	memset(rsp, 0xAA, sizeof(rsp));
-	memcpy(req + 0, &cmd_id, 4);
-	memset(req + 4, 0, 4);
-	memcpy(req + 8, &operand, 4);
-	memset(req + 12, 0, 4);
-
-	/* IQSEEComCompat.sendRequest, ObjectCounts_pack(4, 2, 4, 0):
-	 * in  bufs: reqIn, rspIn, embeddedBufOffsets, is64
-	 * out bufs: reqOut, rspOut   (same storage as reqIn/rspIn, per vendor)
-	 * in  objs: smo1..smo4       (all NULL - no shared memory for 0x01)
-	 */
-	params[0].attr = QCOMTEE_UBUF_INPUT;  params[0].ubuf.addr = req; params[0].ubuf.size = sizeof(req);
-	params[1].attr = QCOMTEE_UBUF_INPUT;  params[1].ubuf.addr = rsp; params[1].ubuf.size = sizeof(rsp);
-	params[2].attr = QCOMTEE_UBUF_INPUT;  params[2].ubuf.addr = &embedded_none; params[2].ubuf.size = 0;
+	struct qcomtee_param params[10] = { 0 };
+	qcomtee_result_t result = -1;
+	uint32_t is64 = 1, embedded_offset = 8;
+	if (qsee.session_open)
+		return egis_qseecom_send(req, REQ_SIZE, rsp, RSP_SIZE,
+		        smo ? qcomtee_memory_object_addr(smo) : NULL,
+		        smo ? qcomtee_memory_object_size(smo) : 0);
+	if (legacy_transport) {
+		if (smo) return -1;
+		params[0].attr = QCOMTEE_UBUF_INPUT;
+		params[0].ubuf.addr = req; params[0].ubuf.size = REQ_SIZE;
+		params[1].attr = QCOMTEE_UBUF_OUTPUT;
+		params[1].ubuf.addr = rsp; params[1].ubuf.size = RSP_SIZE;
+		if (qcomtee_object_invoke(app, 0, params, 2, &result)) return -1;
+		MSG("  legacy handleRequest: result %d, response size %zu\n",
+		    result, params[1].ubuf.size);
+		return result || params[1].ubuf.size != RSP_SIZE ? -1 : 0;
+	}
+	params[0].attr = QCOMTEE_UBUF_INPUT;  params[0].ubuf.addr = req; params[0].ubuf.size = REQ_SIZE;
+	params[1].attr = QCOMTEE_UBUF_INPUT;  params[1].ubuf.addr = rsp; params[1].ubuf.size = response_input_size;
+	params[2].attr = QCOMTEE_UBUF_INPUT;  params[2].ubuf.addr = &embedded_offset; params[2].ubuf.size = smo ? sizeof(embedded_offset) : 0;
 	params[3].attr = QCOMTEE_UBUF_INPUT;  params[3].ubuf.addr = &is64; params[3].ubuf.size = sizeof(is64);
-	params[4].attr = QCOMTEE_UBUF_OUTPUT; params[4].ubuf.addr = req; params[4].ubuf.size = sizeof(req);
-	params[5].attr = QCOMTEE_UBUF_OUTPUT; params[5].ubuf.addr = rsp; params[5].ubuf.size = sizeof(rsp);
-	params[6].attr = QCOMTEE_OBJREF_INPUT; params[6].object = QCOMTEE_OBJECT_NULL;
+	params[4].attr = QCOMTEE_UBUF_OUTPUT; params[4].ubuf.addr = req; params[4].ubuf.size = request_output_size;
+	params[5].attr = QCOMTEE_UBUF_OUTPUT; params[5].ubuf.addr = rsp; params[5].ubuf.size = RSP_SIZE;
+	params[6].attr = QCOMTEE_OBJREF_INPUT; params[6].object = smo;
 	params[7].attr = QCOMTEE_OBJREF_INPUT; params[7].object = QCOMTEE_OBJECT_NULL;
 	params[8].attr = QCOMTEE_OBJREF_INPUT; params[8].object = QCOMTEE_OBJECT_NULL;
 	params[9].attr = QCOMTEE_OBJREF_INPUT; params[9].object = QCOMTEE_OBJECT_NULL;
@@ -436,24 +455,286 @@ static int send_ping(struct qcomtee_object *app, uint32_t cmd_id,
 		return -1;
 	}
 
-	/* reqOut/rspOut carry the lengths the TA actually produced. */
-	MSG("  sendRequest ok: reqOut_len=%zu rspOut_len=%zu\n",
-	    params[4].ubuf.size, params[5].ubuf.size);
-	hexdump("reqOut", req, sizeof(req));
-	hexdump("rspOut", rsp, sizeof(rsp));
+	if (params[4].ubuf.size != request_output_size || params[5].ubuf.size != RSP_SIZE) {
+		MSG("  unexpected returned buffer lengths: %zu/%zu\n",
+		    params[4].ubuf.size, params[5].ubuf.size);
+		return -1;
+	}
+	return 0;
+}
 
-	memcpy(&res_val, rsp + 0, 4);
-	memcpy(&status, rsp + 16, 4);
-	MSG("  cmd 0x%02x: operand=%u -> rsp[0]=%u (operand*10=%u), rsp[16]=%u\n",
-	    cmd_id, operand, res_val, operand * 10, status);
+static void put32(unsigned char *b, size_t off, uint32_t value)
+{
+	memcpy(b + off, &value, sizeof(value));
+}
 
-	return (res_val == operand * 10) ? 0 : -1;
+static uint32_t rd32(const unsigned char *b)
+{
+	return (uint32_t)b[0] | ((uint32_t)b[1] << 8) |
+	       ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+}
+
+static int send_ping(struct qcomtee_object *app, uint32_t cmd_id, uint32_t operand)
+{
+	unsigned char req[REQ_SIZE] = { 0 }, rsp[RSP_SIZE];
+	memset(rsp, 0xaa, sizeof(rsp));
+	put32(req, 0, cmd_id);
+	put32(req, 8, operand);
+	if (send_request(app, req, rsp, QCOMTEE_OBJECT_NULL))
+		return -1;
+	hexdump("rspOut prefix", rsp, 32);
+	return (rd32(rsp + 16) == 0 &&
+		rd32(rsp) == (cmd_id == 0 ? 1 : operand * 10)) ? 0 : -1;
+}
+
+/* Read-only protocol validation. These exact paths were checked by running
+ * the phone's TA bytes in Unicorn (scripts/check-egis-ta-framing.py).
+ * No GPIO, SPI-transfer, enroll, authentication, datastore or listener commands.
+ * The original TA opens its secure SPI service while constructing the broker.
+ */
+static int hello_probe;
+static int sensor_probe;
+
+static int notify_spi_power(struct qcomtee_object *app, struct qcomtee_object *smo,
+                            unsigned char *output, uint32_t enabled)
+{
+	unsigned char req[REQ_SIZE] = {0}, rsp[RSP_SIZE] = {0};
+	/* Original ree_notify_spi_power_mode_state -> BIX broker IO control. */
+	const uint32_t properties[] = {1, 12, 0x20070103, 4, enabled};
+	put32(req, 0, 0xe0);
+	put32(req, 24, 4096);
+	put32(req, 108, 0x8004);
+	put32(req, 120, sizeof(properties));
+	memcpy(req + 124, properties, sizeof(properties));
+	memset(output, 0, 4096);
+	if (send_request(app, req, rsp, smo)) return -1;
+	MSG("SPI power notification %u: status=%u output_length=%u\n",
+	    enabled, rd32(rsp + 16), rd32(rsp + 36));
+	return rd32(rsp + 16) || rd32(rsp + 36) ? -1 : 0;
+}
+
+static int check_sensor(struct qcomtee_object *app, struct qcomtee_object *smo,
+                        unsigned char *output)
+{
+	unsigned char req[REQ_SIZE], rsp[RSP_SIZE];
+	uint32_t power = 1;
+	int fd = open("/dev/egisfp0", O_RDWR | O_CLOEXEC);
+	int rc = -1;
+	if (fd < 0) { perror("egisfp open"); return -1; }
+	if (ioctl(fd, 0x40044581U, &power)) {
+		perror("egisfp power");
+		goto out;
+	}
+	if (notify_spi_power(app, smo, output, 1)) goto out;
+	if (ioctl(fd, 0x4582U, 0)) { perror("egisfp reset"); goto out; }
+	memset(req, 0, sizeof(req));
+	put32(req, 0, 0xe0);
+	put32(req, 24, 4096);
+	/* Stock ree_init_sensor (agent 0x19b18..0x19bf0) precedes the
+	 * acquisition workflow. Six serialized property records, recovered
+	 * by executing the vendor initializer and serializer in Unicorn.
+	 * EC617 uses the family-7 branch (48/800/500/50), not generic defaults.
+	 * scripts/check-egis-vendor-init.py verifies the branch and serializer.
+	 * No enrollment, templates or secure-storage commands.
+	 */
+	put32(req, 108, 0x8001);
+	put32(req, 120, 84);
+	put32(req, 124, 6);
+	put32(req, 128, 76);
+	const uint32_t properties[][3] = {
+		{ 0x46040101, 8, 2 }, /* secure capture backend; sensor family 7 */
+		{ 0x62040101, 4, 48 },
+		{ 0x62040118, 4, 800 },
+		{ 0x62040119, 4, 500 },
+		{ 0x62040106, 4, 50 },
+		{ 0x23000101, 4, 1 },
+	};
+	size_t at = 132;
+	for (size_t i = 0; i < sizeof(properties)/sizeof(properties[0]); i++) {
+		put32(req, at, properties[i][0]);
+		put32(req, at + 4, properties[i][1]);
+		put32(req, at + 8, properties[i][2]);
+		if (properties[i][1] == 8) put32(req, at + 12, 7);
+		at += 8 + properties[i][1];
+	}
+	if (at != 208) goto out;
+	for (unsigned int step = 0; step < 24; step++) {
+		memset(rsp, 0xaa, sizeof(rsp));
+		memset(output, 0, 4096);
+		if (send_request(app, req, rsp, smo)) goto out;
+		uint32_t status = rd32(rsp + 16), length = rd32(rsp + 36);
+		MSG("Sensor initialization step %u: status=%u output_length=%u\n", step, status, length);
+		fflush(stdout);
+		if (length > 4096) goto out;
+		if (status != 10) {
+			/* Do not print potential biometric data. */
+			rc = status ? -1 : 0;
+			break;
+		}
+		if (length < 40 || rd32(output) != 1 || rd32(output + 16) != 1 ||
+		    rd32(output + 20) != length - 24) goto out;
+		uint32_t token = rd32(output + 24), callback = rd32(output + 28);
+		uint32_t input = rd32(output + 32), capacity = rd32(output + 36);
+		MSG("  callback=%u input=%u output_capacity=%u\n", callback, input, capacity);
+		if (input != length - 40) goto out;
+		if (callback != 8 || input != 4 || capacity != 4) {
+			MSG("  callback not implemented; stopping without servicing it\n");
+			goto out;
+		}
+		uint32_t reset = rd32(output + 40);
+		MSG("  hardware reset mode=%u\n", reset);
+		fflush(stdout);
+		if (reset == 2) {
+			if (ioctl(fd, 0x4582U, 0)) goto out;
+		} else if (reset == 1) {
+			power = 0;
+			if (ioctl(fd, 0x40044581U, &power)) goto out;
+			usleep(1000000);
+			power = 1;
+			if (ioctl(fd, 0x40044581U, &power)) goto out;
+			usleep(50000);
+			if (ioctl(fd, 0x4582U, 0)) goto out;
+		} else goto out;
+		usleep(20000);
+		memset(req, 0, sizeof(req));
+		put32(req, 0, 0xe0);
+		put32(req, 24, 4096);
+		put32(req, 108, 0x5000);
+		put32(req, 120, 20);
+		put32(req, 124, token);
+		put32(req, 132, 4);
+		put32(req, 136, 4);
+	}
+out:
+	close(fd); /* Kernel final-close powers off, including failed callbacks. */
+	return rc;
+}
+
+static int check_protocol(struct qcomtee_object *root, struct qcomtee_object *app)
+{
+	unsigned char req[REQ_SIZE], rsp[RSP_SIZE];
+	struct qcomtee_object *smo = QCOMTEE_OBJECT_NULL;
+	unsigned char *output;
+	int rc = -1;
+
+	if (send_ping(app, 1, 7) || send_ping(app, 1, 3))
+		return -1;
+	MSG("PASS: correctly sized TA echo, two operands\n");
+	memset(req, 0, sizeof(req));
+	memset(rsp, 0xaa, sizeof(rsp));
+	put32(req, 0, 0xe0);
+	put32(req, 108, 0xe0000000); /* explicit no-dispatch branch at TA 0x7f0 */
+	if (send_request(app, req, rsp, QCOMTEE_OBJECT_NULL) ||
+	    rd32(rsp + 16) != 2 || rd32(rsp + 24) != 0xe0000000 || rd32(rsp + 36))
+		return -1;
+	MSG("PASS: pointer-free BIX framing\n");
+
+	memset(req, 0, sizeof(req));
+	memset(rsp, 0xaa, sizeof(rsp));
+	put32(req, 0, 0xe0);
+	put32(req, 108, 0xffffffff); /* BIX get property */
+	put32(req, 120, 4);
+	put32(req, 124, 0x00010000); /* LE u16 property set 0, id 1: version */
+	if (send_request(app, req, rsp, QCOMTEE_OBJECT_NULL) || rd32(rsp + 16) != 7)
+		return -1;
+	MSG("PASS: version handler rejects absent output buffer\n");
+
+	if (qcomtee_memory_object_alloc(4096, root, &smo))
+		return -1;
+	output = qcomtee_memory_object_addr(smo);
+	if (!output || qcomtee_memory_object_size(smo) < 4096)
+		goto out;
+	memset(output, 0xaa, 4096);
+	/* First ask compat to translate smo1 at offset 8 with a command that
+	 * never dereferences that pointer. Only proceed after its valid reply.
+	 */
+	memset(req, 0, sizeof(req));
+	memset(rsp, 0xaa, sizeof(rsp));
+	if (send_request(app, req, rsp, smo) || rd32(rsp) != 1 || rd32(rsp + 16))
+		goto out;
+	MSG("PASS: transport accepts registered output object and offset 8\n");
+
+	memset(req, 0, sizeof(req));
+	memset(rsp, 0xaa, sizeof(rsp));
+	put32(req, 0, 0xe0);
+	put32(req, 24, 4096);
+	put32(req, 108, 0xffffffff);
+	put32(req, 120, 4);
+	put32(req, 124, 0x00010000);
+	if (send_request(app, req, rsp, smo) || rd32(rsp + 16) ||
+	    rd32(rsp + 36) != 37 ||
+	    memcmp(output, "SONY_pdx246_V20250211+build.6cd53fa4", 33))
+		goto out;
+	MSG("PASS: TA version via registered memory: %.*s\n", 37, output);
+	if (hello_probe) {
+		memset(req, 0, sizeof(req));
+		memset(rsp, 0xaa, sizeof(rsp));
+		memset(output, 0, 4096);
+		put32(req, 0, 0xe0);
+		put32(req, 24, 4096);
+		/* BIX manager hello: asks only for the REE platform name.
+		 * TA hello_handler 0x15cc8, callback proxy 0xb03c8.
+		 */
+		if (send_request(app, req, rsp, smo))
+			goto out;
+		uint32_t length = rd32(rsp + 36);
+		MSG("BIX hello: status=%u output_length=%u\n", rd32(rsp + 16), length);
+		if (length > 4096)
+			goto out;
+		hexdump("BIX hello output", output, length < 128 ? length : 128);
+		/* libree_bix_agent 0x212f4..0x213ac replies with a flat
+		 * {token, status, request_size, response_size, response} record;
+		 * it is not the callback-list format returned by the TA.
+		 * Accept only the exact platform-name callback, never a hardware
+		 * or storage callback through this read-only probe.
+		 */
+		if (rd32(rsp + 16) != 10 || length != 44 ||
+		    rd32(output) != 1 || rd32(output + 16) != 1 ||
+		    rd32(output + 20) != 20 || rd32(output + 28) != 3 ||
+		    rd32(output + 32) != 4 || rd32(output + 36) != 68 ||
+		    rd32(output + 40) != 64)
+			goto out;
+		uint32_t token = rd32(output + 24);
+		memset(req, 0, sizeof(req));
+		memset(rsp, 0xaa, sizeof(rsp));
+		memset(output, 0, 4096);
+		put32(req, 0, 0xe0);
+		put32(req, 24, 4096);
+		put32(req, 108, 0x5000);
+		put32(req, 120, 26);
+		put32(req, 124, token);
+		put32(req, 128, 0);
+		put32(req, 132, 4);
+		put32(req, 136, 10);
+		put32(req, 140, 6); /* length includes terminating NUL */
+		memcpy(req + 144, "Linux", 6);
+		if (send_request(app, req, rsp, smo))
+			goto out;
+		length = rd32(rsp + 36);
+		MSG("BIX hello completed: status=%u output_length=%u\n", rd32(rsp + 16), length);
+		if (length > 4096)
+			goto out;
+		hexdump("BIX hello result", output, length < 128 ? length : 128);
+		if (rd32(rsp + 16) || length < 19 ||
+		    memcmp(output, "Linux:Hello BIX !!!", 19))
+			goto out;
+		MSG("PASS: BIX callback round trip, Linux platform hello\n");
+	}
+	if (sensor_probe && check_sensor(app, smo, output)) {
+		/* Distinguish a rejected sensor transaction from a dead TA. */
+		MSG("Post-failure TA echo: %s\n", send_ping(app, 1, 7) ? "FAIL" : "PASS");
+		goto out;
+	}
+	rc = 0;
+out:
+	qcomtee_memory_object_release(smo);
+	return rc;
 }
 
 static void unload_ta(struct qcomtee_object *app)
 {
 	struct qcomtee_param params[1];
-	qcomtee_result_t result;
+	qcomtee_result_t result = -1;
 
 	(void)params;
 	if (qcomtee_object_invoke(app, IQSEEComCompat_OP_unload, NULL, 0,
@@ -463,8 +744,53 @@ static void unload_ta(struct qcomtee_object *app)
 		MSG("  unloaded\n");
 }
 
+/* Qualcomm's IAppLoader (UID 3), IAppController ops 1/2 and
+ * IAppLegacyTest op 0. Only exercise pointer-free echo on this route. */
+static int check_legacy(struct qcomtee_object *env, unsigned char *image,
+                        size_t image_size)
+{
+	struct qcomtee_object *loader = get_service(env, 3);
+	struct qcomtee_object *controller, *app;
+	struct qcomtee_param p[2] = {0};
+	qcomtee_result_t result = -1;
+	int rc = -1;
+	if (!loader) return -1;
+	p[0].attr = QCOMTEE_UBUF_INPUT;
+	p[0].ubuf.addr = image; p[0].ubuf.size = image_size;
+	p[1].attr = QCOMTEE_OBJREF_OUTPUT;
+	if (qcomtee_object_invoke(loader, 0, p, 2, &result)) goto done;
+	MSG("  legacy loadFromBuffer: %d\n", result);
+	if (result) goto done;
+	controller = p[1].object;
+	p[0].attr = QCOMTEE_OBJREF_OUTPUT;
+	if (!qcomtee_object_invoke(controller, 2, p, 1, &result) && !result) {
+		app = p[0].object;
+		legacy_transport = 1;
+		rc = send_ping(app, 1, 7) || send_ping(app, 1, 3);
+		qcomtee_object_refs_dec(app);
+	} else MSG("  legacy getAppObject failed: %d\n", result);
+	if (qcomtee_object_invoke(controller, 1, NULL, 0, &result) || result) {
+		MSG("  legacy unload failed: %d\n", result);
+		rc = -1;
+	} else MSG("  legacy unloaded\n");
+	qcomtee_object_refs_dec(controller);
+done:
+	qcomtee_object_refs_dec(loader);
+	return rc;
+}
+
 int main(int argc, char **argv)
 {
+	int protocol = argc == 3 && !strcmp(argv[2], "--protocol");
+	int transport = argc == 3 && !strcmp(argv[2], "--transport-check");
+	int legacy = argc == 3 && !strcmp(argv[2], "--legacy-ping");
+	sensor_probe = argc == 3 && (!strcmp(argv[2], "--qseecom-sensor") ||
+	                            !strcmp(argv[2], "--qseecom-sensor-nohello"));
+	hello_probe = (argc == 3 && !strcmp(argv[2], "--qseecom-sensor")) ||
+	              (argc == 3 && !strcmp(argv[2], "--qseecom-hello"));
+	int native = sensor_probe || hello_probe || (argc == 3 && !strcmp(argv[2], "--qseecom-native-protocol"));
+	int qseecom = argc == 3 && !strcmp(argv[2], "--qseecom-protocol");
+	setvbuf(stdout, NULL, _IOLBF, 0);
 	struct qcomtee_object *root, *env, *loader, *app;
 	unsigned char *image;
 	size_t image_size;
@@ -474,14 +800,19 @@ int main(int argc, char **argv)
 
 	if (argc < 2) {
 		fprintf(stderr,
-			"usage: %s <firmware-dir> [operand] [cmd_id]\n",
+			"usage: %s <firmware-dir> [operand] [cmd_id]\n"
+			"  or: <firmware-dir> --protocol | --qseecom-protocol | --qseecom-native-protocol | --legacy-ping | --transport-check\n",
 			argv[0]);
 		return 2;
 	}
-	if (argc >= 3)
+	if (argc >= 3 && !protocol && !transport && !legacy && !qseecom && !native)
 		operand = (uint32_t)strtoul(argv[2], NULL, 0);
 	if (argc >= 4)
 		cmd_id = (uint32_t)strtoul(argv[3], NULL, 0);
+	if (cmd_id != 0 && cmd_id != CMD_PING) {
+		fprintf(stderr, "Only pointer-free commands 0 and 1 are supported.\n");
+		return 2;
+	}
 
 	MSG("egisfp-load: assembling %s from %s\n", EGIS_APP_NAME, argv[1]);
 	image = assemble_ta(argv[1], &image_size);
@@ -494,9 +825,21 @@ int main(int argc, char **argv)
 		goto out_image;
 	MSG("  root object + supplicant up\n");
 
+	if (native) {
+		if (!egis_qseecom_load())
+			rc = check_protocol(root, QCOMTEE_OBJECT_NULL);
+		MSG("%s: native QSEECom protocol checks\n", rc ? "FAILED" : "SUCCESS");
+		egis_qseecom_close();
+		goto out_root;
+	}
+
 	env = get_client_env(root);
 	if (env == QCOMTEE_OBJECT_NULL)
 		goto out_root;
+	if (legacy) {
+		rc = check_legacy(env, image, image_size);
+		goto out_env;
+	}
 
 	loader = get_service(env, CQSEEComCompatAppLoader_UID);
 	if (loader == QCOMTEE_OBJECT_NULL)
@@ -507,23 +850,31 @@ int main(int argc, char **argv)
 	app = load_ta(loader, image, image_size);
 	if (app == QCOMTEE_OBJECT_NULL)
 		goto out_loader;
+	if (qseecom && egis_qseecom_open())
+		goto out_app;
 
-	/* Safety belt: top command 0xE0 (the ETS/BIX message) carries a pointer
-	 * at request offset 8 that TrustZone must fix up; a wrong one resets the
-	 * phone. It must not be sent through this flat-buffer path. Refuse it
-	 * until the embeddedBufOffsets fix-up is built and proven.
-	 */
-	if (cmd_id == 0xE0) {
-		MSG("refusing cmd 0x%02x: the ETS pointer fix-up is not proven "
-		    "yet (would risk a reset)\n", cmd_id);
-		rc = 2;
+	if (transport) {
+		/* Known pointer-free ping only. Test whether the legacy compat
+		 * service permits omission of redundant in/out copies. */
+		for (unsigned int i = 0; i < 4; i++) {
+			response_input_size = (i & 1) ? 0 : RSP_SIZE;
+			request_output_size = (i & 2) ? 0 : REQ_SIZE;
+			MSG("transport case %u: reqIn=%u rspIn=%zu reqOut=%zu rspOut=%u\n",
+			    i, REQ_SIZE, response_input_size, request_output_size, RSP_SIZE);
+			int test_rc = send_ping(app, 1, 7);
+			MSG("transport case %u: %s\n", i, test_rc ? "FAIL" : "PASS");
+			if (!test_rc) rc = 0;
+		}
 	} else {
-		rc = send_ping(app, cmd_id, operand);
-		if (rc == 0)
-			MSG("SUCCESS: egisap64 echoed operand*10 for command "
-			    "0x%02x.\n", cmd_id);
+		rc = (protocol || qseecom) ? check_protocol(root, app) : send_ping(app, cmd_id, operand);
 	}
+	if (rc == 0)
+		MSG("SUCCESS: selected TA protocol checks passed.\n");
+	else
+		MSG("FAILED: TA protocol check; no hardware/enrollment claim.\n");
 
+out_app:
+	egis_qseecom_close();
 	unload_ta(app);
 	qcomtee_object_refs_dec(app);
 out_loader:
@@ -534,5 +885,5 @@ out_root:
 	qcomtee_object_refs_dec(root);
 out_image:
 	free(image);
-	return rc;
+	return rc ? 1 : 0;
 }

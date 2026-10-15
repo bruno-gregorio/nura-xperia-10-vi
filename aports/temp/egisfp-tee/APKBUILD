@@ -8,14 +8,14 @@
 # first step of the fingerprint stack, not the stack itself.
 pkgname=egisfp-tee
 pkgver=0.1.0
-pkgrel=0
+pkgrel=14
 pkgdesc="Smoke-test client that loads egisap64 over qcomtee and pings it"
 url="https://github.com/sonyxperiadev"
 arch="aarch64"
 license="BSD-3-Clause"
-makedepends="quic-teec-dev"
+makedepends="quic-teec-dev linux-headers"
 depends="quic-teec"
-source="egisfp-load.c"
+source="egisfp-load.c qseecom-transport.h"
 # No TA is bundled; the test needs the phone's own firmware and QTEE.
 options="!check"
 builddir="$srcdir"
@@ -33,5 +33,6 @@ package() {
 }
 
 sha512sums="
-3b76466168286634ca3f96c0f7667840bdb12b81ddc57ca7aade7a2275bc7a71ef6cb233c81bf66bc4f25ba48618b2a8808e2808ec98f1647c3c46906bba473a  egisfp-load.c
+e379f2839c5072585c889b83efed18450823d1cc7e7d3a72ec32b6e9eb91ee4d1c7fc7ca52ff0797bc03d991e9ef9d2a48cdc4594cbba16799d403a6d6c28f3f  egisfp-load.c
+cf9fea99c5355929599ca449762b0b1f84d725a5e11e9bcc588d67aeb626b8152aae065d52b729e141f0b49eea32730bd3885c42e9906a1570cebbc523c84528  qseecom-transport.h
 "

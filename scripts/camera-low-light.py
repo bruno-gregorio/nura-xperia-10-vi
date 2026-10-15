@@ -29,8 +29,8 @@ TuningDumper.add_representer(list, sequence)
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--decoded', type=Path, default=Path('out/dl-tuned'))
-    p.add_argument('--tuning', type=Path, default=Path('aports/temp/libcamera'))
-    p.add_argument('--reference', type=Path, default=Path('aports/temp/pdx246-camera-calibration'))
+    p.add_argument('--tuning', type=Path, default=Path('aports/main/pdx246-camera-calibration'))
+    p.add_argument('--reference', type=Path, default=Path('aports/main/pdx246-camera-calibration'))
     a = p.parse_args()
     for sensor, name in [('front', 'hi846-front'), ('back', 'hi846')]:
         summary = json.loads((a.decoded / 'summary' / ('le_hi846_' + sensor + '.json')).read_text())

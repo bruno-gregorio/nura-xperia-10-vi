@@ -1,22 +1,17 @@
 # Forked from Alpine for temporary downstream patches
 # Forked again from pmaports' temp/libcamera 0.7.2-r4 (9fec495) for the
-# Xperia 10 VI's cameras: the Sony IMX582's sensor properties and helper
-# (0007), a helper for the Hynix Hi-846 (0008), a contrast detection
-# autofocus for the soft IPA (0009 to 0011), the soft IPA's line duration
-# taken from the configured mode (0012), longer frames and digital gain
-# in low light (0013, 0014), a focus scan past the calibrated range
-# (0015), a tuning file of its own for a front camera (0016), calibrated
-# EGL lens shading, illuminant estimation and gain-code progress (0017),
-# clipping-aware white balance (0018), full packed-RAW precision in EGL and
-# statistics plus opt-in spatial denoising (0019), and tuning files for the IMX582 and
-# both Hi-846 modules with Sony's calibration. Drop this fork once
-# libcamera has all of them. pkgrel is
+# Xperia 10 VI's cameras: sensor support for the IMX582 and Hi-846, and
+# soft ISP and IPA work - autofocus, low-light exposure, calibrated lens
+# shading, white balance, denoising and preview - each patch saying what
+# it adds. All of it is generic and meant for libcamera; drop this fork
+# once libcamera has it. The tuning for this phone's camera modules is
+# device data and lives in pdx246-camera-calibration, not here. pkgrel is
 # pmaports' plus 100, plus one per change here.
 maintainer="Robert Mader <robert.mader@collabora.com>"
 pkgname=libcamera
 _pkgver=0.7.2
 pkgver=9999$_pkgver
-pkgrel=124
+pkgrel=125
 pkgdesc="Linux camera framework"
 url="https://libcamera.org/"
 arch="all"
@@ -60,13 +55,11 @@ subpackages="
 	"
 _tuning_files="
 	hi846.yaml
-	hi846-front.yaml
 	imx355.yaml
 	imx363.yaml
 	imx371.yaml
 	imx376.yaml
 	imx519.yaml
-	imx582.yaml
 	imx800.yaml
 	imx858.yaml
 	s5k3l6xx.yaml
@@ -242,14 +235,12 @@ bdb20115e6a367bb2bfd0c6f297a951a705ebb53f14b0326acaaadd8523974d22f12a8b3661c1063
 2d82a7fdbf6b7d6fb3a472216218e7ed6b7a9c9ad11678940414747f3a40ca4a3010ecacc38a203e8b2ac8b7aabc7564a6b0719db10c6befcfd153fa9ec3eafb  0025-simple-preserve-preview-aspect.patch
 436d09a952cb94517f61753a39a7ec852c3414dd63ea8fa1f6944560b161e27081172c4856150778e507bc7504d7beca56446398029963742627319bb5596602  0026-simple-retain-3a-output-resize.patch
 22167a4eceb6d1b40b0b7c45fdf116c71684f5340de7f767535cb8e160ad9d2ae0f00cb3d461f73a344520a48a4641cf46226841d78bee06bfbfd2a91337f754  qcam.desktop
-b454b121d9f0ce8b9d09c9c9aecc36d27347d45d9c3b92b574b03bd6dfaa68d48dc396b18db6a4b45cf893dd45cfb42f83c827a537eb96cf8ab47edd9a3016f9  hi846.yaml
-ab42c9c57cb48c3fa2a7ba7edace5428f0c1dd309f6fc14340d9d40b12f3b982c8887277061c0b9b97e8ecdf61f0b50d326e981f987d080330d206e824047795  hi846-front.yaml
+2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  hi846.yaml
 4942edd551dcf51630246f71e600c17760d3574d5d45e5530d6cfeefe2c9ab1a812fbe220f8e89d92e19a499c592b2507c801ca4eb74cd15fcecb60bff5c650b  imx355.yaml
 285c6d0d712df341c0117c3762ddc139f53f44e6be36c3388d1a62696429175e2916f392163131e21f410c3676f02f5d125f375171f45f8d82ad278aa5076c62  imx363.yaml
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx371.yaml
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx376.yaml
 1b1f6d36311bee38006eaa1e380571fc9fbd5625fd72f63309426d3651483cef52a176d56cdebd2ce46cbb264684ede186740df169027d2bf27d0f3057da2f86  imx519.yaml
-201cc6c29ff73421eee8e2fa4c2a50ee91b83b6cc02247403ac330d91c2312c4c01d5bbdc80e7c2e4de1548a90cc519868f5b28ecbc3950bd128c20309aebe59  imx582.yaml
 55dab9dcb9b1982143b9d63e4e51138c5bffd7c8f4a8e4e122750b3ad9d475446956bc297d9f564819ade4be75a575d06633a064e14f8ba3ef77986783c5f067  imx800.yaml
 55dab9dcb9b1982143b9d63e4e51138c5bffd7c8f4a8e4e122750b3ad9d475446956bc297d9f564819ade4be75a575d06633a064e14f8ba3ef77986783c5f067  imx858.yaml
 2ee566653b17d565d2c0de67cbe6ebad25df5aac6051cad78e6bae52016fa2ca0247e964d735ac776b3e0bd447ead9c4fcb26cd7629228cdba3ceb91b46f378f  s5k3l6xx.yaml

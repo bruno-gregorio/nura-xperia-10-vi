@@ -1,0 +1,132 @@
+#!/usr/bin/python3
+"""Calibrate the Hi-846 module tuning to this unit's lens shading.
+
+Each Hi-846 module stores its own lens shading in OTP, which the kernel driver
+publishes as a read-only NVMEM device. This scales the lens shading tables of
+the module tuning by the ratio between the module's golden sample and this
+unit, and writes the result to /run, where libcamera's links in
+/etc/libcamera/ipa/simple point. A sensor that cannot be calibrated gets the
+module tuning unchanged, so once this has run both links resolve to Sony's
+tuning for these modules. Nothing that identifies the module is copied.
+"""
+import argparse
+import json
+import math
+from pathlib import Path
+import sys
+import time
+
+import yaml
+
+sys.path.insert(0, '/usr/lib/pdx246-camera-calibration')
+from hi846_otp import decode  # noqa: E402
+
+# The NVMEM device name in the kernel, and the tuning file libcamera asks for.
+SENSORS = [('front', 'hi846-front'), ('back', 'hi846')]
+
+# The shading grid is 17 x 13 points. OTP holds four planes, R, Gr, Gb and B;
+# libcamera's tables hold three gains a point, R, G and B.
+POINTS = 17 * 13
+
+HEADER = '# Generated from checksum-validated sensor OTP; no module identity.\n'
+
+
+class TuningDumper(yaml.SafeDumper):
+    # libcamera reads plain mappings and sequences, not YAML aliases.
+    def ignore_aliases(self, data):
+        return True
+
+
+def calibrate(tuning, otp, reference):
+    """Scale every lens shading table in tuning by golden / this unit."""
+    lsc = next(a['LensShading'] for a in tuning['algorithms']
+               if 'LensShading' in a)
+    raw = otp['lsc']['response']
+    golden = reference['golden']
+    if not len(raw) == len(golden) == 4 * POINTS:
+        raise ValueError('OTP and reference shading differ in size')
+    ratio = [g / r for g, r in zip(golden, raw)]
+    if not all(math.isfinite(r) and 0.5 <= r <= 2 for r in ratio):
+        raise ValueError('OTP differs excessively from module reference')
+
+    # The two greens are mixed by the share of Gr in G at each point, which
+    # the stock tuning gives per colour temperature and per light level.
+    tables = [(t, reference['green_fraction'][str(t['ct'])])
+              for t in lsc['tables']]
+    bands = lsc.get('luxBands', [])
+    band_weights = reference.get('lux_green_fraction', [])
+    if len(bands) != len(band_weights):
+        raise ValueError('Low-light calibration bands do not match tuning')
+    for band, weights in zip(bands, band_weights):
+        tables.extend((t, weights[str(t['ct'])]) for t in band['tables'])
+
+    for table, weights in tables:
+        # Tables may share one list after loading YAML with aliases; never
+        # apply the calibration twice to the same list.
+        table['gains'] = list(table['gains'])
+        if len(table['gains']) != 3 * POINTS or len(weights) != POINTS:
+            raise ValueError('Unexpected LSC grid size')
+        for i in range(POINTS):
+            green = (weights[i] * ratio[POINTS + i]
+                     + (1 - weights[i]) * ratio[2 * POINTS + i])
+            for c, factor in enumerate((ratio[i], green, ratio[3 * POINTS + i])):
+                table['gains'][3 * i + c] *= factor
+        if not all(math.isfinite(g) and 0.5 <= g <= 8 for g in table['gains']):
+            raise ValueError('Calibrated LSC gain outside ISP range')
+    return tuning
+
+
+def wait_for_otp(nvmem, seconds):
+    # The sensors can probe late, once their regulators and CCI are up; udev
+    # having been triggered does not mean their NVMEM is published yet.
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if all(list(nvmem.glob(f'hi846-{s}-otp*/nvmem')) for s, _ in SENSORS):
+            return
+        time.sleep(0.5)
+
+
+def write(target, text):
+    tmp = target.with_suffix('.tmp')
+    tmp.write_text(text)
+    tmp.chmod(0o644)
+    tmp.replace(target)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--nvmem', type=Path,
+                        default=Path('/sys/bus/nvmem/devices'))
+    parser.add_argument('--data', type=Path,
+                        default=Path('/usr/share/pdx246-camera-calibration'))
+    parser.add_argument('--output', type=Path,
+                        default=Path('/run/pdx246-camera-calibration/simple'))
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    wait_for_otp(args.nvmem, 45)
+
+    failed = False
+    for sensor, name in SENSORS:
+        target = args.output / f'{name}.yaml'
+        module = (args.data / f'{name}.yaml').read_text()
+        try:
+            files = list(args.nvmem.glob(f'hi846-{sensor}-otp*/nvmem'))
+            if len(files) != 1:
+                raise ValueError(f'{len(files)} OTP devices, expected one')
+            otp = decode(files[0].read_bytes())
+            reference = json.loads((args.data / f'{name}.json').read_text())
+            tuning = calibrate(yaml.safe_load(module), otp, reference)
+        except (ValueError, KeyError, StopIteration, OSError) as err:
+            write(target, module)
+            print(f'{sensor}: module tuning, not calibrated: {err}',
+                  file=sys.stderr)
+            failed = True
+            continue
+        write(target, HEADER + yaml.dump(tuning, Dumper=TuningDumper,
+                                         sort_keys=False))
+        print(f'{sensor}: lens shading calibrated at every light level')
+    return 1 if failed else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

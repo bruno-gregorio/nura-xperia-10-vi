@@ -1,0 +1,67 @@
+# Camera tuning for the Xperia 10 VI's modules, calibrated per unit.
+#
+# libcamera keys its tuning files by sensor, but these are Sony's tuning for
+# the modules in this phone: the IMX582 main camera and the two Hi-846s. So
+# they go in /etc/libcamera/ipa/simple, which libcamera searches before its
+# own files in /usr/share, and libcamera's generic hi846.yaml stays as it is
+# for other phones with that sensor.
+#
+# Each Hi-846 module also stores its own lens shading in OTP, which the
+# kernel driver publishes as NVMEM. pdx246-camera-calibrate scales the module
+# tuning to it at boot and writes the result to /run, where the two Hi-846
+# links point; a sensor it cannot calibrate gets the module tuning as is.
+# hi846*.json hold the golden sample's shading and the green weights, from
+# Sony's stock tuning; scripts/camera-low-light.py imports both them and the
+# tuning files from it.
+maintainer="Bruno Gregorio <accounts@bruno.pw>"
+pkgname=pdx246-camera-calibration
+pkgver=1
+pkgrel=4
+pkgdesc="Xperia 10 VI camera tuning, calibrated per unit from the Hi-846 OTP"
+url="https://postmarketos.org"
+arch="noarch"
+license="MIT"
+depends="python3 py3-yaml"
+options="!check"
+source="
+	pdx246-camera-calibrate
+	hi846_otp.py
+	hi846.yaml
+	hi846.json
+	hi846-front.yaml
+	hi846-front.json
+	imx582.yaml
+	pdx246-camera-calibration.service
+	90-pdx246-camera-calibration.preset
+	"
+
+package() {
+	local data=/usr/share/$pkgname
+	local tuning=/etc/libcamera/ipa/simple
+
+	install -Dm755 "$srcdir"/pdx246-camera-calibrate -t "$pkgdir"/usr/bin/
+	install -Dm644 "$srcdir"/hi846_otp.py -t "$pkgdir"/usr/lib/$pkgname/
+	install -Dm644 "$srcdir"/hi846.yaml "$srcdir"/hi846.json \
+		"$srcdir"/hi846-front.yaml "$srcdir"/hi846-front.json \
+		-t "$pkgdir"$data/
+	install -Dm644 "$srcdir"/imx582.yaml -t "$pkgdir"$tuning/
+	for name in hi846 hi846-front; do
+		ln -s /run/$pkgname/simple/$name.yaml "$pkgdir"$tuning/$name.yaml
+	done
+
+	install -Dm644 "$srcdir"/pdx246-camera-calibration.service \
+		-t "$pkgdir"/usr/lib/systemd/system/
+	install -Dm644 "$srcdir"/90-pdx246-camera-calibration.preset \
+		-t "$pkgdir"/usr/lib/systemd/system-preset/
+}
+sha512sums="
+ea8837dfe9ce2076e670743efb49aa79705bc74ac8a65902c3c7c5fabf0be06a4ade95afa9b58ca9cfe2d9d4a03fbb7bad50c8bfdb25959d7b6992762d22b8db  pdx246-camera-calibrate
+d9737c9bc082c64c03278d17c98050382d35f2db658bfe134db5bdfc6971d9c1d0e1de147a06787e8abffcee1477f29f5634729f37b807a827d2c4b8d9f418da  hi846_otp.py
+b454b121d9f0ce8b9d09c9c9aecc36d27347d45d9c3b92b574b03bd6dfaa68d48dc396b18db6a4b45cf893dd45cfb42f83c827a537eb96cf8ab47edd9a3016f9  hi846.yaml
+f91271314bf2e0f3230a20ed93d1f42a77427e22670465698718e50c027cbf7c99d4af9a569e9ae826891acfd49b1fb07d2a1f6c2a02a903f57abcc11fdf326f  hi846.json
+ab42c9c57cb48c3fa2a7ba7edace5428f0c1dd309f6fc14340d9d40b12f3b982c8887277061c0b9b97e8ecdf61f0b50d326e981f987d080330d206e824047795  hi846-front.yaml
+dbfd753a09dc462d8528c8aae2bcd9219d2678df344ca477ce3fab03999c0519e92ce4c5e2dd1e5656215511114542b1766d9da830b274b09881c811ed9090c7  hi846-front.json
+201cc6c29ff73421eee8e2fa4c2a50ee91b83b6cc02247403ac330d91c2312c4c01d5bbdc80e7c2e4de1548a90cc519868f5b28ecbc3950bd128c20309aebe59  imx582.yaml
+c7e4aa4b7fac255a268bbbc3670a908ec1a887decc33f61651d2d11e00ff85001be1de738184670d5e72367861a436ec9c99c2ee9fd488d91f1e9cb6498d97c9  pdx246-camera-calibration.service
+910f5ea2d24e7b6c19ee55038df8cd09fe8738bf912bd443a7ddf4a4a11c455ebd27e32e983f7e526beac3e938edb230ec2c4e607cee099b4ba8bc27828033d2  90-pdx246-camera-calibration.preset
+"

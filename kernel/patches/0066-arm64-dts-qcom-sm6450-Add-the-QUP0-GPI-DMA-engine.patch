@@ -1,0 +1,82 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 12:33:11 -0300
+Subject: [PATCH] arm64: dts: qcom: sm6450: Add the QUP0 GPI DMA engine
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Describe the GPI DMA engine of the first QUP wrapper, and hook the
+wrapper's I2C controllers up to it. A serial engine its firmware leaves
+without FIFO access can only move data through GPI DMA.
+
+The channel mask and the SMMU stream are those the vendor device tree
+gives the engine.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ arch/arm64/boot/dts/qcom/sm6450.dtsi | 30 ++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450.dtsi b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+index 04062c343..1511dbb75 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm6450.dtsi
+@@ -7,6 +7,7 @@
+ #include <dt-bindings/clock/qcom,sm6450-dispcc.h>
+ #include <dt-bindings/clock/qcom,sm6450-gcc.h>
+ #include <dt-bindings/clock/qcom,sm6450-gpucc.h>
++#include <dt-bindings/dma/qcom-gpi.h>
+ #include <dt-bindings/interconnect/qcom,icc.h>
+ #include <dt-bindings/interconnect/qcom,sm6450-rpmh.h>
+ #include <dt-bindings/interrupt-controller/arm-gic.h>
+@@ -736,6 +737,29 @@ gcc: clock-controller@100000 {
+ 				 <0>;
+ 		};
+ 
++		gpi_dma0: dma-controller@900000 {
++			compatible = "qcom,sm6450-gpi-dma", "qcom,sm6350-gpi-dma";
++			reg = <0x0 0x00900000 0x0 0x60000>;
++			interrupts = <GIC_SPI 244 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 245 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 246 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 247 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 248 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 249 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 250 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 251 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 252 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 253 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 254 IRQ_TYPE_LEVEL_HIGH>,
++				     <GIC_SPI 255 IRQ_TYPE_LEVEL_HIGH>;
++			dma-channels = <12>;
++			dma-channel-mask = <0x3f>;
++			iommus = <&apps_smmu 0x176 0x0>;
++			dma-coherent;
++			#dma-cells = <3>;
++			status = "disabled";
++		};
++
+ 		qupv3_id_0: geniqup@9c0000 {
+ 			compatible = "qcom,geni-se-qup";
+ 			reg = <0x0 0x009c0000 0x0 0x2000>;
+@@ -765,6 +789,9 @@ &cnoc2 SLAVE_QUP_0 QCOM_ICC_TAG_ACTIVE_ONLY>,
+ 						<&aggre1_noc MASTER_QUP_0 QCOM_ICC_TAG_ALWAYS
+ 						 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
+ 				interconnect-names = "qup-core", "qup-config", "qup-memory";
++				dmas = <&gpi_dma0 0 0 QCOM_GPI_I2C>,
++				       <&gpi_dma0 1 0 QCOM_GPI_I2C>;
++				dma-names = "tx", "rx";
+ 				pinctrl-0 = <&qup_i2c0_data_clk>;
+ 				pinctrl-names = "default";
+ 				#address-cells = <1>;
+@@ -785,6 +812,9 @@ &cnoc2 SLAVE_QUP_0 QCOM_ICC_TAG_ACTIVE_ONLY>,
+ 						<&aggre1_noc MASTER_QUP_0 QCOM_ICC_TAG_ALWAYS
+ 						 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
+ 				interconnect-names = "qup-core", "qup-config", "qup-memory";
++				dmas = <&gpi_dma0 0 2 QCOM_GPI_I2C>,
++				       <&gpi_dma0 1 2 QCOM_GPI_I2C>;
++				dma-names = "tx", "rx";
+ 				pinctrl-0 = <&qup_i2c2_data_clk>;
+ 				pinctrl-names = "default";
+ 				#address-cells = <1>;

@@ -1,0 +1,145 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 15 Oct 2026 16:28:11 -0300
+Subject: [PATCH] usb: dwc3: qcom: Initialise the SM6450 HS PHY again after an
+ attach
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Not for upstream.
+
+On SM6450 the charger firmware on the ADSP runs BC1.2 detection when a
+cable is attached. For that it puts the HS PHY in UTMI non-driving mode
+and gates its reference clock, and it never takes the PHY back out. The
+host loses the link a fraction of a second after the ADSP comes up and
+never sees it again.
+
+The vendor kernel gets away with it because it initialises the PHY again
+each time it starts the peripheral, which it does after the firmware
+reports the attach. Do the same on SM6450: 1.5 s after each device role
+report, take the gadget off the bus, exit and initialise the PHY, and
+put the gadget back.
+
+A fix that belongs upstream would hand the PHY back from the firmware's
+side, or know when the detection is over rather than wait for it.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/usb/dwc3/dwc3-qcom.c | 70 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 70 insertions(+)
+
+diff --git a/drivers/usb/dwc3/dwc3-qcom.c b/drivers/usb/dwc3/dwc3-qcom.c
+index ded2ca866..06340de7f 100644
+--- a/drivers/usb/dwc3/dwc3-qcom.c
++++ b/drivers/usb/dwc3/dwc3-qcom.c
+@@ -85,6 +85,9 @@ struct dwc3_qcom {
+ 	struct icc_path		*icc_path_apps;
+ 
+ 	enum usb_role		current_role;
++
++	bool			phy_reinit;
++	struct delayed_work	phy_reinit_work;
+ };
+ 
+ #define to_dwc3_qcom(d) container_of((d), struct dwc3_qcom, dwc)
+@@ -558,10 +561,73 @@ static int dwc3_qcom_setup_irq(struct dwc3_qcom *qcom, struct platform_device *p
+ 	return 0;
+ }
+ 
++/*
++ * Bring-up only, NOT FOR UPSTREAM.
++ *
++ * On SM6450 the charger firmware on the ADSP runs BC1.2 detection when a
++ * cable is attached, and for that it puts the HS PHY in UTMI non-driving
++ * mode: it sets the DATAPATH override in CFG0, OPMODE to non-driving in
++ * UTMI_CTRL0 and SUSPEND_N_SEL in HS_PHY_CTRL2, and it switches the PHY's
++ * reference clock gate off. It never takes the PHY back out of it, so the
++ * host loses the link a fraction of a second after the ADSP comes up, and
++ * never sees it again.
++ * The vendor kernel gets away with it because it initialises the PHY again
++ * each time it starts the peripheral, which it does after the charger
++ * firmware reports the attach. Do the same here, late enough to come after
++ * the firmware's detection: some time after each device role report, take
++ * the gadget off the bus, run the PHY's exit and init, which resets it, and
++ * put the gadget back on. The pullup does a core soft reset as well.
++ */
++#define DWC3_QCOM_PHY_REINIT_DELAY_MS	1500
++
++static void dwc3_qcom_phy_reinit_work(struct work_struct *work)
++{
++	struct dwc3_qcom *qcom = container_of(to_delayed_work(work),
++					      struct dwc3_qcom, phy_reinit_work);
++	struct dwc3 *dwc = &qcom->dwc;
++	bool connected;
++	int i, ret;
++
++	if (pm_runtime_resume_and_get(qcom->dev))
++		return;
++
++	mutex_lock(&dwc->mutex);
++
++	if (qcom->current_role != USB_ROLE_DEVICE ||
++	    dwc->current_dr_role != DWC3_GCTL_PRTCAP_DEVICE || !dwc->gadget)
++		goto out;
++
++	connected = dwc->softconnect;
++	if (connected)
++		usb_gadget_disconnect(dwc->gadget);
++
++	for (i = 0; i < dwc->num_usb2_ports; i++) {
++		phy_exit(dwc->usb2_generic_phy[i]);
++		ret = phy_init(dwc->usb2_generic_phy[i]);
++		if (ret)
++			dev_err(qcom->dev, "port-%d HS-PHY init failed: %d\n",
++				i + 1, ret);
++	}
++
++	if (connected)
++		usb_gadget_connect(dwc->gadget);
++
++	dev_dbg(qcom->dev, "HS-PHY initialised again after a device role report\n");
++out:
++	mutex_unlock(&dwc->mutex);
++	pm_runtime_mark_last_busy(qcom->dev);
++	pm_runtime_put_autosuspend(qcom->dev);
++}
++
+ static void dwc3_qcom_set_role_notifier(struct dwc3 *dwc, enum usb_role next_role)
+ {
+ 	struct dwc3_qcom *qcom = to_dwc3_qcom(dwc);
+ 
++	/* Bring-up only, see dwc3_qcom_phy_reinit_work() */
++	if (qcom->phy_reinit && next_role == USB_ROLE_DEVICE)
++		mod_delayed_work(system_freezable_wq, &qcom->phy_reinit_work,
++				 msecs_to_jiffies(DWC3_QCOM_PHY_REINIT_DELAY_MS));
++
+ 	if (qcom->current_role == next_role)
+ 		return;
+ 
+@@ -623,6 +689,8 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
+ 		return -ENOMEM;
+ 
+ 	qcom->dev = &pdev->dev;
++	qcom->phy_reinit = of_device_is_compatible(dev->of_node, "qcom,sm6450-dwc3");
++	INIT_DELAYED_WORK(&qcom->phy_reinit_work, dwc3_qcom_phy_reinit_work);
+ 
+ 	qcom->resets = devm_reset_control_array_get_optional_exclusive(dev);
+ 	if (IS_ERR(qcom->resets)) {
+@@ -724,6 +792,7 @@ static int dwc3_qcom_probe(struct platform_device *pdev)
+ remove_core:
+ 	dwc3_core_remove(&qcom->dwc);
+ clk_disable:
++	cancel_delayed_work_sync(&qcom->phy_reinit_work);
+ 	clk_bulk_disable_unprepare(qcom->num_clocks, qcom->clks);
+ 
+ 	return ret;
+@@ -737,6 +806,7 @@ static void dwc3_qcom_remove(struct platform_device *pdev)
+ 	if (pm_runtime_resume_and_get(qcom->dev) < 0)
+ 		return;
+ 
++	cancel_delayed_work_sync(&qcom->phy_reinit_work);
+ 	dwc3_core_remove(&qcom->dwc);
+ 	clk_bulk_disable_unprepare(qcom->num_clocks, qcom->clks);
+ 	dwc3_qcom_interconnect_exit(qcom);

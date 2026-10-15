@@ -2,7 +2,8 @@
 #
 # Dawid Wróbel's userspace for QSEECom trusted applications: the listener
 # daemon and a loader that keeps a named TA loaded. It speaks the same
-# /dev/teeN and /dev/teeprivN UAPI as our kernel's bringup-qseecom-tee.patch.
+# /dev/teeN and /dev/teeprivN UAPI as our kernel's qseecom TEE driver, a
+# bring-up commit in kernel/bringup/.
 # The patch adds listener 11, the REE time service, which Egis' fingerprint
 # TA calls while it initialises the sensor and without which that fails.
 # It belongs upstream; until then it is here.

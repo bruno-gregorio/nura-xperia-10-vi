@@ -1,0 +1,62 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 15 Oct 2026 16:49:13 -0300
+Subject: [PATCH] arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the
+ bootloader's ids
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Not for upstream: the binding allows qcom,msm-id and qcom,board-id on
+older SoCs only, and lets this board through here.
+
+The bootloader picks a tree out of the vendor_boot dtb area by these
+two properties. This port gives it a dtbo it cannot parse, so that no
+overlay is applied, and on that path it uses the strict matcher, which
+keeps a tree only if every field equals the board's. The values are
+what the phone reports in /sys/devices/soc0: SoC 537 at revision 1.0,
+grouped with 613 as the stock base tree groups them, and a QRD at
+platform version 1.0, subtype 0. The DDR type is not reported, so the
+board id is given once for each of the eight.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ Documentation/devicetree/bindings/arm/qcom.yaml      |  1 +
+ .../dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts  | 12 ++++++++++++
+ 2 files changed, 13 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/arm/qcom.yaml b/Documentation/devicetree/bindings/arm/qcom.yaml
+index 1500a8fdf..5c742ab0e 100644
+--- a/Documentation/devicetree/bindings/arm/qcom.yaml
++++ b/Documentation/devicetree/bindings/arm/qcom.yaml
+@@ -1191,6 +1191,7 @@ allOf:
+               - qcom,sm6115
+               - qcom,sm6125
+               - qcom,sm6350
++              - qcom,sm6450
+               - qcom,sm7125
+               - qcom,sm7225
+               - qcom,sm8150
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index 5a162904c..fbaeee341 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -25,6 +25,18 @@ / {
+ 	compatible = "sony,pdx246", "qcom,sm6450";
+ 	chassis-type = "handset";
+ 
++	/*
++	 * Not for upstream. The bootloader boots a tree from the vendor_boot
++	 * dtb area only if it carries these, and with no overlay it can read
++	 * it matches them exactly: SoC 537 or 613 at revision 1.0, and a QRD
++	 * at platform version 1.0, subtype 0, with any of the eight DDR types,
++	 * since the board does not report its own.
++	 */
++	qcom,msm-id = <537 0x10000>, <613 0x10000>;
++	qcom,board-id = <0x1000b 0x000>, <0x1000b 0x100>, <0x1000b 0x200>,
++			<0x1000b 0x300>, <0x1000b 0x400>, <0x1000b 0x500>,
++			<0x1000b 0x600>, <0x1000b 0x700>;
++
+ 	aliases {
+ 		serial0 = &uart3;
+ 		serial1 = &uart11;

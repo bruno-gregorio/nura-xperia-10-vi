@@ -289,10 +289,13 @@ matter for the upstream goal.
 
 ## What has been written so far
 
-Twenty-three patches against v6.18.55, exported to
-[../kernel/patches/](../kernel/patches/) by `scripts/sync-kernel-patches.sh`
-so the work does not live only in the gitignored `out/linux`. Nothing below
-has run on the device.
+The work is exported by `scripts/sync-kernel-patches.sh`, so it does not live
+only in the gitignored `out/linux`: backports in
+[../kernel/backports/](../kernel/backports/), the series in
+[../kernel/patches/](../kernel/patches/) and device bring-up in
+[../kernel/bringup/](../kernel/bringup/). This section was written when the
+series was twenty-three patches against v6.18.55 and none of it had run on the
+device; `05-status.md` has what has run since.
 
 The two drivers that had to be written:
 
@@ -698,10 +701,10 @@ owner saw the debug shell's terminal and keyboard on it.
 - **The 10 VI's downstream panel node differs from that driver in three
   places.**
   - It has a `vci` supply, which the binding forbids on this panel.
-    `sofef01-ams605dk01-vci-supply.patch` allows it.
+    A commit at the head of the series allows it.
   - It programs FLM with `8f 27 27`, where the driver sends the 10 V's
-    `8f 27 25`. `bringup-sofef01-pdx246-flm.patch` sends the 10 VI's value
-    when the machine compatible is `sony,pdx246`.
+    `8f 27 25`. A bring-up commit, `kernel/bringup/`, sends the 10 VI's
+    value when the machine compatible is `sony,pdx246`.
   - Its brightness is 12-bit, up to `0xfff`, where the driver stops at 1023.
     This one is left alone, because a dim screen is harmless and nothing but
     the high-brightness commands says the range is wider.
@@ -994,14 +997,16 @@ kernel in pmaports, with two deliberate differences.
   exists as patches in this repository. Keeping the base a released tarball,
   `linux-6.18.55.tar.xz`, is what makes "based on 6.18.55" something a
   stranger can check.
-- **One squashed patch, not twenty-three.** `scripts/sync-kernel-patches.sh`
-  now writes the branch out twice from the same range on the same run:
-  `kernel/patches/` as one patch per commit, which is the form the work is
-  reviewed and posted in, and `sm6450-mainline.patch` in the aport as a single
-  diff. An APKBUILD listing twenty-odd patch files would need its `source=`
-  and twenty-odd checksums rewritten on every kernel commit, and abuild does
-  not care how the diff is divided. The squashed file carries a header saying
-  which copy to read.
+- **One squashed patch per layer, not one per commit.**
+  `scripts/sync-kernel-patches.sh` writes each of the three layers out twice
+  from the same range on the same run: a directory under `kernel/` with one
+  patch per commit, which is the form the work is reviewed and posted in, and
+  a single diff in the aport - `backports.patch`, `sm6450-mainline.patch` and
+  `pdx246-bringup.patch`. An APKBUILD listing a hundred patch files would need
+  its `source=` and a hundred checksums rewritten on every kernel commit, and
+  abuild does not care how the diff is divided. Keeping one diff per layer,
+  rather than one in all, keeps what is not for upstream visibly apart in the
+  package too. Each squashed file carries a header saying which copy to read.
 
 Both forms were checked to apply to a pristine tree before the first build:
 `git apply -R --check` and `patch -p1 -R --dry-run` both accept the squashed
@@ -1072,30 +1077,24 @@ the reason has nothing to do with the tree being wrong.
 
 Qualcomm's boot chain reads the SoC id out of the fuses and the board id out of
 shared memory, walks the dtb area of `vendor_boot`, and boots the tree that
-advertises both in `qcom,msm-id` and `qcom,board-id`. Every mainline tree
-advertises neither - no upstream qcom dtsi has ever carried those properties,
-and a patch adding them should be rejected, because they describe the
-firmware's selection protocol rather than the hardware. `dtb-ids.py` on the
-`vendor_boot.img` boot-deploy builds confirms ours comes out with both empty.
+advertises both in `qcom,msm-id` and `qcom,board-id`. A mainline tree for a
+recent SoC advertises neither: the binding in `qcom.yaml` allows them on older
+SoCs only, because they describe the firmware's selection protocol rather than
+the hardware, and a series that added them for SM6450 would be refused.
 
-So `scripts/dtb-stamp-ids.py` adds them on the way into the image, and the
-`.dts` that goes to the lists stays clean. A `dtc` round-trip shows the stamp
-adds exactly two lines and changes nothing else.
-
-It does the FDT surgery itself rather than calling `fdtput`, and that is not
-gratuitous. `fdtput` and `dtc` are in the pmport container; `fastboot` and
-`adb` are on the host, and this project may not install anything there. So
-`try-kernel.sh`, which needs both, could not run on either side - it got as far
-as "stamping the bootloader ids" and died on "fdtput not found". Eighty lines of
-Python buys a loop that runs from one place. It is checked against the
-implementation it replaced: byte-identical output, and stamping an
-already-stamped tree is a no-op rather than a tree with two `qcom,msm-id`
-properties in it.
+So the board file gets them in a commit of its own in the bring-up layer,
+`kernel/bringup/`, which also lets this one board through the binding, and the
+series in `kernel/patches/` stays clean. Until kernel r50 a script stamped them
+onto the built `.dtb` on the way into a test image instead. That kept the
+`.dts` as it goes to the lists, but it also meant the `vendor_boot` the kernel
+package installs could never be selected, and the values lived in a script
+rather than next to the hardware they describe. `scripts/dtb-ids.py` reads them
+back out of a `.dtb` or a whole `vendor_boot.img`.
 
 Getting the values right needed one correction, because the obvious source is
 the wrong one. `/proc/device-tree` on the running phone has
-`qcom,board-id = <0x1000b 0x0>` at its root, and that is what the script
-stamped first. But the live tree's root is the *resolved* tree, and its `model`
+`qcom,board-id = <0x1000b 0x0>` at its root, and that is what was stamped
+first. But the live tree's root is the *resolved* tree, and its `model`
 reads "Parrot QRD" - so those are `parrot-qrd-overlay`'s properties, which
 overrode the base's. Read Sony's own `vendor_boot` instead and all fourteen
 base trees carry `<0x0 0x0>` or `<0x0 0x600>`: bases are generic and separated
@@ -1180,12 +1179,12 @@ only from a `qcom,pmic-id`, no base tree here has one, and `qcom,pmic-id-size`
 caps the index at `0xF`, one short of the sixteen required. It cannot be
 satisfied on this device.
 
-Taking the appended path means the stamp has to satisfy the strict matcher, so
+Taking the appended path means the ids have to satisfy the strict matcher, so
 `qcom,board-id` is no longer `<0x0 0x0>` but `<0x1000b 0x0>`: `0x0b` is QRD,
 which is what `hw_platform` says, and the `0x01_00` above it is platform
 version 1.0 from `platform_version`. Every field there is something the device
 reports about itself except one. The DDR type, bits 10:8 of the subtype cell,
-is not published anywhere in sysfs, so the stamp sweeps it - eight
+is not published anywhere in sysfs, so the board file sweeps it - eight
 `<variant subtype>` pairs in one property, one per DDR type, of which the
 strict matcher keeps the board's and discards the other seven. That costs 56
 bytes.

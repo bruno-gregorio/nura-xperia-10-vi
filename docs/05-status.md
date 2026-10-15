@@ -1,5 +1,67 @@
 # Status
 
+## Kernel r50 is three layers and less bring-up, 2026-10-15
+
+**Kernel r50 is built and has not run on the device.** It reorganises the
+mainline kernel and drops bring-up instruments that have served their
+purpose. Until r50 the aport applied the series and then twenty-two loose
+patch files. Now the work is three branches in `out/linux`, each built on
+the one before, and `scripts/sync-kernel-patches.sh` exports each of them
+twice: one patch per commit under `kernel/`, and one squashed patch in the
+aport.
+
+- `backports`, 12 commits in `kernel/backports/`: upstream commits and
+  postings that 6.18.55 predates, each under its original author again.
+- `sm6450`, 101 commits in `kernel/patches/`: the series for upstream. The
+  sofef01 `vci-supply` binding and the modem's rmtfs memory moved into it.
+- `pdx246`, 9 commits in `kernel/bringup/`: what never goes upstream as is.
+  Each message says why. These are the bootloader's ids, the dwc3 HS PHY
+  re-init, the sofef01 FLM setting, the Rust IRQ KCFI fix, the QSEECOM TEE
+  driver, the hi846 stock programs, two Rust consumer modules and the egisfp
+  driver.
+
+What changed for the device:
+
+- **Verified, the board's device tree differs from r49's in two places
+  only:** a decompiled diff with every number masked shows nothing else.
+  `qcom,msm-id` and `qcom,board-id` are now in the board file. Their values
+  are the ones `dtb-stamp-ids.py` stamped, checked in the built package with
+  `scripts/dtb-ids.py`. And the SD card-detect pin, GPIO 107, is a pinctrl
+  state of its own, listed second in both of `sdc2`'s states, instead of a
+  subnode of each. **Reasoned:** the vendor_boot the kernel package installs
+  is now selectable by the bootloader without help. `scripts/try-kernel.sh`
+  no longer stamps; it refuses a tree without the ids, and
+  `dtb-stamp-ids.py` is gone. Booting it still needs the zeroed dtbo from
+  `scripts/no-dtbo.py`.
+- **Verified, the package builds:** `scripts/pmb build` applied the three
+  patches in order. Rust and the egisfp driver built with no compiler
+  warnings. The package has no Gunyah watchdog, AW88261, HX83112A or
+  QCOMTEE driver; egisfp is built in and `qseecomtee` is a module.
+- **Dropped, because they have served their purpose:**
+  - The Gunyah watchdog: two backports, two bring-up patches and
+    `try-kernel.sh`'s WDTPROBE mode. "The Gunyah watchdog is not a backstop
+    on this board" says why.
+  - DEVPROBE, the probe for how far the devices a boot waits on got.
+  - `pmos.milestone`, whose own note said to drop it once the kernel
+    reached `/init`.
+  - The QSEECOM app-log patch, a debug aid.
+  - Three AW88261 commits, written before the top amplifier turned out to be
+    an AW88263. The AW88261 driver is no longer built.
+  - The vfe-340 stride print. Upstream has fixed it since.
+  - `CONFIG_DRM_PANEL_HIMAX_HX83112A`, which was built in for a panel this
+    phone does not have, and `CONFIG_QCOMTEE`, which the fingerprint path
+    does not use.
+- **Changed, untested: egisfp.** The driver now uses two generic consumer
+  modules, `kernel::gpio` and `kernel::pinctrl`, in place of its private GPIO
+  wrapper. Its interrupt line's bias is now switched by selecting the
+  `irq-on` and `irq-off` pinctrl states that `pdx246-egisfp.dtsi` already
+  defined. A failed power-on now runs the power-off sequence, and power-off
+  reports a failed step instead of ignoring it. The `pr_info` traces are
+  gone, including the one in the hard IRQ handler. The fingerprint path has
+  to be run again: `scripts/egisfp-device-check.py`, then an unlock.
+- **Unchanged:** the other bring-up commits only got new messages, and two
+  series commits gained `Fixes:` tags.
+
 ## Double-tap to wake works with the screen off, 2026-10-15
 
 **With the panel off and the system awake, the owner double-tapped the
@@ -794,13 +856,14 @@ do not infer GPIO, IRQ, cleanup, suspend or fingerprint functionality from
 the successful build. The earlier r112 Plasma image remains the known-booted
 image and still contains kernel r39.
 
-**Implemented:** `kernel/egisfp/` holds a Rust platform driver and small
-owned GPIO/eventfd wrappers. The new code uses generated kernel C bindings;
-there is no handwritten C implementation. `stage.py` applies it to an
-isolated kernel tree, and `export.py` produces the kernel aport's
-`bringup-egisfp-rust.patch`. Kernel package r40 enables Rust and EGISFP and
+**Implemented:** a Rust platform driver with small owned GPIO/eventfd
+wrappers. The new code uses generated kernel C bindings; there is no
+handwritten C implementation. Kernel package r40 enables Rust and EGISFP and
 adds the corresponding native build dependencies. The normal SM6450
-series and its existing backports remain the kernel base.
+series and its existing backports remain the kernel base. Since kernel r50
+the driver is a commit in the bring-up layer, `kernel/bringup/`, on generic
+`kernel::gpio` and `kernel::pinctrl` consumers; the staging copy in
+`kernel/egisfp/` is gone.
 
 - `/dev/egisfp0` has a single controlling opener and a provisional fixed-size
   ioctl ABI in `egisfp.h`: status, power, reset, and an eventfd subscription.
@@ -822,7 +885,7 @@ series and its existing backports remain the kernel base.
 - SPI remains TrustZone-owned. This driver performs no TEE commands, stores
   no templates and accesses neither RPMB nor Android's secure storage.
 
-**Prepared hardware check:** `kernel/egisfp/check-device.py` checks exclusive
+**Prepared hardware check:** `scripts/egisfp-device-check.py` checks exclusive
 ownership, rejected malformed requests, power/reset and final-close cleanup.
 It waits at most two seconds for an interrupt notification, without claiming
 that a notification is a finger event. Run only on pdx246 with no fingerprint

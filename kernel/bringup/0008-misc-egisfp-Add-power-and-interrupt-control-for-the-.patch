@@ -1,0 +1,556 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 15 Oct 2026 16:28:28 -0300
+Subject: [PATCH] misc: egisfp: Add power and interrupt control for the Egis
+ EC617
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Not for upstream.
+
+The EC617 fingerprint sensor of the Xperia 10 VI sits on an SPI bus
+that TrustZone owns: its trusted application talks to it, and Linux only
+powers it, resets it and reports its interrupt. Give userspace those
+through a misc device, with an eventfd for the interrupt, so that a
+libfprint driver can run the sensor through the trusted application.
+
+The binding is a development one and the uapi is not stable.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ arch/arm64/boot/dts/qcom/pdx246-egisfp.dtsi   |  43 +++
+ .../sm6450-sony-xperia-columbia-pdx246.dts    |   2 +
+ drivers/misc/Kconfig                          |   2 +
+ drivers/misc/Makefile                         |   2 +
+ drivers/misc/egisfp/Kconfig                   |  12 +
+ drivers/misc/egisfp/Makefile                  |   2 +
+ drivers/misc/egisfp/egisfp.h                  |  25 ++
+ drivers/misc/egisfp/egisfp.rs                 | 324 ++++++++++++++++++
+ drivers/misc/egisfp/eventfd.rs                |  32 ++
+ rust/bindings/bindings_helper.h               |   1 +
+ 10 files changed, 445 insertions(+)
+ create mode 100644 arch/arm64/boot/dts/qcom/pdx246-egisfp.dtsi
+ create mode 100644 drivers/misc/egisfp/Kconfig
+ create mode 100644 drivers/misc/egisfp/Makefile
+ create mode 100644 drivers/misc/egisfp/egisfp.h
+ create mode 100644 drivers/misc/egisfp/egisfp.rs
+ create mode 100644 drivers/misc/egisfp/eventfd.rs
+
+diff --git a/arch/arm64/boot/dts/qcom/pdx246-egisfp.dtsi b/arch/arm64/boot/dts/qcom/pdx246-egisfp.dtsi
+new file mode 100644
+index 000000000..2b3db9c87
+--- /dev/null
++++ b/arch/arm64/boot/dts/qcom/pdx246-egisfp.dtsi
+@@ -0,0 +1,43 @@
++// SPDX-License-Identifier: GPL-2.0-only
++// Development binding; GPIOs and timings derive from Sony 70.2.A.1 et617.
++/ {
++	fingerprint {
++		compatible = "egistec,ec617-tee";
++		vdd-enable-gpios = <&tlmm 96 GPIO_ACTIVE_HIGH>;
++		vcc-enable-gpios = <&tlmm 106 GPIO_ACTIVE_HIGH>;
++		reset-gpios = <&tlmm 108 GPIO_ACTIVE_LOW>;
++		irq-gpios = <&tlmm 111 GPIO_ACTIVE_HIGH>;
++		interrupt-parent = <&tlmm>;
++		interrupts = <111 IRQ_TYPE_EDGE_RISING>;
++		pinctrl-names = "default", "irq-off", "irq-on";
++		pinctrl-0 = <&fingerprint_control_default &fingerprint_irq_default>;
++		pinctrl-1 = <&fingerprint_irq_default>;
++		pinctrl-2 = <&fingerprint_irq_on>;
++	};
++};
++
++&tlmm {
++	fingerprint_control_default: fingerprint-control-default-state {
++		pins = "gpio96", "gpio106", "gpio108";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-down;
++		output-low;
++	};
++
++	fingerprint_irq_default: fingerprint-irq-default-state {
++		pins = "gpio111";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-disable;
++		input-enable;
++	};
++
++	fingerprint_irq_on: fingerprint-irq-on-state {
++		pins = "gpio111";
++		function = "gpio";
++		drive-strength = <8>;
++		bias-pull-up;
++		input-enable;
++	};
++};
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index fbaeee341..fe55eab1d 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -1227,3 +1227,5 @@ &wifi {
+ 
+ 	status = "okay";
+ };
++
++#include "pdx246-egisfp.dtsi"
+diff --git a/drivers/misc/Kconfig b/drivers/misc/Kconfig
+index b9c11f673..6daf44d9b 100644
+--- a/drivers/misc/Kconfig
++++ b/drivers/misc/Kconfig
+@@ -662,3 +662,5 @@ source "drivers/misc/keba/Kconfig"
+ source "drivers/misc/amd-sbi/Kconfig"
+ source "drivers/misc/rp1/Kconfig"
+ endmenu
++
++source "drivers/misc/egisfp/Kconfig"
+diff --git a/drivers/misc/Makefile b/drivers/misc/Makefile
+index b32a2597d..6c86f2ce6 100644
+--- a/drivers/misc/Makefile
++++ b/drivers/misc/Makefile
+@@ -75,3 +75,5 @@ obj-$(CONFIG_MCHP_LAN966X_PCI)	+= lan966x-pci.o
+ obj-y				+= keba/
+ obj-y				+= amd-sbi/
+ obj-$(CONFIG_MISC_RP1)		+= rp1/
++
++obj-$(CONFIG_EGISFP) += egisfp/
+diff --git a/drivers/misc/egisfp/Kconfig b/drivers/misc/egisfp/Kconfig
+new file mode 100644
+index 000000000..a195feee8
+--- /dev/null
++++ b/drivers/misc/egisfp/Kconfig
+@@ -0,0 +1,12 @@
++config EGISFP
++	bool "Egis EC617 TrustZone sensor hardware control (Rust)"
++	depends on RUST && GPIOLIB && PINCTRL && OF && EVENTFD
++	help
++	  Power, reset and interrupt notifications for an EC617 whose SPI bus
++	  belongs to TrustZone. This is bring-up hardware control, not a
++	  fingerprint matching or enrollment driver. A userspace libfprint
++	  adapter and trusted-app protocol client are also required.
++
++	  Built-in only: Linux 6.18's Rust miscdevice abstraction does not set
++	  file_operations.owner to pin a loadable driver during open files.
++	  No suspend wakeup support yet. Say N unless developing this driver.
+diff --git a/drivers/misc/egisfp/Makefile b/drivers/misc/egisfp/Makefile
+new file mode 100644
+index 000000000..115fef447
+--- /dev/null
++++ b/drivers/misc/egisfp/Makefile
+@@ -0,0 +1,2 @@
++# SPDX-License-Identifier: GPL-2.0-only
++obj-y += egisfp.o
+diff --git a/drivers/misc/egisfp/egisfp.h b/drivers/misc/egisfp/egisfp.h
+new file mode 100644
+index 000000000..40a774e59
+--- /dev/null
++++ b/drivers/misc/egisfp/egisfp.h
+@@ -0,0 +1,25 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++#ifndef _EGISFP_BRINGUP_H
++#define _EGISFP_BRINGUP_H
++#include <linux/ioctl.h>
++#include <linux/types.h>
++
++/* Experimental hardware-control ABI, not Android /dev/esfp0 compatibility.
++ * One open owner. Close powers off and releases the eventfd subscription.
++ * This interface never loads trusted apps, performs SPI, or stores templates.
++ */
++struct egisfp_status {
++	__u32 abi_version;
++	__u32 powered;
++	__u32 irq_level;
++	__u32 irq_sequence;
++};
++#define EGISFP_GET_STATUS _IOR('E', 0x80, struct egisfp_status)
++#define EGISFP_POWER _IOW('E', 0x81, __u32) /* exactly 0 or 1 */
++#define EGISFP_RESET _IO('E', 0x82)
++#define EGISFP_EVENTFD _IOW('E', 0x83, __s32) /* -1 unregisters */
++/* One notification per arm, then disabled. Reset/power-off also disarm.
++ * 0: disarm; 1: rising; 2: falling; 4: high; 8: low (Linux IRQ_TYPE_*).
++ */
++#define EGISFP_IRQ_ARM _IOW('E', 0x84, __u32)
++#endif
+diff --git a/drivers/misc/egisfp/egisfp.rs b/drivers/misc/egisfp/egisfp.rs
+new file mode 100644
+index 000000000..acf5c0b84
+--- /dev/null
++++ b/drivers/misc/egisfp/egisfp.rs
+@@ -0,0 +1,324 @@
++// SPDX-License-Identifier: GPL-2.0-only
++//! Egis EC617 GPIO/IRQ controller for a TrustZone-owned sensor.
++//!
++//! SPI and biometric processing belong to egisap64; no raw sensor or secure
++//! storage access is provided here. The initial ABI uses eventfd for IRQs so
++//! userspace can integrate with poll/epoll without spinning on GPIO status.
++
++mod eventfd;
++
++use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
++use kernel::{
++    bindings, c_str, container_of,
++    device::{Bound, Core, Device},
++    error::to_result,
++    fs::File,
++    gpio::{self, Desc},
++    ioctl::{_IO, _IOR, _IOW},
++    irq::{self, Flags, IrqReturn, ThreadedIrqReturn},
++    miscdevice::{MiscDevice, MiscDeviceOptions, MiscDeviceRegistration},
++    new_mutex, of,
++    pinctrl::Pinctrl,
++    platform, prelude::*,
++    sync::{Arc, Mutex},
++    time::{delay::fsleep, Delta},
++    types::ForeignOwnable,
++    uaccess::UserSlice,
++};
++
++const GET_STATUS: u32 = _IOR::<[u32; 4]>('E' as u32, 0x80);
++const POWER: u32 = _IOW::<u32>('E' as u32, 0x81);
++const RESET: u32 = _IO('E' as u32, 0x82);
++const EVENTFD: u32 = _IOW::<i32>('E' as u32, 0x83);
++const IRQ_ARM: u32 = _IOW::<u32>('E' as u32, 0x84);
++
++// Pin states of the interrupt line. TLMM sets bias through pinctrl only.
++const IRQ_ON: &CStr = c_str!("irq-on");
++const IRQ_OFF: &CStr = c_str!("irq-off");
++
++fn sleep_ms(ms: i64) {
++    fsleep(Delta::from_millis(ms));
++}
++
++struct Hardware {
++    interrupt: Desc,
++    pins: Pinctrl,
++    reset: Desc,
++    vdd: Desc,
++    vcc: Desc,
++    irq: u32,
++    events: Arc<Events>,
++    powered: bool,
++}
++
++impl Hardware {
++    fn ensure_powered(&self) -> Result {
++        if self.powered { Ok(()) } else { Err(Error::from_errno(-(bindings::EHOSTDOWN as i32))) }
++    }
++
++    /// Pull the interrupt line up only while the sensor is powered, so the
++    /// bias never back-powers it.
++    fn bias(&self, powered: bool) -> Result {
++        self.pins.lookup_state(if powered { IRQ_ON } else { IRQ_OFF })?.select()
++    }
++
++    fn power_on(&mut self) -> Result {
++        if self.powered { return Ok(()); }
++        // If the sequence fails part way, power_off unwinds it.
++        self.powered = true;
++        let result = self.sequence_on();
++        if result.is_err() { self.power_off(); }
++        result
++    }
++
++    fn sequence_on(&self) -> Result {
++        self.reset.set_value_cansleep(true)?;
++        self.vdd.set_value_cansleep(true)?;
++        self.vcc.set_value_cansleep(true)?;
++        sleep_ms(3);
++        self.reset.set_value_cansleep(false)?;
++        self.bias(true)?;
++        sleep_ms(3);
++        Ok(())
++    }
++
++    fn power_off(&mut self) {
++        if !self.powered { return; }
++        self.disarm();
++        // Every step runs even if an earlier one fails.
++        let mut ok = self.bias(false).is_ok();
++        ok &= self.vdd.set_value_cansleep(false).is_ok();
++        ok &= self.vcc.set_value_cansleep(false).is_ok();
++        sleep_ms(10);
++        ok &= self.reset.set_value_cansleep(true).is_ok();
++        sleep_ms(50);
++        if !ok { pr_err!("egisfp: power-off sequence failed\n"); }
++        self.powered = false;
++    }
++
++    fn reset(&mut self) -> Result {
++        self.ensure_powered()?;
++        self.disarm();
++        self.reset.set_value_cansleep(true)?;
++        sleep_ms(10);
++        self.reset.set_value_cansleep(false)?;
++        sleep_ms(3);
++        Ok(())
++    }
++
++    fn disarm(&self) {
++        // SAFETY: armed owns the single enable reference. If the handler
++        // consumed it, wait until its disable_irq_nosync has completed.
++        unsafe {
++            if self.events.armed.swap(false, Ordering::AcqRel) {
++                bindings::disable_irq_nosync(self.irq);
++            }
++            bindings::synchronize_irq(self.irq);
++        }
++    }
++
++    fn arm(&self, mode: u32) -> Result {
++        if !matches!(mode, 0 | 1 | 2 | 4 | 8) { return Err(EINVAL); }
++        self.disarm();
++        if mode == 0 { return Ok(()); }
++        self.ensure_powered()?;
++        // SAFETY: disabled, drained, exclusively owned IRQ. Modes are the
++        // four Linux IRQ_TYPE_* constants, never the emulated BOTH mode.
++        to_result(unsafe { bindings::irq_set_irq_type(self.irq, mode) })?;
++        self.events.armed.store(true, Ordering::Release);
++        // SAFETY: the one enable that disarm() or the handler balances.
++        unsafe { bindings::enable_irq(self.irq) };
++        Ok(())
++    }
++}
++
++impl Drop for Hardware {
++    fn drop(&mut self) { self.power_off(); }
++}
++
++#[pin_data]
++struct Events {
++    #[pin]
++    target: Mutex<Option<eventfd::EventFd>>,
++    sequence: AtomicU32,
++    armed: AtomicBool,
++    irq: u32,
++}
++
++struct Handler { events: Arc<Events> }
++
++impl irq::ThreadedHandler for Handler {
++    fn handle(&self, _dev: &Device<Bound>) -> ThreadedIrqReturn {
++        if !self.events.armed.swap(false, Ordering::AcqRel) {
++            return ThreadedIrqReturn::Handled;
++        }
++        // Mask in hard IRQ context, as the stock driver's level handler
++        // does. An asserted line must not depend on scheduling the thread
++        // before it is masked. This callback never takes a sleeping lock.
++        // SAFETY: consume the single enable reference without waiting.
++        unsafe { bindings::disable_irq_nosync(self.events.irq) };
++        self.events.sequence.fetch_add(1, Ordering::Relaxed);
++        ThreadedIrqReturn::WakeThread
++    }
++
++    fn handle_threaded(&self, _dev: &Device<Bound>) -> IrqReturn {
++        if let Some(target) = &*self.events.target.lock() {
++            target.signal_from_irq();
++        }
++        IrqReturn::Handled
++    }
++}
++
++struct State {
++    hardware: Option<Hardware>,
++    opened: bool,
++}
++
++#[pin_data]
++struct Shared {
++    #[pin]
++    state: Mutex<State>,
++    events: Arc<Events>,
++}
++
++#[pin_data]
++struct Egis {
++    // Deregister before releasing the remaining owner references.
++    #[pin]
++    misc: MiscDeviceRegistration<Handle>,
++    shared: Arc<Shared>,
++    #[pin]
++    _irq: irq::ThreadedRegistration<Handler>,
++}
++
++struct Handle(Arc<Shared>, bool);
++
++impl Drop for Handle {
++    fn drop(&mut self) {
++        if !self.1 { return; }
++        let mut state = self.0.state.lock();
++        if let Some(hw) = &mut state.hardware { hw.power_off(); }
++        // IRQs are drained above. Drop the eventfd reference outside the lock.
++        let old = self.0.events.target.lock().take();
++        drop(old);
++        state.opened = false;
++    }
++}
++
++#[vtable]
++impl MiscDevice for Handle {
++    type Ptr = KBox<Self>;
++
++    fn open(_file: &File, misc: &MiscDeviceRegistration<Self>) -> Result<Self::Ptr> {
++        // SAFETY: this registration is only embedded in Egis. shared is
++        // initialized before misc_register publishes the device, and remains
++        // initialized until misc_deregister finishes. Read only that field:
++        // the rest of Egis may still be under construction during open.
++        let shared = unsafe {
++            &(*container_of!(misc as *const MiscDeviceRegistration<Handle>, Egis, misc)).shared
++        }.clone();
++        // Allocate before taking the state mutex: allocation failure drops
++        // its value, and an owning Handle's destructor also takes that mutex.
++        let mut handle = KBox::new(Self(shared.clone(), false), GFP_KERNEL)?;
++        let mut state = shared.state.lock();
++        if state.hardware.is_none() { return Err(ENODEV); }
++        if state.opened { return Err(EBUSY); }
++        state.opened = true;
++        handle.1 = true;
++        Ok(handle)
++    }
++
++    fn ioctl(me: <Self::Ptr as ForeignOwnable>::Borrowed<'_>, _file: &File,
++             cmd: u32, arg: usize) -> Result<isize> {
++        let arg = UserPtr::from_addr(arg);
++        let mut state = me.0.state.lock();
++        let hw = state.hardware.as_mut().ok_or(ENODEV)?;
++        match cmd {
++            GET_STATUS => {
++                let values = [1, hw.powered as u32, hw.interrupt.value_cansleep()? as u32,
++                              me.0.events.sequence.load(Ordering::Relaxed)];
++                let mut writer = UserSlice::new(arg, 16).writer();
++                for value in values { writer.write(&value)?; }
++            }
++            POWER => match UserSlice::new(arg, 4).reader().read::<u32>()? {
++                0 => hw.power_off(),
++                1 => hw.power_on()?,
++                _ => return Err(EINVAL),
++            },
++            RESET => hw.reset()?,
++            IRQ_ARM => hw.arm(UserSlice::new(arg, 4).reader().read::<u32>()?)?,
++            EVENTFD => {
++                let fd = UserSlice::new(arg, 4).reader().read::<i32>()?;
++                let target = if fd == -1 { None } else { Some(eventfd::EventFd::get(fd)?) };
++                let old = core::mem::replace(&mut *me.0.events.target.lock(), target);
++                drop(old);
++            }
++            _ => return Err(ENOTTY),
++        }
++        Ok(0)
++    }
++}
++
++kernel::of_device_table!(OF_TABLE, MODULE_OF_TABLE, (), [
++    (of::DeviceId::new(c_str!("egistec,ec617-tee")), ())
++]);
++
++impl platform::Driver for Egis {
++    type IdInfo = ();
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = Some(&OF_TABLE);
++
++    fn probe(pdev: &platform::Device<Core>, _: Option<&()>) -> Result<Pin<KBox<Self>>> {
++        let dev = pdev.as_ref();
++        let request = pdev.irq_by_index(0)?;
++        let irq_number = request.irq();
++        let events = Arc::pin_init(pin_init!(Events {
++            target <- new_mutex!(None),
++            sequence: AtomicU32::new(0),
++            armed: AtomicBool::new(false),
++            irq: irq_number,
++        }), GFP_KERNEL)?;
++        let hardware = Hardware {
++            interrupt: Desc::get(dev, c_str!("irq"), gpio::Flags::In)?,
++            pins: Pinctrl::get(dev)?,
++            reset: Desc::get(dev, c_str!("reset"), gpio::Flags::OutHigh)?,
++            vdd: Desc::get(dev, c_str!("vdd-enable"), gpio::Flags::OutLow)?,
++            vcc: Desc::get(dev, c_str!("vcc-enable"), gpio::Flags::OutLow)?,
++            irq: irq_number,
++            events: events.clone(),
++            powered: false,
++        };
++        // Fail now rather than at power-on if a state is missing.
++        hardware.pins.lookup_state(IRQ_ON)?;
++        hardware.bias(false)?;
++        let irq_events = events.clone();
++        let shared = Arc::pin_init(pin_init!(Shared {
++            state <- new_mutex!(State { hardware: Some(hardware), opened: false }),
++            events,
++        }), GFP_KERNEL)?;
++        let registration = irq::ThreadedRegistration::new(request,
++            Flags::NO_AUTOEN | Flags::ONESHOT,
++            c_str!("egisfp"), Ok(Handler { events: irq_events }));
++        KBox::try_pin_init(try_pin_init!(Self {
++            shared,
++            _irq <- registration,
++            misc <- MiscDeviceRegistration::register(MiscDeviceOptions { name: c_str!("egisfp0") }),
++        }), GFP_KERNEL)
++    }
++
++    fn unbind(_pdev: &platform::Device<Core>, this: Pin<&Self>) {
++        // Serialize against ioctl/release, drain IRQs, then free the GPIOs.
++        // Open handles retain only Shared and return ENODEV from now on.
++        let mut state = this.shared.state.lock();
++        drop(state.hardware.take());
++        let old = this.shared.events.target.lock().take();
++        drop(old);
++    }
++}
++
++kernel::module_platform_driver! {
++    type: Egis,
++    name: "egisfp",
++    authors: ["Bruno Gregorio"],
++    description: "Egis EC617 TrustZone sensor hardware control",
++    license: "GPL v2",
++}
+diff --git a/drivers/misc/egisfp/eventfd.rs b/drivers/misc/egisfp/eventfd.rs
+new file mode 100644
+index 000000000..d446f3aea
+--- /dev/null
++++ b/drivers/misc/egisfp/eventfd.rs
+@@ -0,0 +1,32 @@
++// SPDX-License-Identifier: GPL-2.0-only
++//! Owned eventfd references for EC617 interrupt notifications.
++
++use kernel::{bindings, error::from_err_ptr, prelude::*};
++
++pub(super) struct EventFd(*mut bindings::eventfd_ctx);
++
++// SAFETY: eventfd's reference count and counter are synchronized by the kernel.
++// The reference remains held until Drop, and notification is IRQ-safe.
++unsafe impl Send for EventFd {}
++
++impl EventFd {
++    pub(super) fn get(fd: i32) -> Result<Self> {
++        // SAFETY: eventfd_ctx_fdget validates the calling task's fd and takes
++        // a reference independent of the fd's subsequent close/reuse.
++        Ok(Self(from_err_ptr(unsafe { bindings::eventfd_ctx_fdget(fd) })?))
++    }
++
++    /// Only called by our hardware IRQ handler, not an eventfd wake callback.
++    pub(super) fn signal_from_irq(&self) {
++        // SAFETY: self holds a reference; the IRQ handler cannot recursively
++        // signal eventfds through this driver (no eventfd wait callbacks).
++        unsafe { bindings::eventfd_signal_mask(self.0, 0) };
++    }
++}
++
++impl Drop for EventFd {
++    fn drop(&mut self) {
++        // SAFETY: releases exactly the reference acquired by fdget.
++        unsafe { bindings::eventfd_ctx_put(self.0) };
++    }
++}
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index 7c941b309..d91de7086 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -53,6 +53,7 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/errname.h>
+ #include <linux/ethtool.h>
++#include <linux/eventfd.h>
+ #include <linux/fdtable.h>
+ #include <linux/file.h>
+ #include <linux/firmware.h>

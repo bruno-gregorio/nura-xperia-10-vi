@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=49
+pkgrel=50
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -40,102 +40,29 @@ makedepends="
 
 _config="config-$_flavor.$arch"
 
-# A stock kernel.org tarball plus our series, rather than a fork on a git
-# host. There is no fork: the work only exists as patches here, and keeping
-# the base a released tarball is what makes "based on 6.18.55" checkable by
-# someone who has never seen this repository.
+# A stock kernel.org tarball plus our patches, rather than a fork on a git
+# host: keeping the base a released tarball is what makes "based on 6.18.55"
+# checkable by someone who has never seen this repository.
 #
-# sm6450-mainline.patch is the whole series squashed, written by
-# scripts/sync-kernel-patches.sh out of the sm6450 branch in out/linux.
-# kernel/patches/ in this repository has the same change one commit per
-# patch; that is the copy to read, and the one that goes to the lists.
+# The patches are three layers, each one diff that
+# scripts/sync-kernel-patches.sh squashes out of a branch in out/linux.
+# kernel/ in this repository has the same layers one commit per patch, with
+# their reasoning; read those, not these.
 #
-# bringup-milestones.patch is not part of that series and never will be. It
-# is a debugging instrument for a board with no console: inert unless
-# pmos.milestone is on the command line, and with it, it writes how far
-# start_kernel and kernel_init got into panic_timeout, which the A/B retry
-# counter turns into seconds on the host. docs/05-status.md has the decode.
-# Drop it once the kernel reaches /init.
-#
-# backport-*.patch are upstream commits this base predates, carried
-# unchanged apart from context: the Gunyah watchdog (07b9712339e3 and
-# ca316e145c35, both in mainline since 2026). The OS runs as a Gunyah VM on
-# this SoC and may not touch the MMIO watchdog, so this is the only watchdog
-# it has. They are not ours and do not go into kernel/patches/.
-#
-# backport-0003 and backport-0004 are the panel, a Samsung SOFEF01-M driving
-# an AMS605DK01: Marijn Suijten's binding, in mainline as 722f0707782b, and
-# his driver as posted (v2, reviewed, not merged when this was written).
-# sofef01-ams605dk01-vci-supply.patch is ours on top of that binding: it lets
-# the AMS605DK01 have the vci supply the Xperia 10 VI's panel has. It belongs
-# with his series, not ours, so it goes to him rather than to the lists on
-# its own. bringup-sofef01-pdx246-flm.patch sends this phone's own FLM
-# setting, 8f 27 27 where the driver has the Xperia 10 V's 8f 27 25, keyed on
-# the machine compatible until it is known whether the difference matters.
-#
-# bringup-gunyah-wdt-start-at-boot.patch is ours, sits on top of them, and is
-# another instrument that never goes upstream: with
-# gunyah_wdt.start_at_boot=1 the watchdog starts at probe and the watchdog
-# core feeds it until userspace takes over, so a kernel that hangs is reset by
-# the hypervisor instead of waiting for someone to hold the buttons.
-#
-# bringup-gunyah-wdt-smccc-1-0.patch is ours too. qcom_scm registers the
-# watchdog only once the hypervisor has answered the SMCCC vendor UID query
-# with Gunyah's UUID, and makes that query with arm_smccc_1_1_invoke(), which
-# below SMCCC v1.1 fails without calling anything. This firmware reports
-# v1.0, so the watchdog was never registered. The patch asks again with a
-# v1.0 call, and qcom_scm.force_gunyah_wdt=1 skips the question for the case
-# where the hypervisor does not answer it either.
-#
-# backport-0005 to backport-0007 are the touchscreen, a FocalTech FT3519T:
-# Yedaya Katsman's FT3518 binding and driver entry (9b352327add1 and
-# 5383e76483dc) and Bhushan Shah's FT3519 binding, which falls back to the
-# FT3518 (731c634ea95e). All three are in mainline since 2026, and edt-ft5x06
-# needs nothing else for this chip.
-#
-# backport-0008 is Alexander Koskovich's fix for A7xx GPUs on SoCs without an
-# LLCC, as posted (v7, reviewed, not merged when this was written), renamed
-# back to 6.18's llc_mmio. Without it drm/msm leaves an error pointer where
-# the cx_mem mapping should be, and the A710's first resume faults reading
-# CX_MISC_TCM_RET_CNTL through it (round 69 in docs/05-status.md).
-#
-# backport-0009 is Mohammad Rafi Shaik's MI2S clock control for
-# q6apm-lpass-dais, cc8495c1d45a in linux-next, with the one hunk that
-# touched 6.18's q6i2s_ops redone by hand and the SENARY MI2S ports, which
-# 6.18's bindings do not have yet, left out. The speaker amplifiers take their
-# I2S bit clock from the SoC, and without it nothing turns that clock on.
-# Our sc8280xp change uses its LPAIF_MI2S_BCLK.
-#
-# backport-0010 is Srinivas Kandagatla's port limit check, d49ee8faefec in
-# linux-next, with USB_RX standing in for the SENARY MI2S ports 6.18 lacks.
-# 6.18 sizes the q6apm DAI arrays at 127 entries, and QUINARY_MI2S_RX, the
-# speaker port, is number 127.
+# - backports.patch: upstream commits and postings this base predates, each
+#   with its author and origin (kernel/backports/).
+# - sm6450-mainline.patch: the SoC and board series for upstream
+#   (kernel/patches/).
+# - pdx246-bringup.patch: what does not go upstream as is: the bootloader's
+#   ids, a USB PHY workaround, the panel's FLM setting, the QSEECOM TEE and
+#   fingerprint drivers, and the Hi-846 modules' stock programs
+#   (kernel/bringup/).
 source="
 	https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$pkgver.tar.xz
 	$_config
+	backports.patch
 	sm6450-mainline.patch
-	backport-0001-firmware-qcom-scm-Register-gunyah-watchdog-device.patch
-	backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
-	bringup-milestones.patch
-	bringup-gunyah-wdt-start-at-boot.patch
-	bringup-gunyah-wdt-smccc-1-0.patch
-	backport-0003-dt-bindings-display-panel-Describe-Samsung-SOFEF01-M-DDIC.patch
-	backport-0004-drm-panel-Add-panel-driver-for-Samsung-SOFEF01-DDIC.patch
-	sofef01-ams605dk01-vci-supply.patch
-	bringup-sofef01-pdx246-flm.patch
-	backport-0005-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3518.patch
-	backport-0006-Input-edt-ft5x06-add-support-for-FocalTech-FT3518.patch
-	backport-0007-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3519.patch
-	bringup-dwc3-qcom-phy-reinit.patch
-	backport-0008-drm-msm-adreno-set-cx_misc_mmio-regardless-of-LLCC.patch
-	backport-0009-ASoC-qcom-q6apm-lpass-dais-Add-MI2S-clock-control.patch
-	backport-0010-ASoC-qcom-common-validate-cpu-dai-id-during-parsing.patch
-	bringup-qseecom-tee.patch
-	bringup-qseecom-app-log.patch
-	bringup-egisfp-rust.patch
-	bringup-rust-irq-cfi.patch
-	bringup-rmtfs-memory.patch
-	bringup-hi846-pdx246.patch
+	pdx246-bringup.patch
 "
 builddir="$srcdir/linux-$pkgver"
 
@@ -190,28 +117,8 @@ package() {
 
 sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
-e75f8ea2c6af2f41cf44e6346ab6961600890f066011b424359c642797b616efdd887f2a8f879ab940c854e1f0886818fd97fce4d859db497b69b583167f8012  config-postmarketos-qcom-sm6450.aarch64
-a26a187766df80a9b585174072f8689067846cd60891d5347c18b1c17b7c1e24eb8bb4cf1c0bb6aa58c3ab1c14e371bded49657c075900844d78f1d4da623cf4  sm6450-mainline.patch
-8a668e14d1a656a8843aabc427fa930b8976f120fcdabb4042c17a4c4aeee7518dcc2403b6f8090a633ff741b0766ece418d47ce603401f73407df2d94d19b26  backport-0001-firmware-qcom-scm-Register-gunyah-watchdog-device.patch
-c008b7cf41b8820bf26deb4fef5b8e68d093e88106eeda58b4828f4f7ac031a6374e0815f1d4a72e01ea03cf42070285455d7720ff382c08d88d4163d25bff77  backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
-693ed8dff51fabd84fcabe6b579383bfcdc817687122f9bb43d9257d6e27ccc83979acdd4754718336d8fe1e3bf2375a41007f56ccdb7fbcd1549e19eeb2f760  bringup-milestones.patch
-14abdadc4cc557639c31735477fbffed1be4d4844ed273d8737fc5daf6227d846d8916b6debca6520d8add3bff4e2f8d7738fcc8755d9d49d8ad4f85486045ab  bringup-gunyah-wdt-start-at-boot.patch
-e8470a76d0bc049cb8aceb3194bd7e3be0f39b32cdf8c5499ce011bf09f9d638e9fb3ddf3433981e1b742804ec717e50dc99c4a2dbd0ac6a9adb77ee7d4f9586  bringup-gunyah-wdt-smccc-1-0.patch
-6314419b81b87040451b1c4a05def03ab0738d2abf37dba8db00a1c9d1a6d8b4a144572816d62dbb23c8b7ac5b0f52af3b5356060af7dad276c99daaa0bc2360  backport-0003-dt-bindings-display-panel-Describe-Samsung-SOFEF01-M-DDIC.patch
-7554cfbf19626ba607ad9f02156310fdc24881fd6f68a06e60eb7f851757000d4f5eb7a92a50ab503523c8044a01d6beefc291a6c90a494480ccfdf806912cc6  backport-0004-drm-panel-Add-panel-driver-for-Samsung-SOFEF01-DDIC.patch
-3102412ba15f4ab99f22e39471ed6ab34d9901ae127978006e1151d3ce78dc8071a53bfe303853e7c5b5f017812cd996087250abaa1c8ef5f46d3a4066f9154e  sofef01-ams605dk01-vci-supply.patch
-19f31d4db1f736496984a20657c9d6a7936b7e2d5fabf420068b3ace027c29a2795a153f78c7b2cbec75877949aa6e1edb6310c0875aa51832a3a5b192daa421  bringup-sofef01-pdx246-flm.patch
-b7d0924b38f1601d5cb0640b6ab53dbbcc87ed420bbf179df8fd413bbca635e52df87b34c11d6ea08e08f4bfbaa46aed6b345d8e08335693be47d7a69e074e15  backport-0005-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3518.patch
-a4307c5157f745f2824069b0d32515866cdb631803d0aa4e3bbb4e4d1d21ffcb952d19ff0424fb322bb56f2f2c1369c237750f97f0e8647fcf2728a2ee428d4d  backport-0006-Input-edt-ft5x06-add-support-for-FocalTech-FT3518.patch
-9a43fa3048b8589d3738a45acc53c981e27fad585157a43c01594d69c4f6872459e3bf54cac08670f25c06f65167ca5474766562bd3a4104696c30e362514ebd  backport-0007-dt-bindings-input-edt-ft5x06-Add-FocalTech-FT3519.patch
-0ee1b6035876d58d497f1a8ac8489263049e301b1bbd683ec4aff26677b31c523888813cb983f00dd82113be9981651b5a0287d833fd31b99099b82232923751  bringup-dwc3-qcom-phy-reinit.patch
-ecb3c87131cf1082accfc31594d2c6728539dcfcdcc6bf3d383bb930036a89535b8ae68519a639fb1836ca1664fbead07aefdc93e5176d8188db57f778deac13  backport-0008-drm-msm-adreno-set-cx_misc_mmio-regardless-of-LLCC.patch
-eed4b432c128ddfabef55c6041ff5a38ac0305e146f497618f05c6b9b9f9ca4b18c87499fb48042ee8f8c0d2a80d0e75cbc5a3965dab747fc715ff3b4071a104  backport-0009-ASoC-qcom-q6apm-lpass-dais-Add-MI2S-clock-control.patch
-20088d456f0e2334a15f346e2df73d43ee85a4f3319060353ea3bc792d4317034308b30d00cc02a859a5a9e7c674eb6a11aa6403a355757eddc88c773e49f6a1  backport-0010-ASoC-qcom-common-validate-cpu-dai-id-during-parsing.patch
-053210ce5247585e7a2c4ab1209ea91e3b1aa2f03fdf0dd7ffa96f2364ca18773114757024e577ba9cf1966e3e29aa81abd1611a7fa41e2618b786721ab1d3a6  bringup-qseecom-tee.patch
-2767c38a6e654e2234db0bde72679c441f96402b1d57eb3dd726174a88c50ef482a4250d8295295eb8f2ee2812ba613f6ebcea81ca3f50697471f3de93bb1a2d  bringup-qseecom-app-log.patch
-c449d03636ee41055c3c8e75c4e38a5ee151887d287e997ad0cf0827e11da96b8e856c6ab3c016489fdb89e87c23c9910efd29a93188a648bcb53ceb73013dcc  bringup-egisfp-rust.patch
-37467904b7bf91dda07525665b258d949f8fa878f74ba2ae8ff8cf4c608ff413aa7b89688b29017df795e00c6e5b099539429bfbcf1c88e11119eb782619e2ef  bringup-rust-irq-cfi.patch
-3fd3e97c8a921201570fa530a49e9a552e8c4cf2c8e4a7ca29f76f1c71c1991ce09dec02ee4b6d7fd0bf7d626b5f9783fd9ceff77573180fc4a4cfe6a6d5f233  bringup-rmtfs-memory.patch
-a40ac6447b3bcb136d57f4af10d6d361fde92109977dd4cd316e52fd8901c7dd360c80ade282dc84e4e21f3ceed29bb6a2314a9103eed47956e2128ebac03076  bringup-hi846-pdx246.patch
+0c4dd04a66c92368c0f9dcc0340d9f0c83f7a52dec364e2912a61280cdc3199032617a80b43c2af873c0324800c54ae85c3d67b935486a2c6fb5af4494f9632c  config-postmarketos-qcom-sm6450.aarch64
+26c869a6b5018e6d56921f711c06439faa3f9f4c45c7affb3abaee1b28dc5ba8443afada8f730161aee3a2805b8f75046ad52e7c0988e6e2b8e0204c7be63859  backports.patch
+9a3fbcb89b3041ff52d998faa2a2c9ae2b68264c253ca140fbd545bff1c0a9988eea42b7bd94b245aa1e1daaefaf8d98cb2792efa7bd24ba9a83ec5a68b3c1a0  sm6450-mainline.patch
+5edf2f6e4da73a51c949606daaa250484a12a13d3cf582c3ce5c21e4e6b2f32b239d89117046d045c616ed101dcb1d51aa4cda5471eaebe45fedc94e3eecdb3b  pdx246-bringup.patch
 "

@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 15 Oct 2026 16:56:13 -0300
+Subject: [PATCH] rust: pinctrl: add consumer handles
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add a counted reference to a device's pin control handle, with lookup
+and selection of its named states. A looked-up state borrows the handle
+it belongs to, so it can only be selected through that handle and only
+while the handle is held.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ rust/bindings/bindings_helper.h |  1 +
+ rust/kernel/lib.rs              |  2 +
+ rust/kernel/pinctrl.rs          | 76 +++++++++++++++++++++++++++++++++
+ 3 files changed, 79 insertions(+)
+ create mode 100644 rust/kernel/pinctrl.rs
+
+diff --git a/rust/bindings/bindings_helper.h b/rust/bindings/bindings_helper.h
+index 0b8003be7..7c941b309 100644
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -69,6 +69,7 @@
+ #include <linux/pci.h>
+ #include <linux/phy.h>
+ #include <linux/pid_namespace.h>
++#include <linux/pinctrl/consumer.h>
+ #include <linux/platform_device.h>
+ #include <linux/pm_opp.h>
+ #include <linux/poll.h>
+diff --git a/rust/kernel/lib.rs b/rust/kernel/lib.rs
+index a603556c7..63e28a946 100644
+--- a/rust/kernel/lib.rs
++++ b/rust/kernel/lib.rs
+@@ -119,6 +119,8 @@
+ #[cfg(CONFIG_PCI)]
+ pub mod pci;
+ pub mod pid_namespace;
++#[cfg(CONFIG_PINCTRL)]
++pub mod pinctrl;
+ pub mod platform;
+ pub mod prelude;
+ pub mod print;
+diff --git a/rust/kernel/pinctrl.rs b/rust/kernel/pinctrl.rs
+new file mode 100644
+index 000000000..a5cba45d1
+--- /dev/null
++++ b/rust/kernel/pinctrl.rs
+@@ -0,0 +1,76 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! Pin control consumer handles.
++//!
++//! C header: [`include/linux/pinctrl/consumer.h`](srctree/include/linux/pinctrl/consumer.h)
++
++use crate::{
++    bindings,
++    device::Device,
++    error::{from_err_ptr, to_result, Result},
++    prelude::*,
++};
++use core::ptr::NonNull;
++
++/// A counted reference to the pin control handle of a device.
++///
++/// The reference is not device-managed; it is dropped with this value.
++///
++/// # Invariants
++///
++/// `self.0` was acquired by `pinctrl_get` and has not been released.
++pub struct Pinctrl(NonNull<bindings::pinctrl>);
++
++// SAFETY: A handle is not tied to the task that acquired it. It is not `Sync`:
++// selecting states of one handle concurrently is not serialised.
++unsafe impl Send for Pinctrl {}
++
++impl Pinctrl {
++    /// Takes a reference to the pin control handle of `dev`.
++    pub fn get(dev: &Device) -> Result<Self> {
++        // SAFETY: `dev` is a valid device.
++        let p = from_err_ptr(unsafe { bindings::pinctrl_get(dev.as_raw()) })?;
++        // INVARIANT: `pinctrl_get` succeeded; it reports failure only by error pointer.
++        NonNull::new(p).map(Self).ok_or(ENODEV)
++    }
++
++    /// Looks up the state that firmware names `name`.
++    pub fn lookup_state(&self, name: &CStr) -> Result<State<'_>> {
++        // SAFETY: By the type invariant, `self.0` is valid; `name` is NUL-terminated.
++        let state = from_err_ptr(unsafe {
++            bindings::pinctrl_lookup_state(self.0.as_ptr(), name.as_char_ptr())
++        })?;
++        // INVARIANT: the state belongs to `self`, which the borrow keeps alive.
++        Ok(State {
++            pinctrl: self,
++            state: NonNull::new(state).ok_or(ENODEV)?,
++        })
++    }
++}
++
++impl Drop for Pinctrl {
++    fn drop(&mut self) {
++        // SAFETY: By the type invariant, this releases the reference once.
++        unsafe { bindings::pinctrl_put(self.0.as_ptr()) };
++    }
++}
++
++/// A state of a [`Pinctrl`] handle.
++///
++/// # Invariants
++///
++/// `state` belongs to `pinctrl`.
++pub struct State<'a> {
++    pinctrl: &'a Pinctrl,
++    state: NonNull<bindings::pinctrl_state>,
++}
++
++impl State<'_> {
++    /// Applies the mux and configuration of this state to its pins.
++    pub fn select(&self) -> Result {
++        // SAFETY: By the type invariants, the handle is valid and owns the state.
++        to_result(unsafe {
++            bindings::pinctrl_select_state(self.pinctrl.0.as_ptr(), self.state.as_ptr())
++        })
++    }
++}

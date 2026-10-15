@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 15 Oct 2026 16:28:28 -0300
+Subject: [PATCH] rust: irq: Keep the KCFI type of irqreturn on handler
+ callbacks
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Not for upstream as is.
+
+bindgen turns C's enum irqreturn into c_uint. The two share an ABI but
+not a KCFI type identity, even with integer normalisation, so with
+CONFIG_CFI the C core's indirect call into a Rust IRQ handler fails the
+type check.
+
+Return a transparent wrapper that carries the enum's CFI encoding, and
+cast the handler to bindgen's type only where it is handed to
+request_irq() and request_threaded_irq().
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ rust/kernel/irq/request.rs | 38 +++++++++++++++++++++++++++++---------
+ rust/kernel/lib.rs         |  1 +
+ 2 files changed, 30 insertions(+), 9 deletions(-)
+
+diff --git a/rust/kernel/irq/request.rs b/rust/kernel/irq/request.rs
+index 2ceeaeb05..b3699a8ba 100644
+--- a/rust/kernel/irq/request.rs
++++ b/rust/kernel/irq/request.rs
+@@ -16,6 +16,26 @@
+ use crate::str::CStr;
+ use crate::sync::Arc;
+ 
++// bindgen represents C enum irqreturn as c_uint. Although ABI-compatible,
++// those types have distinct KCFI identities, even with integer normalization.
++// Preserve the C enum identity on callbacks; the FFI cast below compensates
++// only for bindgen's erased enum type, without bypassing any CFI checks.
++#[repr(transparent)]
++#[cfi_encoding = "9irqreturn"]
++struct CIRQReturn(c_uint);
++
++fn c_irq_handler(
++    callback: unsafe extern "C" fn(i32, *mut c_void) -> CIRQReturn,
++) -> bindings::irq_handler_t {
++    // SAFETY: CIRQReturn has the same layout and ABI as C enum irqreturn,
++    // which bindgen aliases to c_uint. This pointer is handed only to C's
++    // request_irq/request_threaded_irq; C calls it with the real enum type.
++    Some(unsafe { core::mem::transmute::<
++        unsafe extern "C" fn(i32, *mut c_void) -> CIRQReturn,
++        unsafe extern "C" fn(i32, *mut c_void) -> c_uint,
++    >(callback) })
++}
++
+ /// The value that can be returned from a [`Handler`] or a [`ThreadedHandler`].
+ #[repr(u32)]
+ pub enum IrqReturn {
+@@ -222,7 +242,7 @@ pub fn new<'a>(
+                         to_result(unsafe {
+                             bindings::request_irq(
+                                 request.irq,
+-                                Some(handle_irq_callback::<T>),
++                                c_irq_handler(handle_irq_callback::<T>),
+                                 flags.into_inner(),
+                                 name.as_char_ptr(),
+                                 this.as_ptr().cast::<c_void>(),
+@@ -264,14 +284,14 @@ pub fn synchronize(&self, dev: &Device<Bound>) -> Result {
+ unsafe extern "C" fn handle_irq_callback<T: Handler + 'static>(
+     _irq: i32,
+     ptr: *mut c_void,
+-) -> c_uint {
++) -> CIRQReturn {
+     // SAFETY: `ptr` is a pointer to `Registration<T>` set in `Registration::new`
+     let registration = unsafe { &*(ptr as *const Registration<T>) };
+     // SAFETY: The irq callback is removed before the device is unbound, so the fact that the irq
+     // callback is running implies that the device has not yet been unbound.
+     let device = unsafe { registration.inner.device().as_bound() };
+ 
+-    T::handle(&registration.handler, device) as c_uint
++    CIRQReturn(T::handle(&registration.handler, device) as c_uint)
+ }
+ 
+ /// The value that can be returned from [`ThreadedHandler::handle`].
+@@ -443,8 +463,8 @@ pub fn new<'a>(
+                         to_result(unsafe {
+                             bindings::request_threaded_irq(
+                                 request.irq,
+-                                Some(handle_threaded_irq_callback::<T>),
+-                                Some(thread_fn_callback::<T>),
++                                c_irq_handler(handle_threaded_irq_callback::<T>),
++                                c_irq_handler(thread_fn_callback::<T>),
+                                 flags.into_inner(),
+                                 name.as_char_ptr(),
+                                 this.as_ptr().cast::<c_void>(),
+@@ -486,14 +506,14 @@ pub fn synchronize(&self, dev: &Device<Bound>) -> Result {
+ unsafe extern "C" fn handle_threaded_irq_callback<T: ThreadedHandler + 'static>(
+     _irq: i32,
+     ptr: *mut c_void,
+-) -> c_uint {
++) -> CIRQReturn {
+     // SAFETY: `ptr` is a pointer to `ThreadedRegistration<T>` set in `ThreadedRegistration::new`
+     let registration = unsafe { &*(ptr as *const ThreadedRegistration<T>) };
+     // SAFETY: The irq callback is removed before the device is unbound, so the fact that the irq
+     // callback is running implies that the device has not yet been unbound.
+     let device = unsafe { registration.inner.device().as_bound() };
+ 
+-    T::handle(&registration.handler, device) as c_uint
++    CIRQReturn(T::handle(&registration.handler, device) as c_uint)
+ }
+ 
+ /// # Safety
+@@ -502,12 +522,12 @@ pub fn synchronize(&self, dev: &Device<Bound>) -> Result {
+ unsafe extern "C" fn thread_fn_callback<T: ThreadedHandler + 'static>(
+     _irq: i32,
+     ptr: *mut c_void,
+-) -> c_uint {
++) -> CIRQReturn {
+     // SAFETY: `ptr` is a pointer to `ThreadedRegistration<T>` set in `ThreadedRegistration::new`
+     let registration = unsafe { &*(ptr as *const ThreadedRegistration<T>) };
+     // SAFETY: The irq callback is removed before the device is unbound, so the fact that the irq
+     // callback is running implies that the device has not yet been unbound.
+     let device = unsafe { registration.inner.device().as_bound() };
+ 
+-    T::handle_threaded(&registration.handler, device) as c_uint
++    CIRQReturn(T::handle_threaded(&registration.handler, device) as c_uint)
+ }
+diff --git a/rust/kernel/lib.rs b/rust/kernel/lib.rs
+index 3dd7bebe7..8908abbea 100644
+--- a/rust/kernel/lib.rs
++++ b/rust/kernel/lib.rs
+@@ -12,6 +12,7 @@
+ //! do so first instead of bypassing this crate.
+ 
+ #![no_std]
++#![feature(cfi_encoding)]
+ //
+ // Please see https://github.com/Rust-for-Linux/linux/issues/2 for details on
+ // the unstable features in use.

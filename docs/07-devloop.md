@@ -217,9 +217,10 @@ actually does, and it corrects three of the guesses.
 - **`scripts/clkmap.py`** — translates a vendor clock id into the mainline
   define name, because the two headers share names and not numbers. Anything
   copied out of the stock device tree goes through it.
-- **`scripts/sync-kernel-patches.sh`** — exports the mainline branch out of
-  the gitignored `out/linux` into `kernel/patches/` and into the kernel
-  aport. `--check` fails a round that would build from a stale export.
+- **`scripts/sync-kernel-patches.sh`** — exports the three kernel branches,
+  `backports`, `sm6450` and `pdx246`, out of the gitignored `out/linux` into
+  `kernel/` and into the kernel aport. `--check` fails a round that would
+  build from a stale export.
 
 ### Three corrections to the plan above
 
@@ -292,8 +293,8 @@ Two things do change:
   one that applies.
 - The kernel source of truth moved. Downstream builds from a GitHub tarball
   with no patches of ours; mainline builds from a kernel.org tarball plus
-  `sm6450-mainline.patch`, which `scripts/sync-kernel-patches.sh` writes out
-  of `out/linux`. A round that changes the kernel therefore runs that script
+  one squashed patch per layer, which `scripts/sync-kernel-patches.sh` writes
+  out of `out/linux`. A round that changes the kernel therefore runs that script
   and then `scripts/pmb checksum linux-postmarketos-qcom-sm6450` before
   anything else, and `sync-kernel-patches.sh --check` is a Tier 0 check: it
   fails if the aport would build from a series that does not match the tree

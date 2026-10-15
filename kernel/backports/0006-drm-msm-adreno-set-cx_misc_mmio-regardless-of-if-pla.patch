@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alexander Koskovich <akoskovich@pm.me>
+Date: Sun, 11 Oct 2026 19:05:20 -0300
+Subject: [PATCH] drm/msm/adreno: set cx_misc_mmio regardless of if platform
+ has LLCC
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Platforms without a LLCC (e.g. milos) still need to be able to read and
+write to the cx_mem region. Previously if LLCC slices were unavailable
+the cx_misc_mmio mapping was overwritten with ERR_PTR, causing a crash
+when the GMU later accessed cx_mem.
+
+Move the cx_misc_mmio mapping out of a6xx_llc_slices_init() into
+a6xx_gpu_init() so that cx_mem mapping is independent of LLCC.
+
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Reviewed-by: Akhil P Oommen <akhilpo@oss.qualcomm.com>
+Signed-off-by: Alexander Koskovich <akoskovich@pm.me>
+Link: https://lkml.indiana.edu/2605.3/07518.html
+[Bruno: backported to 6.18, where cx_misc_mmio is still called
+ llc_mmio. SM6450 has no LLCC either, and its A710 faulted in
+ a6xx_gmu_resume() reading CX_MISC_TCM_RET_CNTL through the ERR_PTR.]
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ drivers/gpu/drm/msm/adreno/a6xx_gpu.c | 39 ++++++++++++---------------
+ 1 file changed, 17 insertions(+), 22 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/adreno/a6xx_gpu.c b/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
+index d1eaa849b..e1af40ab8 100644
+--- a/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
++++ b/drivers/gpu/drm/msm/adreno/a6xx_gpu.c
+@@ -1950,7 +1950,7 @@ static void a6xx_llc_activate(struct a6xx_gpu *a6xx_gpu)
+ 	struct msm_gpu *gpu = &adreno_gpu->base;
+ 	u32 cntl1_regval = 0;
+ 
+-	if (IS_ERR(a6xx_gpu->llc_mmio))
++	if (IS_ERR_OR_NULL(a6xx_gpu->llc_slice) && IS_ERR_OR_NULL(a6xx_gpu->htw_llc_slice))
+ 		return;
+ 
+ 	if (!llcc_slice_activate(a6xx_gpu->llc_slice)) {
+@@ -2009,7 +2009,7 @@ static void a7xx_llc_activate(struct a6xx_gpu *a6xx_gpu)
+ 	struct adreno_gpu *adreno_gpu = &a6xx_gpu->base;
+ 	struct msm_gpu *gpu = &adreno_gpu->base;
+ 
+-	if (IS_ERR(a6xx_gpu->llc_mmio))
++	if (IS_ERR_OR_NULL(a6xx_gpu->llc_slice) && IS_ERR_OR_NULL(a6xx_gpu->htw_llc_slice))
+ 		return;
+ 
+ 	if (!llcc_slice_activate(a6xx_gpu->llc_slice)) {
+@@ -2046,31 +2046,12 @@ static void a6xx_llc_slices_destroy(struct a6xx_gpu *a6xx_gpu)
+ static void a6xx_llc_slices_init(struct platform_device *pdev,
+ 		struct a6xx_gpu *a6xx_gpu, bool is_a7xx)
+ {
+-	struct device_node *phandle;
+-
+ 	/* No LLCC on non-RPMh (and by extension, non-GMU) SoCs */
+ 	if (adreno_has_gmu_wrapper(&a6xx_gpu->base))
+ 		return;
+ 
+-	/*
+-	 * There is a different programming path for A6xx targets with an
+-	 * mmu500 attached, so detect if that is the case
+-	 */
+-	phandle = of_parse_phandle(pdev->dev.of_node, "iommus", 0);
+-	a6xx_gpu->have_mmu500 = (phandle &&
+-		of_device_is_compatible(phandle, "arm,mmu-500"));
+-	of_node_put(phandle);
+-
+-	if (is_a7xx || !a6xx_gpu->have_mmu500)
+-		a6xx_gpu->llc_mmio = msm_ioremap(pdev, "cx_mem");
+-	else
+-		a6xx_gpu->llc_mmio = NULL;
+-
+ 	a6xx_gpu->llc_slice = llcc_slice_getd(LLCC_GPU);
+ 	a6xx_gpu->htw_llc_slice = llcc_slice_getd(LLCC_GPUHTW);
+-
+-	if (IS_ERR_OR_NULL(a6xx_gpu->llc_slice) && IS_ERR_OR_NULL(a6xx_gpu->htw_llc_slice))
+-		a6xx_gpu->llc_mmio = ERR_PTR(-EINVAL);
+ }
+ 
+ static int a7xx_cx_mem_init(struct a6xx_gpu *a6xx_gpu)
+@@ -2633,7 +2614,7 @@ struct msm_gpu *a6xx_gpu_init(struct drm_device *dev)
+ 	struct msm_drm_private *priv = dev->dev_private;
+ 	struct platform_device *pdev = priv->gpu_pdev;
+ 	struct adreno_platform_config *config = pdev->dev.platform_data;
+-	struct device_node *node;
++	struct device_node *node, *phandle;
+ 	struct a6xx_gpu *a6xx_gpu;
+ 	struct adreno_gpu *adreno_gpu;
+ 	struct msm_gpu *gpu;
+@@ -2669,6 +2650,20 @@ struct msm_gpu *a6xx_gpu_init(struct drm_device *dev)
+ 
+ 	a6xx_llc_slices_init(pdev, a6xx_gpu, is_a7xx);
+ 
++	/*
++	 * There is a different programming path for A6xx targets with an
++	 * mmu500 attached, so detect if that is the case
++	 */
++	phandle = of_parse_phandle(pdev->dev.of_node, "iommus", 0);
++	a6xx_gpu->have_mmu500 = (phandle &&
++		of_device_is_compatible(phandle, "arm,mmu-500"));
++	of_node_put(phandle);
++
++	if (is_a7xx || !a6xx_gpu->have_mmu500)
++		a6xx_gpu->llc_mmio = msm_ioremap(pdev, "cx_mem");
++	else
++		a6xx_gpu->llc_mmio = NULL;
++
+ 	ret = a6xx_set_supported_hw(&pdev->dev, config->info);
+ 	if (ret) {
+ 		a6xx_llc_slices_destroy(a6xx_gpu);

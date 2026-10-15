@@ -25,11 +25,11 @@ known to be usable.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../sm6450-sony-xperia-columbia-pdx246.dts    | 217 ++++++++++++++++++
- 1 file changed, 217 insertions(+)
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 222 ++++++++++++++++++
+ 1 file changed, 222 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 45d513710..0f748b1b2 100644
+index 5fe666dbf..c7c0165c8 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -9,6 +9,7 @@
@@ -73,9 +73,9 @@ index 45d513710..0f748b1b2 100644
  	chosen {
  		stdout-path = "serial0:115200n8";
  	};
-@@ -104,6 +131,75 @@ ts_avdd: regulator-ts-avdd {
- 		gpio = <&tlmm 103 GPIO_ACTIVE_HIGH>;
- 		enable-active-high;
+@@ -116,6 +143,75 @@ rdtag@ffdc0000 {
+ 			no-map;
+ 		};
  	};
 +
 +	/*
@@ -149,15 +149,20 @@ index 45d513710..0f748b1b2 100644
  };
  
  &apps_rsc {
-@@ -342,6 +438,25 @@ &gpu_zap_shader {
+@@ -354,6 +450,30 @@ &gpu_zap_shader {
  	firmware-name = "qcom/sm6450/Sony/columbia/a710_zap.mbn";
  };
  
 +&i2c0 {
 +	status = "okay";
 +
++	/*
++	 * The vendor firmware carries profiles for both the AW88261 and the
++	 * AW88263, so either may be fitted; the unit this was brought up on
++	 * answers with the AW88263's chip ID.
++	 */
 +	amp_top: audio-codec@34 {
-+		compatible = "awinic,aw88261";
++		compatible = "awinic,aw88263";
 +		reg = <0x34>;
 +
 +		reset-gpios = <&tlmm 26 GPIO_ACTIVE_LOW>;
@@ -175,7 +180,7 @@ index 45d513710..0f748b1b2 100644
  &i2c9 {
  	status = "okay";
  
-@@ -362,6 +477,10 @@ touchscreen@38 {
+@@ -374,6 +494,10 @@ touchscreen@38 {
  	};
  };
  
@@ -186,7 +191,7 @@ index 45d513710..0f748b1b2 100644
  &mdss {
  	status = "okay";
  };
-@@ -440,6 +559,17 @@ &pon_resin {
+@@ -452,6 +576,17 @@ &pon_resin {
  	status = "okay";
  };
  
@@ -204,7 +209,7 @@ index 45d513710..0f748b1b2 100644
  &qupv3_id_0 {
  	status = "okay";
  };
-@@ -472,6 +602,10 @@ &remoteproc_wpss {
+@@ -484,6 +619,10 @@ &remoteproc_wpss {
  	status = "okay";
  };
  
@@ -212,10 +217,10 @@ index 45d513710..0f748b1b2 100644
 +	status = "okay";
 +};
 +
- &sdc2_off_state {
- 	sd-cd-pins {
- 		pins = "gpio107";
-@@ -502,7 +636,75 @@ &sdhc_2 {
+ &sdhc_2 {
+ 	cd-gpios = <&tlmm 107 GPIO_ACTIVE_HIGH>;
+ 	vmmc-supply = <&pm6150l_l9>;
+@@ -496,7 +635,75 @@ &sdhc_2 {
  	status = "okay";
  };
  
@@ -291,7 +296,7 @@ index 45d513710..0f748b1b2 100644
  	panel_reset_active: panel-reset-active-state {
  		pins = "gpio127";
  		function = "gpio";
-@@ -537,6 +739,17 @@ ts_reset_default: ts-reset-default-state {
+@@ -538,6 +745,17 @@ ts_reset_default: ts-reset-default-state {
  		drive-strength = <8>;
  		bias-pull-up;
  	};
@@ -309,7 +314,7 @@ index 45d513710..0f748b1b2 100644
  };
  
  &uart11 {
-@@ -610,6 +823,10 @@ &usb_1_hsphy {
+@@ -611,6 +829,10 @@ &usb_1_hsphy {
  	status = "okay";
  };
  

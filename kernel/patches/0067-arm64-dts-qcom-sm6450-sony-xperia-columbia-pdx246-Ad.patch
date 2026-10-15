@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Mon, 12 Oct 2026 12:33:11 -0300
+Subject: [PATCH] arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the
+ bottom amplifier
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The bottom speaker has an amplifier of its own on QUP0 I2C2, the top
+one's twin, held in reset by GPIO 27. The vendor firmware's profiles for
+its second channel put it on the right half of the stereo stream.
+
+The vendor kernel drives that bus through GPI DMA, sharing it with
+another execution environment. Its serial engine's FIFO is open, so this
+driver uses that instead, but the DMA engine the SoC's I2C controllers
+now name is enabled all the same.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+---
+ .../sm6450-sony-xperia-columbia-pdx246.dts    | 33 ++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index c7c0165c8..11b8e8c55 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -168,7 +168,7 @@ speaker-dai-link {
+ 			link-name = "Speaker Playback";
+ 
+ 			codec {
+-				sound-dai = <&amp_top>;
++				sound-dai = <&amp_top>, <&amp_bottom>;
+ 			};
+ 
+ 			cpu {
+@@ -442,6 +442,10 @@ pm6150l_bob: bob {
+ 	};
+ };
+ 
++&gpi_dma0 {
++	status = "okay";
++};
++
+ &gpu {
+ 	status = "okay";
+ };
+@@ -474,6 +478,26 @@ amp_top: audio-codec@34 {
+ 	};
+ };
+ 
++&i2c2 {
++	status = "okay";
++
++	/* Its twin on the bottom speaker, taking the stream's other channel. */
++	amp_bottom: audio-codec@34 {
++		compatible = "awinic,aw88263";
++		reg = <0x34>;
++
++		reset-gpios = <&tlmm 27 GPIO_ACTIVE_LOW>;
++
++		pinctrl-0 = <&amp_bottom_reset>;
++		pinctrl-names = "default";
++
++		awinic,audio-channel = <1>;
++		sound-name-prefix = "Bottom";
++
++		#sound-dai-cells = <0>;
++	};
++};
++
+ &i2c9 {
+ 	status = "okay";
+ 
+@@ -704,6 +728,13 @@ amp_top_reset: amp-top-reset-state {
+ 		bias-disable;
+ 	};
+ 
++	amp_bottom_reset: amp-bottom-reset-state {
++		pins = "gpio27";
++		function = "gpio";
++		drive-strength = <2>;
++		bias-disable;
++	};
++
+ 	panel_reset_active: panel-reset-active-state {
+ 		pins = "gpio127";
+ 		function = "gpio";

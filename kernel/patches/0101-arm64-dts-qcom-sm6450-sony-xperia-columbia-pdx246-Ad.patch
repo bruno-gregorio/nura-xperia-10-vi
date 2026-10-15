@@ -1,47 +1,54 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
-Date: Mon, 12 Oct 2026 15:17:13 -0300
+Date: Thu, 15 Oct 2026 16:43:13 -0300
 Subject: [PATCH] arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Add the
- main camera's focus
+ modem's rmtfs buffer
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
-The IMX582 module focuses with an AK7374 voice coil driver at 0x0f on the
-same CCI bus, powered from the camera PMIC's VAF rail. Describe it and
-link it to the sensor.
+The modem keeps its non-volatile data on the application processor's
+storage and reaches it through rmtfs, which needs a buffer shared with
+the modem. Stock allocates 0x280000 bytes for client 1 dynamically,
+below 4 GiB; do the same, with a guard page on either side.
 
 Signed-off-by: Bruno Gregório <accounts@bruno.pw>
 ---
- .../dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts   | 11 +++++++++++
- 1 file changed, 11 insertions(+)
+ .../qcom/sm6450-sony-xperia-columbia-pdx246.dts | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
 
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index cd2ca63e7..882bda8d7 100644
+index 5060237f9..5a162904c 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -482,6 +482,15 @@ &cci0 {
- };
+@@ -5,6 +5,7 @@
  
- &cci0_i2c0 {
-+	/* The main camera's focus. */
-+	cam_main_vcm: camera-lens@f {
-+		compatible = "asahi-kasei,ak7374";
-+		reg = <0x0f>;
-+
-+		vdd-supply = <&cam_main_vaf_2p8>;
-+		vio-supply = <&cam_vio_1p8>;
-+	};
-+
- 	/* The main camera. */
- 	camera@1a {
- 		compatible = "sony,imx582";
-@@ -500,6 +509,8 @@ camera@1a {
- 		pinctrl-0 = <&cam_mclk0_default &cam_main_reset>;
- 		pinctrl-names = "default";
+ /dts-v1/;
  
-+		lens-focus = <&cam_main_vcm>;
++#include <dt-bindings/firmware/qcom,scm.h>
+ #include <dt-bindings/gpio/gpio.h>
+ #include <dt-bindings/input/input.h>
+ #include <dt-bindings/leds/common.h>
+@@ -160,6 +161,22 @@ rdtag@ffdc0000 {
+ 			reg = <0x0 0xffdc0000 0x0 0x40000>;
+ 			no-map;
+ 		};
 +
- 		orientation = <1>;
- 		rotation = <270>;
++		/*
++		 * The modem's remote file system buffer. Stock allocates it
++		 * dynamically below 4 GiB, with no fixed address to copy.
++		 */
++		rmtfs_mem: rmtfs {
++			compatible = "qcom,rmtfs-mem";
++			size = <0x0 0x282000>;
++			alignment = <0x0 0x1000>;
++			alloc-ranges = <0x0 0x80000000 0x0 0x80000000>;
++			no-map;
++
++			qcom,client-id = <1>;
++			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
++			qcom,use-guard-pages;
++		};
+ 	};
  
+ 	/*

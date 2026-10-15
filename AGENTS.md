@@ -24,7 +24,8 @@ It began as a LineageOS port; see `docs/02-design.md` for why it changed, and
 
 ## Status
 
-Nothing has been run on the device. `docs/05-status.md` tracks what is verified
+The mainline kernel boots on the device, and kernel rounds are flashed to it
+through `scripts/try-kernel.sh`. `docs/05-status.md` tracks what is verified
 against sources, what is reasoned but untested, and what is an outright guess.
 Keep it honest and up to date; it is the only thing standing between this port
 and a bricked phone.

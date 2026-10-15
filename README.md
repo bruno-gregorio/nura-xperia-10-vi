@@ -1,9 +1,9 @@
 # postmarketOS for the Sony Xperia 10 VI (pdx246)
 
-An in-progress postmarketOS port, built from Sony's released 5.10 kernel.
-Nothing here has been run on the device yet — see
-[docs/05-status.md](docs/05-status.md) for exactly what is verified and what is
-still a guess.
+An in-progress postmarketOS port on our own mainline 6.18 kernel. It boots on
+the device into Plasma Mobile, and much of the hardware is still untested or
+guessed at — see [docs/05-status.md](docs/05-status.md) for exactly what is
+verified and what is not.
 
 ## The device
 
@@ -14,26 +14,24 @@ What this port targets, in the terms the rest of the docs use.
 - **SoC** — Qualcomm SM6450, Snapdragon 6 Gen 1, Qualcomm codename `parrot`
 - **GPU** — Adreno 710
 - **Display** — 6.1" OLED, 1080x2520
-- **Kernel** — Sony/Qualcomm downstream 5.10.269, Android GKI (`android12-5.10`)
+- **Kernel** — mainline 6.18 with our SM6450 series; Sony/Qualcomm downstream
+  5.10.269 (Android GKI, `android12-5.10`) as a reference
 - **pmOS device** — `sony-pdx246`
 
-## Why downstream and not mainline
+## Two kernels
 
 The kernel choice shapes everything else about this port, so it comes first.
 
-- **SM6450 has no mainline support** — there is no `sm6450.dtsi` in
-  `arch/arm64/boot/dts/qcom` and no clock, pinctrl or interconnect driver.
-  Sony's own mainline contributions stop at `sm8550` (Xperia 1 V) and `sm6375`
-  (Xperia 10 IV).
-- **Sony's released 5.10 kernel is the fastest way to a booting device** — so
-  that is what this port builds.
-- **The trade is deliberate** — it gets to a shell quickly, and the kernel work
-  is a maintenance dead end.
-- **Mainline is not "write it all from scratch"** — every per-SoC driver exists
-  as GPL source in the tarballs this port already downloads, and the sibling
-  SoC SM4450 is upstream and derived from the same vendor code. The blocker is
-  debuggability, not difficulty, which is why a console on the real device
-  comes first.
+- **Mainline is the point** — upstream Linux has no SM6450 support: no
+  `sm6450.dtsi` and no clock, pinctrl or interconnect driver. This port writes
+  it, as a series meant for the mailing lists, on the 6.18 stable line, and
+  uses no Android vendor modules.
+- **Sony's 5.10 kernel stays as a reference** — it started the port, because
+  it booted first, and it is kept as the fallback that shows how the hardware
+  behaves under the vendor's own drivers. Nothing new is built on it.
+- **The mainline kernel is three layers** — backports from newer kernels, the
+  series for upstream, and device bring-up that never goes upstream as is.
+  Each is a branch in the kernel tree and a directory under `kernel/`.
 
 ## Layout
 
@@ -45,7 +43,9 @@ aports/device/testing/device-sony-pdx246/   device package (deviceinfo, initfs m
 aports/device/testing/linux-sony-pdx246/    downstream kernel package (Sony 5.10)
 aports/device/testing/linux-postmarketos-qcom-sm6450/
                                             mainline kernel package (6.18 + our series)
-kernel/patches/                             the mainline series, one patch per commit
+kernel/backports/                           upstream commits 6.18 predates, one patch per commit
+kernel/patches/                             the SM6450 series for upstream, one patch per commit
+kernel/bringup/                             device bring-up that is not for upstream
 kernel/wip/                                 WIP topic branches not yet in the series
 patches/                                    fixes pmbootstrap needs to run rootless
 scripts/                                    bootstrap, pmbootstrap wrapper, aports sync, device probe, flashing
@@ -65,21 +65,22 @@ Every command runs inside the `pmport` distrobox container.
    distrobox enter pmport -- ./scripts/pmb init
    ```
 
-2. **Build the kernel.** There are two, chosen in `pmb init`: Sony's 5.10,
-   which boots and has UFS and display drivers, or our own mainline 6.18,
-   which is the point of the project. Build whichever one `pmb init` selected.
+2. **Build the kernel.** There are two, chosen in `pmb init`: our own
+   mainline 6.18, which is the point of the project, or Sony's 5.10, the
+   reference. Build whichever one `pmb init` selected.
 
    ```sh
    distrobox enter pmport -- ./scripts/pmb build linux-sony-pdx246
    distrobox enter pmport -- ./scripts/pmb build linux-postmarketos-qcom-sm6450
    ```
 
-   The mainline package builds a stock kernel.org tarball plus
-   `sm6450-mainline.patch`. That patch is generated, not edited: the work
-   lives on the `sm6450` branch in `out/linux`, and
-   `scripts/sync-kernel-patches.sh` writes it out both as that single diff and
-   as the reviewable series in `kernel/patches/`. Run it after every kernel
-   commit, then `./scripts/pmb checksum linux-postmarketos-qcom-sm6450`.
+   The mainline package builds a stock kernel.org tarball plus one squashed
+   patch per layer. Those patches are generated, not edited: the work lives on
+   the `backports`, `sm6450` and `pdx246` branches in `out/linux`, each built
+   on the one before, and `scripts/sync-kernel-patches.sh` writes every layer
+   out both as that single diff and as one patch per commit under `kernel/`.
+   Run it after every kernel commit, then
+   `./scripts/pmb checksum linux-postmarketos-qcom-sm6450`.
    Work not yet folded into the series sits on `sm6450-*` topic branches;
    `scripts/export-wip.sh` copies their own commits to `kernel/wip/`.
 

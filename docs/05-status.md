@@ -1,5 +1,860 @@
 # Status
 
+## Fingerprint enrollment and verification work, 2026-10-15
+
+**The owner enrolled a finger from Plasma's own fingerprint settings, and
+fprintd then verified it (`verify-match`).** This was the whole stack on the
+phone: libfprint 1.94.9-r106 with the `egisqsee` driver
+(`aports/temp/libfprint`), `device-sony-pdx246` r20, kernel r48's
+`/dev/egisfp0` and QSEECom TEE, and `qsee-supplicant` holding egisap64.
+Unlocking from the lock screen has not been exercised: no PAM or screen
+locker line shows in the journal.
+
+- **Four driver faults, found on the phone:**
+  - r102. `TEE_IOC_INVOKE` wants `buf_len` to be exactly the parameters
+    in use. Every two-parameter send (the echo, Keymaster) failed with
+    EINVAL.
+  - r103. `0x8003` (set active group) returns status 4 on its own. It is
+    accepted inside a verification workflow, as `bix_set_active_group`
+    sends it: `0x20` → vbt → `0x8003` → `0x2F`.
+  - r105. The enrollment trigger, property `0x01084004`, must be 3, the
+    agent's default. The 0 in `flows.md` came from the emulator's zeroed
+    context. With 0 the sensor never raised its interrupt for a touch.
+  - r105. Finger waits also capture again after a quiet second.
+- **The zero auth token is accepted:** enrollment start `0x10` carries the
+  72-byte Android HAT as zeros. It returns status 0, and the store
+  (`0x11` event 6) succeeds. `validate_authtoken` is therefore not enforced
+  on this flow; `enroll.md` 1.3 had reasoned that it would be. **Verified**
+  for start and store only.
+- **The TA decides when enrollment is done:** its enrollment percentage
+  (property `0x01074004`, u8) rises 5% per accepted sample. Sample 20
+  returns FTX DONE. A redundant touch is rejected and does not count. The
+  r105 round ended at 19 accepted samples, one short. For its last 200 s
+  every capture came back empty. Whether the owner was still touching then
+  is not known.
+- **Where the template lives:** the TA writes through the supplicant's REE
+  file listener, into
+  `/var/lib/qsee-supplicant/data/vendor_de/0/fpdata/`: `file_table.bin`,
+  `aid` and `User-0-SUID-…_0.template` (158714 bytes, TA-encrypted).
+  fprintd keeps only a device-stored print reference (group 0, fid) under
+  `/var/lib/fprint/user/egisqsee/egisap64/`.
+- **The finger interrupt, corrected:** GPIO 111 reads low with its pull-up
+  while the powered sensor waits. R47/R48's events were the pull-up's own
+  edge on arming, not a touch. With trigger 3, all 40 finger images in
+  both runs followed an interrupt wake-up; the one-second fallback caught
+  none. Many interrupts come without a finger (395 empty captures after a
+  wake-up in r105). **Reasoned:** the sensor's own detection pulses.
+- **Known faults, not yet fixed:**
+  - The driver counts each accepted touch twice below stage 19.
+    `MIN (++touches, …)` is a macro that evaluates the increment twice, so
+    Plasma's progress jumps by two. Progress should follow the TA's
+    percentage instead.
+  - fprintd announces 21 stages: the driver's 20, plus its own identify.
+- **Untested:**
+  - unlocking from the lock screen (fprintd-pam is installed, its use by
+    the locker is unchecked);
+  - the template surviving a reboot (the TA has to find it through the
+    supplicant again);
+  - deleting a print;
+  - the power cost of the one-second fallback on a lock screen that waits
+    for long.
+
+Evidence: `out/fingerprint-libfprint/`. The `live-*.txt` files are the
+rounds in order (open, enroll start, interrupt level, enroll).
+`journal-enroll-r105.txt` and `journal-plasma-r106.txt` are fprintd's full
+debug journals. The driver's git tree is `out/libfprint-egisqsee`.
+
+## Fingerprint sensor initialisation works, 2026-10-14
+
+**EC617 sensor initialisation (`0x8001`) now succeeds on postmarketOS, and
+the TA stays responsive afterwards.** The blocker was not SPI, clocks or the
+token: during `0x8001` the TA asks the normal world for the time through
+**QSEE listener 11**, Qualcomm's REE time service. With no listener
+registered, QSEE failed the request internally and killed the app (the old
+SCM -2 / result -23). Stock recovery had the time listener through qseecomd
+but used a synthetic token, so each earlier comparison was missing a
+different ingredient. Enrollment and verification are still unfinished.
+
+- **Recovery from stock Android:** the phone was found in fastboot on
+  slot B. `fastboot --set-active=a` and a reboot returned it to
+  postmarketOS (kernel r48); nothing was flashed. The three-hour reconnect
+  watcher from the previous session had expired without seeing the phone.
+- **Real Keymaster token works:** a non-privileged session on the
+  already-loaded keymaster app answers `{0x205, 2}` with status 0 and a
+  152-byte wrapped message at offset 12. Forwarding it as `0x6000` property
+  `0x21040105` returns status 0. The key material is never printed or
+  stored. Evidence: `out/fingerprint-protocol/live-authenticated-init.txt`.
+- **Listener 11 found:** `out/fingerprint-protocol/listener-probe.c`
+  registers the eight listener ids stock qseecomd offers through the
+  existing `/dev/teepriv0` supplicant interface and logs every request.
+  During `0x8001` the TA raised exactly one: listener 11, command `0x302`.
+  Answering it with failure made TZ reject the answer (-22) and the app
+  died as before. Evidence: `live-listener-init.txt` in the same directory.
+  RPMB (0x2000), 0x9000 and 0xC000 refused registration with -22; nothing
+  asked for them.
+- **Time service answered, init passes:** `0x302` is
+  `TIME_GET_UTC_SEC` in Qualcomm's BSD-licensed
+  [minkipc time listener](https://github.com/qualcomm/minkipc/tree/e5e4e7c/listeners/libtimeservice);
+  the reply is `{cmd, tv_sec, tv_nsec, ret}` in the same buffer. With that
+  answered from `CLOCK_REALTIME`, `0x8001` returned status 0 in one step
+  and a following echo returned 30 for operand 3. Evidence:
+  `live-time-listener-init.txt`. No RPMB, secure-storage or template
+  operation was requested by the TA or sent by us.
+- **Packaged supplicant serves it:** `aports/main/qsee-supplicant` is Dawid
+  Wróbel's [qsee-supplicant](https://github.com/wrobelda/qsee-supplicant)
+  0.1.1, which speaks our kernel's TEE UAPI unchanged, plus a patch adding
+  listener 11. Installed on the phone as `qsee-supplicant.service`, it
+  registers listeners 10, 0x7000 and 11, and the probe's `0x8001` returns
+  status 0 with no listener of its own. Evidence:
+  `live-packaged-supplicant-init.txt`.
+- **A held TA re-initialises:** with `qsee-app-loader@egisap64.service`
+  holding the TA, a second load through `/dev/teepriv0` is refused by TZ
+  (-22), so clients must attach through `/dev/tee1`. Attached that way, two
+  back-to-back runs of the whole init sequence both succeed on the same
+  loaded TA. Evidence: `live-held-ta-reinit.txt`. The device package now
+  depends on the supplicant and its preset enables both services.
+
+**Next:** the remaining Android init sequence, enrollment and verification,
+decoded from the vendor agent, and a libfprint driver above them.
+
+## Fingerprint focus, 2026-10-13
+
+**The owner tested the cameras and accepts them for the first build. Camera
+optimization is stopped at their request. Fingerprint enrollment and
+verification remain unfinished.** The Rust kernel hardware driver and native
+signed-app transport exist; a working fprintd adapter still depends on resolving
+sensor initialization, not just wiring the UI to the device node.
+
+- **Recovered stock SPI power notification:** original agent code produces
+  command `0x8004` with property `0x20070103`. Offline execution and live
+  diagnostics confirm successful SPI close/reopen responses. Including this
+  notification does not fix `0x8001` initialization: the app still loses echo
+  responsiveness until unload/reload. These are successful service-open tests,
+  not evidence of successful sensor transfers.
+- **Exact secure bus configuration:** `scripts/check-egis-spi-config.py`
+  executes the dumped slot-B TZ property lookup with the dumped DAL registry.
+  Device 8 resolves to QUP1 S2, `0xa88000`, `gcc_qupv3_wrap1_s2_clk`, the four
+  wrapper bus clocks and pin functions `qup1_se2_l0` through `l3`. Only the
+  boot-time registry selector is stubbed; no MMIO is mapped. This supersedes
+  the earlier unsupported `0xa90000` hypothesis. Temporarily holding the
+  neighboring I2C controller active does not fix initialization; its `auto`
+  power policy was restored. This does not exclude every clock/ownership issue.
+- **Firmware regression checks:** the sensor-init emulator now separately
+  checks SPI-open failure and SPI-transfer failure. Both return normal errors.
+  Sixteen combinations pass, covering the vendor's aliased request/response
+  layout, both output-pointer fields, its marker byte and the recovered SPI
+  power cycle. Synthetic correct ID bytes still reach a hardware-reset
+  callback. These checks do not establish where the real device fails.
+- **Diagnostics:** direct access to the secure SPI service (UID 16) through
+  the normal client environment returns result 11; it is not an available
+  alternative transport. The app requests log mask `0x1f`, but the registered
+  32 KiB log buffer remains entirely zero. Its registration ABI matches the
+  downstream implementation; the absence of logs remains unexplained.
+- **Original Android success:** a temporary normal slot-B Android boot logs
+  successful `0x6000` token-context setup, followed by successful `0x8001`
+  sensor initialization in approximately 184 ms and hardware ID 617. This is
+  direct evidence that the physical sensor works under the original stack.
+  Returning to postmarketOS after the first Android round did not fix our
+  initialization. Android shell permission denied the attempted firmware
+  hash comparison; identical version strings do not prove identical files.
+- **Corrected EC617 defaults:** the earlier emulator skipped the family
+  selector and incorrectly used generic values `24/4000/4000/0`.
+  `scripts/check-egis-vendor-init.py` now executes the actual family-7 branch
+  and original serializer, verifying `48/800/500/50`. The canonical client
+  and sensor emulator use these values. Corrected live requests still fail;
+  this fixes a reconstruction error, not the initialization blocker.
+- **Missing wrapped token exchange:** original-agent tests in recovery used
+  a synthetic 32-byte key and failed. That substitution was invalid: Egis
+  command `0x6000`, property `0x21040105`, calls
+  `qsee_decapsulate_inter_app_message`, then requires sender `keymaster` and
+  a 32-byte unwrapped key. The original client obtains the wrapped message
+  with Keymaster request `{0x205, 2}`, using 64/1088-byte aligned transport
+  buffers; its parser copies at response offset 12 and limits output to 256
+  bytes. `scripts/check-egis-keymaster.py` executes that original constructor
+  and parser against five synthetic success/error/bounds cases, all passing.
+  The sensor emulator's `--token-context` cases also verify that the original
+  TA accepts the expected synthetic decapsulation reply and rejects a failed
+  decapsulation, incorrect sender, or incorrect unwrapped-key length.
+  Sony's [published Keymaster fingerprint client](https://github.com/sonyxperiadev/vendor-sony-oss-fingerprint/blob/master/QSEEKeymasterTrustlet.cpp)
+  independently uses the same command and fingerprint auth type.
+  Native and original-agent probes using the real wrapped exchange are built,
+  but **not yet run**. No real key material has been obtained or logged.
+- **Offline continuation:** synthetic Keymaster decapsulation makes `0x6000`
+  return success. With modeled SPI registers, the original TA progresses
+  through reset, register programming and OTP reads; it subsequently fails
+  against the deliberately incomplete sensor model. This does not establish
+  a successful live transfer or identify the actual secure-app fault site.
+- **Device connection lost:** during the second normal Android comparison,
+  `adb root` reported restarting adbd, after which USB disappeared. ADB,
+  fastboot and both known SSH addresses are unavailable. The automatic return
+  to slot A could not execute; the last known boot is **stock Android slot B**,
+  not a verified postmarketOS boot. Physical reconnection was requested.
+  `out/fingerprint-protocol/resume-native.py` is running a bounded three-hour
+  reconnect round: on recognized `pdx246` fastboot it selects existing slot A
+  and reboots, then verifies postmarketOS/Xperia identity before running one
+  native initialization probe. It never flashes an image. Its log is
+  `resume-native.log`; create `stop-resume` in the same directory to cancel.
+  Check actual process/log state before relying on this temporary round.
+- **Next live gate:** test the real wrapped exchange and corrected sensor
+  initialization, then establish capture before completing libfprint
+  enrollment/verification and Plasma unlock. Echo, emulated success and
+  GPIO/IRQ tests are not end-to-end fingerprint support.
+
+Evidence: `out/fingerprint-protocol/live-power-{notify,reopen}.txt`,
+`live-shared-bus-awake.txt`, `live-spi-service.txt`, and `live-final-health.txt`.
+Additional evidence: `normal-android-early.txt`, `live-corrected-init.txt`,
+`live-after-android.txt`, `agent-stock-key-context.txt`, and
+`trace-authenticated-ta.log` under the same directory.
+`egisfp-tee-0.1.0-r14.apk` builds successfully with corrected EC617 defaults
+and the recovered power notification. It is **not installed**; the saved
+postmarketOS system remains r13. No firmware image was flashed in this
+follow-up; slot selection and normal/recovery boots were performed as above.
+
+## Camera preview performance, 2026-10-13
+
+**Plasma Camera 2.1.1-r103 and libcamera 99990.7.2-r124 are installed on
+kernel r48.** The owner confirmed the preceding camera-quality improvements.
+This follow-up changes preview scheduling and processing, retaining the
+existing calibration and full-resolution photo output.
+
+- **Measured bottleneck:** Plasma Camera requested 3256x2448 Hi846 previews
+  and 3992x3000 IMX582 previews. GPU ISP time was approximately 135 ms/frame
+  for both Hi846 modules and 56 ms for the main camera. The sensor register
+  drivers were not the image-processing bottleneck. Evidence:
+  `out/try-kernel/preview-baseline.txt` and `preview-full-baseline.txt`.
+- **App changes:** the downstream `aports/temp/plasma-camera` package uses
+  a 1276x960 preview on these sensors, preserving aspect ratio. Photos
+  temporarily use the original full-resolution configuration. Completed
+  requests are recycled immediately, replacing the 16 ms polling timer.
+  Two preview buffers and a single pending Qt image bound queue growth;
+  older completed previews are discarded. CPU access is bracketed with
+  DMA-BUF synchronization, and Qt owns copied pixels before the camera can
+  reuse its buffer. The installed upstream 2.1.1 app wrapped reused DMA memory
+  directly, unlike the newer research checkout's copy fix.
+- **ISP changes:** patch 0024 avoids nine redundant packed-RAW samples
+  (18 texture reads) and unused range calculations when downscaling.
+  At 1280x960, front processing measured 26.2 -> 23.7 ms and wide
+  34.0 -> 26.5 ms. All 160 actual GLES comparisons preserve output within
+  one 8-bit code value (`scripts/check-preview-shader.py`). Patch 0025
+  prefers matching sensor aspect ratios before minimizing capture size:
+  the main camera now retains its 4000x3000 sensor mode for 4:3 preview,
+  instead of selecting and further cropping the 2000x1132 video mode.
+  Patch 0026 retains IPA/AF/AWB state across output-size changes only when
+  sensor information and control limits are identical; frame contexts are
+  cleared, and real sensor-mode changes still configure the algorithms.
+- **Actual UI measurements:** with r123/r103, fresh 18-second Plasma Camera
+  sessions submitted 26.7 fps front, 17.0 fps wide, and 28.4 fps main to Qt.
+  Median captured-buffer timestamp-to-Qt-sink age was 47.2, 41.2, and
+  30.8 ms respectively; p95 was 73.8, 55.8, and 78.3 ms. This excludes
+  exposure and compositor/scanout latency, and is not an optical latency
+  measurement. R124 changes only same-mode reconfiguration; fresh-start
+  preview code is unchanged. Logs: `out/try-kernel/preview-ui103-*.log`,
+  summarized by `scripts/camera-preview-report.py`.
+- **Low-light limit:** during the wide preview, hardware controls reported
+  exposure 4551 lines, analogue-gain code 240 (16x), VBLANK 2109 and test
+  pattern disabled. With 3800-pixel lines at 288 MHz, exposure is about
+  60 ms and frame duration 60.1 ms, limiting capture to 16.6 fps. Forcing
+  30 fps here would change the exposure/noise tradeoff. This is separate
+  from the former 135 ms ISP bottleneck.
+- **Validation and remaining cost:** strict package builds and the existing
+  packed-Bayer/geometry checks pass. All three live color-bar checks pass
+  on r123, whose shaders are unchanged in r124 (`colorbars123.txt`). The
+  installed `plasma-camera-pipeline-test CAMERA_ID` exercises the actual
+  Worker thread, retained-image ownership, and repeated full-resolution
+  photo/preview transitions. R124/r103 passes 360 preview frames and two
+  full-resolution photos per camera (3256x2448 Hi846, 3992x3000 IMX582),
+  twelve retained-state transitions, and clean teardown with no error logs.
+  Evidence: `out/try-kernel/preview-lc124-app103-{front,wide,main}.log`.
+  Full-size photos require roughly 2–4 seconds
+  with the current single-output software ISP and settling interval; the
+  viewfinder holds its previous frame during this transition. RAW input
+  still falls back to texture upload, and Qt still uploads an owned image;
+  this is not an end-to-end zero-copy pipeline.
+- **Image:** `out/images/plasma-r48-preview124/` contains the rebuilt
+  Plasma rootfs, boot/vendor_boot images, installed-package manifest,
+  checksums and passing `verify-bootimg.py` results. The image is saved for
+  reproducibility; equivalent packages were installed live without reflashing
+  the SD card or modifying stock partitions.
+- **Rust assessment:** camera drivers remain C; the local kernel has no
+  Rust V4L2/media or I2C driver abstractions. A camera-driver port would
+  require substantial bindings/wrappers and would not remove the measured
+  GPU, image-ownership or queuing costs. The existing fingerprint GPIO/IRQ
+  driver is already Rust. No camera-driver language rewrite is claimed.
+
+## Live bring-up follow-up, 2026-10-13
+
+**Kernel r48, libcamera r121 and calibration r3 are installed on the SD rootfs.**
+The phone is back in Plasma after the stock-recovery fingerprint comparison.
+The owner subsequently confirmed substantial camera-quality improvement; see the preview follow-up above. Fingerprint
+transport works, but enrollment and verification through fprintd do not yet
+work. The GPU tester is installed and verified.
+
+- **Sensor setup reviewed against dumps:** firmware-cameras r5 supplies
+  separate stock Hi846 front/back initialization and mode programs, preserving
+  register order and duplicates. Only six of the generic driver's 295
+  microprogram values matched stock. Kernel r45 uses stock rail ordering,
+  delays, Bayer phases, line/frame timing and crop coordinates. Front full
+  mode's 346.5 MHz MIPI frequency follows the upstream PLL equation; CamX
+  lists nominal 340 MHz. Actual CSI capture works, but frequency is not
+  independently measured. Wide preview now uses the full array rather than
+  the stock 2304-wide centre crop, preserving the wide field of view.
+- **Per-unit OTP recovered:** the kernel executes the stock read sequence
+  at 19.2 MHz, caches 5449 bytes per sensor in read-only root-only NVMEM,
+  then resets and restores the normal 24 MHz camera clock. Both sensors
+  read successfully. `scripts/hi846-otp.py` verifies group selection and
+  WB/LSC checksums; both copies pass. The calibration contains four 17x13
+  channel response grids, not direct gains. The sensor payload is interleaved R/Gr/Gb/B, decoded to planar grids.
+  `pdx246-camera-calibration` 1-r3 applies per-unit correction to module
+  Chromatix at boot, with a bounded wait for deferred sensor probe. The
+  correction is golden response / OTP response, verified by executing all
+  884 divisions in the original CamX code (`check-hi846-stock-calibration.py`).
+  Both sensors pass service activation at boot on r47 and r48; subsequent 450-frame
+  captures confirm loading the generated `/etc/libcamera/ipa/simple` tuning.
+  White-balance checksums pass; per-unit WB adjustment is not yet applied.
+  Private raw copies remain under ignored `out/try-kernel/`.
+- **ISP geometry and filtering:** r117 fixes a viewport/texture mismatch
+  that cropped previews asymmetrically and metered a different image area.
+  Centred aspect cropping now matches statistics, and activates the
+  downsampling antialias filter. R118 adds an edge-guided GPU chroma pass.
+  Actual GLES tests preserve constant colours and hard edges while reducing
+  synthetic chroma noise. Live 450-frame runs retain about 30 fps front and
+  15 fps wide. Matching flat scene regions have approximately 60–70% lower
+  chroma variation than r117, but exposure varies between runs, so this is
+  not a controlled sensor-noise comparison. Wide low-light grain remains.
+  Evidence: `out/try-kernel/scene{117,118}-{front,wide}.{ppm,log}`.
+  All three r118 colour-bar tests pass. The off-channel tolerance now
+  accommodates the calibrated wide CCM (160 rather than 128; target channels
+  still exceed 192). Exact geometry/Bayer-phase checks remain separate.
+- **Fingerprint native transport now works:** the new QSEECom TEE driver
+  loads the phone's original signed ELF64 egisap64, translates its shared
+  output pointer inside the kernel and unloads on owner close. Live echo,
+  BIX framing, absent-buffer rejection and version retrieval all pass.
+  R10 also answers the recovered platform-name callback and receives
+  `Linux:Hello BIX !!!`. Evidence:
+  `out/try-kernel/live-egis-native45.txt` and `live-egis-hello-r10.txt`.
+  The older QTEE UID122 path still fails with MAXDATA; native transport
+  avoids that route. No template, RPMB or provisioning operation was run.
+- **Rust hardware driver:** exclusive open, power, reset with IRQ disabled,
+  validation and close cleanup pass. R46's live `/dev/kmsg` observer identifies the IRQ failure as **KCFI**:
+  the C dispatcher expects enum irqreturn's hash `0xd2f00be1`, while Rust's
+  bindgen-erased unsigned return has `0xdf6c194b`. This supersedes the earlier
+  disarm/PDC hypothesis. A minimal Clang/Rust reproduction confirms the
+  mismatch. R47 gives the callbacks the explicit C enum encoding; its hash
+  now matches Clang exactly. CFI remains enforced. R47 passes real rising-edge
+  IRQ delivery, eventfd notification, disarm and final-close power cleanup.
+  The counter is device-wide; repeated tests must compare against the opening
+  value, not assume zero. R48 also passes ten consecutive power/reset/IRQ/disarm/close cycles.
+  Evidence: `out/try-kernel/live-irq47-trace.txt` and `live-irq48-repeat.txt`.
+- **Fingerprint initialization remains blocked:** executing the original
+  vendor initializer/serializer recovered the six-property `0x8001` request;
+  `scripts/check-egis-sensor-init.py` executes the original TA and verifies
+  that this request reaches `qsee_spi_open(8)`. Live r12/r13 initialization
+  returns SCM -2 with result -23. R13 confirms that the TA then fails echo
+  until unload/reload, with or without the hello callback. This is evidence
+  of lost TA responsiveness, not successful sensor initialization. In
+  emulation, normal SPI-open and SPI-transfer errors return cleanly.
+  R48's opt-in root-only QSEE app log registers successfully but stays empty.
+  No secure-storage listener request was observed. Enrollment, verification
+  and a usable libfprint adapter remain unfinished. Evidence:
+  `out/try-kernel/live-egis-{nohello,hello}-r13.txt`, `live-scm12-trace.txt`.
+  Original `tz_b` and `devcfg_b` were read into ignored files for offline
+  analysis; no firmware partition was changed. The secure SPI configuration
+  lists engines at 0x984000, 0xa88000 and 0xa8c000. The older claim that the
+  fingerprint uses missing engine 0xa90000 was an inference and is not
+  established by this data. No SPI/pinctrl/clock ownership changes were made.
+- **Further camera review:** stock tuning reduces exposure targets, lens
+  shading and CCM amplification in dark scenes. R118 used bright-scene
+  calibration throughout. The recovered exposure-index arithmetic is
+  `log10(sensitivity / first exposure knee) / log10(1.03)`; executing the
+  original AEC instructions verifies four synthetic light levels
+  (`scripts/check-hi846-exposure-index.py`). R121 imports all no-flash
+  lighting bands and uses full-histogram linear luminance for their targets.
+  It uses applied exposure as the index, not Sony's complete proprietary
+  scene estimator. Actual OTP correction passes across every imported grid.
+  Strict builds and 450-frame RGB captures pass for both Hi846 sensors;
+  all three live color-bar checks also pass (`colorbars121.txt`). R119 was
+  not deployed because review caught lighting selection reading frame controls
+  too early. R120 exposed unsupported YAML aliases on-device; r121 disables
+  aliases in both exporters and prevents duplicate OTP correction through
+  shared endpoint lists. The constant-band endpoint correction check passes.
+  R121 front imagery shows the ceiling; wide imagery shows a very close desk
+  scene with substantial depth blur and residual shadow noise. This is not
+  sufficient to certify general camera quality, especially focus/detail.
+- **Stock fingerprint comparison:** A/B secure firmware differs (TZ A
+  00427-1, B 00434-3), but both devcfg copies select the same SPI engines.
+  The app code segments are identical; only signed metadata differs. Testing
+  the original slot-A signed app via a temporary firmware path reproduces
+  the initialization failure and restores the normal firmware path afterward.
+  Stock recovery's original QSEECom and et617 drivers also pass app load,
+  echo and version but fail the same sensor-initialization request. This
+  means the failure is not established as a mainline GPIO/transport defect.
+  The original vendor QSEECom library, including its image loader and
+  bandwidth vote, reproduces the failure as well.
+  No enrollment, template or storage-listener operation was requested.
+  Evidence: `out/fingerprint-protocol/stock-{protocol,sensor}.txt` and
+  `out/try-kernel/live-egis-slot-a-r13.txt`, and
+  `out/fingerprint-protocol/vendor-stock-corrected2.txt`.
+  Offline emulation now traces the first three register reads (FD/FF/FE).
+  Synthetic ID bytes 06/11 pass identification and reach the expected reset
+  callback; zero ID bytes return a normal status 16. This does not prove
+  which of these stages the live app reaches before losing responsiveness.
+  The four modes in `scripts/check-egis-sensor-init.py` all pass against
+  the dumped app: open, SPI error, wrong ID, and synthetic reset callback.
+- **Updated image saved:** `out/images/plasma-r48-camera121/` contains
+  rootfs, boot and vendor_boot images, the APK database and SHA256SUMS.
+  Kernel r48, libcamera r121, calibration r3, egisfp-tee 0.1.0-r13,
+  Plasma fingerprint settings and GPU Test are included. This image has
+  not been written over the live SD rootfs; equivalent packages were
+  installed live. `scripts/verify-bootimg.py` passes; its full report is
+  saved with the artifacts. Fingerprint enrollment/verification remain unfinished.
+- **Unattended recovery:** enabling NVMEM_REBOOT_MODE fixes reboot to
+  bootloader; r45 deployment reached fastboot after 12 seconds. Device r18
+  stops NetworkManager removing usb0's static address and restores it
+  before unudhcpd. The earlier r41 SSH loss was a network-management fault
+  and must not be conflated with the later IRQ-triggered resets.
+- **GPU Test:** the installed launcher runs bounded displayed/offscreen
+  glmark2 Wayland tests and records KWin, GPU clocks and temperatures under
+  `~/.local/state/pdx246-gpu-test`. Live renderer is freedreno FD710,
+  OpenGL ES 3.2, Mesa 26.2.4; KWin also uses hardware rendering at 60 Hz.
+  A later check finds no environment override forcing Qt software rendering;
+  both CPU clusters use schedutil. Loaded LLVM libraries alone do not prove
+  software rendering because Mesa shares dependencies across drivers.
+  Scores 955/484 are benchmark scores, not UI FPS. Temperatures stayed
+  below 38 C. UI sluggishness has not been measured or fixed. Evidence:
+  `out/try-kernel/live-gpu-r41.txt`.
+- **Modem:** bounded r44 test boots the modem and discovers NAS, Voice, UIM,
+  WDS and IPA QMI services. ModemManager still reports no modem. The test
+  uses read-only original NV with temporary RAM writes and stops the modem
+  afterward; rmtfs remains masked. Evidence: `out/try-kernel/live-modem44.txt`.
+- **Build/image evidence:** strict builds for kernel r45, firmware r5,
+  device r18, libcamera r118 and egisfp-tee r10 pass. Subsequent strict builds
+  through kernel r48, libcamera r121, calibration r3 and egisfp-tee r13 also
+  pass. The refreshed image is `out/images/plasma-r48-camera121/`;
+  `out/images/plasma-camera-r45/` is retained as an older artifact.
+  Camera shader, packed statistics and crop tests pass offline. Full
+  fingerprint enrollment/verification is not claimed.
+
+## Hi846, modem and Rust driver follow-up, 2026-10-13
+
+**Latest device state:** kernel r41 and libcamera r113 were installed and
+booted on the SD rootfs. The fingerprint hardware check printed
+`initial: (0, 0, 0)` and `powered: (1, 1, 0)`, then the phone stopped
+answering during the reset/IRQ phase. SSH timed out, the USB network peer
+stopped answering ARP, and adb/fastboot did not provide a recovery transport.
+The queue finished with SSH exit 255. **This is a hardware-test failure,
+not working fingerprint support.** SSH subsequently recovered without host
+intervention, allowing inspection of r41, but disappeared again before the
+next deployment. USB later enumerated as a network gadget; its USB ID's
+`lsusb` description says fastboot, but fastboot did not answer. Neither SSH
+nor the initramfs telnet shell answered on that network. Do not infer the
+transport from the USB product description. Do not rerun the reset/IRQ test unchanged.
+The precise cause is not isolated: reset sequencing and interrupt delivery
+are both still suspect. The recovered kernel had no pstore record or obvious
+panic in its current log; that does not explain the preceding interruption.
+The test does not access SPI, templates or RPMB.
+
+**Access verified before the failure:** the owner's new password works for
+the existing `user` account. Credentials
+were passed through environment overrides, not added to tracked files.
+
+**Hi846 r113, built and hardware-tested:** the packed-Bayer shader now
+reconstructs the shared low-bit byte for RAW10 and RAW12 and samples exact
+texture centres. Previously it discarded the low bits before digital gain.
+An optional 5x5 spatial/range filter acts on linear Bayer data before white
+balance, colour correction and gamma. Only the two Hi846 tuning files enable
+it; IMX582 has no added denoising. Both Hi846s completed 360-frame captures.
+The front and wide final frame rates were about 12.3 and 15.3 fps in those
+runs, including file output; this is not a controlled throughput benchmark.
+The wide comparison is visibly less speckled, but its exposure also changed,
+so the live before/after images alone do not measure the filter's benefit.
+
+- Evidence: `out/try-kernel/hi846-{front,wide}-{baseline,r113}.{ppm,log}`.
+  These show real scenes, not only sensor colour bars. Noise and limited
+  low-light detail remain; no claim of stock-camera quality is justified.
+- Fixed-exposure wide-camera RAW capture used 5,000 lines, 16x analogue gain,
+  1x sensor digital gain, 1632x1224 GBRG10, stride 2048. The final two frames
+  are `out/try-kernel/hi846-wide-last2.bin`. In a central patch the green
+  mean was about 85.9 RAW10 codes, with temporal noise about 5.6 codes;
+  the blue mean was 72.3 with noise about 4.3 codes. Black pedestal is 64.
+- Processing identical captured RAW patches through the actual EGL shader,
+  at fixed 4x gain, reduced temporal R-G/B-G noise from 5.89/5.15 output
+  codes without filtering to 3.22/2.74 at sigma 16 RAW10 codes. This controls
+  for illumination and automatic exposure, but is only one small scene patch.
+- `scripts/check-packed-bayer.py` executes the actual GLSL via EGL inside
+  pmport. RAW10/RAW12, all four Bayer phases, quad Bayer, padded strides,
+  reflected image edges and low-bit ramps pass against a scalar reference.
+
+**Hi846 r114, built but not hardware-validated:** inspection during r113 testing found the
+filter was using a frame-context gain populated only later during statistics
+processing. R114 uses the active AGC gain. Its CPU statistics also
+reconstruct the low bits, normalizing channel sums only after accumulation;
+this avoids biasing low-light white balance with per-pixel truncation.
+The new `packed-bayer-stats` test exercises the actual statistics class and
+shared-memory output for both bit depths, four phases and clipping rejection.
+The strict package build completed, and the actual ARM64 statistics test
+passed under QEMU (0.44 s). Shader tests also passed. Packages and logs are
+preserved in `out/camera-r114/`. Installation and real-scene validation of
+r114 remain pending while the phone is unreachable; r113 is the last
+confirmed installed camera version. `out/try-kernel/finish-r114.py` is a
+bounded SSH-recovery/deployment/check helper, with its result recorded in
+`out/try-kernel/finish-r114.log`; it does not reboot or repeat the fingerprint
+test. Credentials are environment-only, not in the helper. The bounded
+recovery wait expired with no installation performed. No retry process is
+left running. At the final check the USB network peer still failed ARP and
+adb/fastboot listed no device; further live tests require transport recovery.
+
+**Additional blob disassembly:** the stock `camera.qcom.so` debug symbols
+resolve `ABF211Setting::CalculateHWSetting` at 0xde8458 and
+`BPCABF41Setting::CalculateHWSetting` at 0xd96b28. Disassembly is preserved in
+`out/dl-tuned/hi846-tfe-abf.dis` and `hi846-noise-settings.dis`. The TFE
+function converts the first three region parameters to integers and stores
+reciprocals scaled by 16x4096, then converts three 16-entry tables to 16-bit
+hardware fields. The Hi846 TFE tuning enables this block, with initial
+parameters 100/100/100 and tables descending from 8500 to 1000. These are
+hardware filter parameters, **not** portable noise standard deviations.
+Our filter is independently implemented and empirically tuned. Previously
+decoded stock CCMs, illuminants and shading grids remain in use.
+
+**Modem, verified first boot:** the firmware named in the DT was absent
+from the image. The existing dump's MDT/segments assemble into a 124,089,464
+byte `modem.mbn`; after installing it, remoteproc1 authenticated and booted
+the modem in under a second. The bounded test observed `running`, then
+stopped it cleanly. ModemManager still reported no modems. Evidence:
+`out/try-kernel/live-modem-first-start.txt`. This proves firmware startup,
+not SIM detection, registration, calls or mobile data.
+
+- Firmware package r4 adds an optional modem subpackage with `modem.mbn`
+  and the dumped `modem_pr` read-only remote files. It was built and installed
+  on the phone. Device r16 built successfully and adds the firmware dependency
+  for future images; it does not enable modem services automatically.
+- Kernel r41 adds a dynamically reserved low-32-bit 0x280000-byte RMTFS
+  buffer plus two guard pages, client 1 and MSS_MSA sharing. Stock uses a
+  dynamic 0x280000-byte buffer. After SSH recovered, the live kernel verified
+  reservation at 0xff97e000 and creation of `/dev/qcom_rmtfs_mem1` (the actual
+  device name, not `/dev/rmtfs1`). Protocol operation is still unverified.
+- QRTR, qmi-utils and rmtfs were installed on the SD rootfs. The standard
+  `rmtfs.service` was masked **before** installation to prevent automatic
+  writes to original modem storage. `scripts/modem-check.sh` prepares a
+  bounded test using `rmtfs -P -r`: upstream opens partitions read-only
+  and redirects writes into an in-memory copy. The next push failed before
+  this script could run, so it has not accessed the modem partitions yet.
+- Mobile data additionally needs IPA enablement. The dumped DT has
+  `qcom,ipa-hw-ver = <0x17>`; Sony's cached kernel `msm_ipa.h` identifies
+  enum value 23 as **IPA 5.2**. Our mainline IPA versions include 5.0 and
+  5.5 but not 5.2, and SM6450 has no IPA node. Reusing a neighbouring
+  SoC's descriptor without verifying registers/endpoints would be a guess.
+- Further upstream research found Luca Weiss's [IPA 5.2 support,
+  commit 4bf38bac1b2e](https://github.com/torvalds/linux/commit/4bf38bac1b2e2586a14529053cf56346db8a0032).
+  It applies to our base and the complete IPA object compiles in an isolated
+  pmport GCC build (`out/modem-research/ipa-5.2-compile.log`), with CFI/LTO
+  disabled for that compile check. It is **not** part of the packaged r41
+  kernel and has not run on the phone. Stable 6.18.55 already contains the
+  associated generic-command, event-ring-index and EV_PER_EE fixes.
+- Sony's module source at revision `5f823f90b852edf3d8c848a270173113ff523fe9`
+  confirms matching AP command/LAN/WAN and modem endpoint/channel assignments,
+  QSB limits and local-memory offsets. However, SM6450's dumped DT specifies
+  IMEM 0x146a8000/0x2000 and SMEM size 0x9000, versus Milos's upstream 0xb000
+  SMEM. A board-specific descriptor, DT resources and IPA firmware loading
+  still need integration and hardware validation. Source excerpts and the
+  upstream patch are in `out/modem-research/`; do not copy the Milos DT blindly.
+  The dumped `ipa_fws.mdt`/segments also assemble successfully into a
+  32,664-byte MBN there; it has not been authenticated or executed.
+
+**Rust hardware driver findings:** r40 compiled and booted, but probe failed
+with -524 because Qualcomm TLMM does not expose bias via GPIO set_config.
+R41 replaces that operation with owned pinctrl handles and explicit IRQ-on
+and IRQ-off states. R41 created `/dev/egisfp0`; malformed-ioctl and exclusive
+open checks progressed to power-on, which completed with IRQ level high.
+Reset, IRQ delivery, final-close cleanup and suspend are **not verified**.
+The r41 package and boot artifacts are preserved in
+`out/fingerprint-rust-r41/`; r40 artifacts and the r112 Plasma image remain
+available for recovery. Authentication still needs the trusted-app protocol
+and libfprint adapter described below.
+
+## Rust fingerprint hardware driver, 2026-10-13
+
+**Architecture chosen by the owner:** implement a custom kernel driver for
+EC617 hardware enablement and keep standard fprintd/libfprint above it.
+The kernel owns GPIO power/reset sequencing and interrupt delivery; qcomtee
+continues providing the TrustZone transport. A userspace libfprint adapter
+must still implement Sony's BIX enrollment/verification protocol and its
+callbacks. Moving GPIO control into the kernel does not make fprintd
+understand the trusted application's protocol automatically.
+
+**Verified, Rust feasibility:** our Linux 6.18.55 source supports Rust on
+ARM64. In the project-contained native chroot, Rust 1.99.0, bindgen 0.73.2
+and Clang 23 passed `make ARCH=arm64 LLVM=1 rustavailable`. The stock Rust
+platform and misc-device samples compiled with the pdx246 configuration,
+including CFI. The new driver and its device tree also compiled. Logs:
+`out/fingerprint-rust-feasibility.log` and
+`out/fingerprint-rust-driver-build.log`. These are compile checks, not
+hardware verification.
+
+**Verified, complete kernel package built:**
+`out/fingerprint-rust-r40/linux-postmarketos-qcom-sm6450-6.18.55-r40.apk`,
+SHA256 `2328dc74705fcad9e977ff45d619775f127e464e10693c42766837f9ea5524ff`.
+The strict pmbootstrap build completed successfully; its summary log is
+`out/build-kernel-r40-rust.log`. The preserved package directory includes
+the ARM64 Image, DTB, extracted configuration and verification results.
+The Image contains the built-in driver's identifiers, and the packaged DTB
+has the expected GPIO numbers, active-low reset and both-edge interrupt.
+Comparing embedded configs with the previously booted r39 image found no
+removed options: changes are Rust compiler capabilities, Rust enablement
+and EGISFP. CFI and BTF remain enabled.
+
+**Initial r40 build state (superseded by the follow-up above):** USB SSH answered and completed its
+handshake, but the saved development login was rejected during this session.
+No boot queue was started, and the running phone was not modified. Restore
+authorized SSH access before deploying r40 and running the hardware check;
+do not infer GPIO, IRQ, cleanup, suspend or fingerprint functionality from
+the successful build. The earlier r112 Plasma image remains the known-booted
+image and still contains kernel r39.
+
+**Implemented:** `kernel/egisfp/` holds a Rust platform driver and small
+owned GPIO/eventfd wrappers. The new code uses generated kernel C bindings;
+there is no handwritten C implementation. `stage.py` applies it to an
+isolated kernel tree, and `export.py` produces the kernel aport's
+`bringup-egisfp-rust.patch`. Kernel package r40 enables Rust and EGISFP and
+adds the corresponding native build dependencies. The normal SM6450
+series and its existing backports remain the kernel base.
+
+- `/dev/egisfp0` has a single controlling opener and a provisional fixed-size
+  ioctl ABI in `egisfp.h`: status, power, reset, and an eventfd subscription.
+- VDD/VCC enables are GPIO 96/106, reset is active-low GPIO 108, and the
+  interrupt is GPIO 111. Delays come from Sony's 70.2.A.1 driver. Input bias
+  is disabled while unpowered; unlike Sony's driver, it does not actively
+  drive the IRQ pin low. This difference needs hardware validation.
+- A threaded IRQ handler reports both edges through an eventfd that the
+  adapter can wait on with poll/epoll. Events are electrical IRQ edges,
+  **not** finger detection, match results or biometric data.
+- Final close powers off. Unbind serializes against file operations, drains
+  IRQ handlers, drops GPIO ownership, and makes old handles return ENODEV.
+- The driver is built-in only. Linux 6.18's Rust miscdevice wrapper leaves
+  `file_operations.owner` unset; allowing this driver to unload while files
+  remain open would be unsafe. Built-in code avoids that lifetime problem.
+- Suspend/wake integration and the vendor's selectable level/debounce IRQ
+  modes are not implemented. The interface is for hardware bring-up, not
+  yet a complete production fingerprint driver.
+- SPI remains TrustZone-owned. This driver performs no TEE commands, stores
+  no templates and accesses neither RPMB nor Android's secure storage.
+
+**Prepared hardware check:** `kernel/egisfp/check-device.py` checks exclusive
+ownership, rejected malformed requests, power/reset and final-close cleanup.
+It waits at most two seconds for an interrupt notification, without claiming
+that a notification is a finger event. Run only on pdx246 with no fingerprint
+client active. This check has not yet run on hardware.
+
+## Current camera work and fingerprint UI target, 2026-10-12 evening
+
+**Verified:** the port is running on hardware, despite the historical
+"nothing has been run" text in AGENTS.md. This session began with Phosh,
+OpenRC, kernel 6.18.55-r39, device package r13 and libcamera r110 on the SD
+rootfs. The phone answered USB SSH. Host adb/fastboot and the existing
+bounded queue handle recovery; builds remain inside pmport and all
+pmbootstrap state remains under `.pmb`.
+
+**Camera regression investigation:** all three sensors completed 120-frame
+and 1,000-frame libcamera captures before changes. WirePlumber still mapped
+deleted libcamera/IPA files from an earlier upgrade. Restarting it let all
+three PipeWire camera nodes deliver 60 frames through GStreamer to EOS.
+That is evidence for a stale camera session, not proof that every reported
+camera failure had the same cause. Snapshot's first launch used the wrong
+session bus; the corrected launch was suspended with the screen idle, so
+it did not establish a working interactive viewfinder.
+
+**Verified, libcamera r111:** patch 0017 adds the following to the software
+ISP, using the decoded vendor Chromatix data in `out/dl-tuned`:
+
+- Per-module 17x13 RGB lens-shading grids, interpolated by colour
+  temperature and mapped through the sensor's analogue crop. Four tables
+  for IMX582 and three for each Hi846 module. These are the bright-scene,
+  non-flash/non-HDR TFE calibration; Gr and Gb are averaged. This stage is
+  implemented in the packed Bayer EGL shader used by this phone, not the
+  CPU debayer or every EGL format. The GL float-texture path is required.
+- Sensor-native illuminant reference ratios for colour-temperature
+  estimation, which selects the existing vendor CCM and the new shading
+  grid. Channel white balance still uses the simple grey-world algorithm;
+  this is not a port of Sony's complete AWB algorithm.
+- Gain-code progress when reciprocal gain quantization would otherwise
+  discard an AGC increment. On IMX582 the old implementation repeatedly
+  requested a gain that rounded back to the current code, preventing the
+  transition to longer exposures and digital gain.
+
+`scripts/camera-tuning.py` regenerates the calibration additions from the
+decoded summaries and CSVs. Regeneration was checked against the built APK
+checksums and is idempotent. No firmware executable or module serial is
+included in these tuning files.
+
+On the phone, the confirmed r111 packages loaded all three sets of shading
+tables and completed 600-frame 1280x720 captures on each sensor. The main
+camera reached 64x analogue gain, 66.660 ms exposure and 4x digital gain;
+the Hi846 modules reached 16x analogue gain and 66.658 ms, with digital
+gain limits 4x front / 8x wide. At those long exposures the output was about
+15 fps. The samples are very dark and noisy, and do **not** establish good
+colour, shading uniformity, autofocus or daylight image quality. Main AF
+remained scanning in that dark scene. Evidence is in
+`out/try-kernel/live-camera-calibrated.txt` and `calibrated-*.ppm`.
+
+The earlier `live-camera-r111.txt` and `live-camera-long-r111.txt` names are
+misleading: the first APK install timed out at an interactive confirmation,
+and ssh.py intentionally continued to the diagnostic commands. Those runs
+used r110. The later install used `apk --no-interactive`, and the calibrated
+run asserts r111 in the same command as capture. Do not cite the earlier
+filenames as r111 validation. Restart camera session services after live
+library upgrades, or reboot, before testing applications.
+
+**Verified, r112 white-balance correction:** a short, bounded torch test
+made the stationary scene visible, but r111 produced a strong green cast.
+The statistics averaged saturated highlights into the illuminant estimate;
+once clipped, those samples no longer retain the channel ratios. Patch
+0018 adds separate unclipped channel sums/counts for AWB, preserving the
+full histogram for exposure. It excludes any sampled tile with a channel
+at or above 250/255, and holds the estimate when the remaining channels
+are within two 8-bit levels of black or fewer than 16 samples remain.
+
+After building and installing r112 and restarting WirePlumber, both rear
+cameras completed another 360-frame torch-lit capture. In the same
+main-camera rectangle (x=70..350, y=70..250), mean RGB changed from
+62.4/106.6/57.2 to 113.7/112.3/110.9. In the wide camera's same rectangle,
+it changed from 18.8/49.3/29.4 to 60.5/72.8/68.2. This is a visible reduction
+in the green cast, not a colour-chart measurement. Exposure also changed;
+do not interpret these numbers as a controlled radiometric calibration.
+Evidence: `live-camera-r112.txt`, `torch-r112-*.ppm`, and the preceding
+`live-torch-capture.txt` / `torch-*.ppm` under `out/try-kernel`.
+
+**Verified, sensor test patterns:** all three cameras delivered the expected
+white/yellow/cyan/green/magenta/red/blue/black bars at 1280x720. The first
+attempt set the pattern before libcamera initialized the sensor, which
+reset it to disabled; that run captured the dark scene instead. The
+working diagnostic sets the pattern after capture starts and restores
+normal mode on exit. See `camera-pattern-capture.sh`,
+`live-pattern-capture.txt`, and `bars-*.ppm` under `out/try-kernel`. These
+prove the CSI/Bayer/RGB path, not lens shading, focus or scene colour.
+
+**Verified, Plasma Camera:** with r112 it configured a 3992x3000 RGB
+viewfinder from IMX582's 4000x3000 sensor mode, allocated four buffers,
+rendered on FD710, and reported `setReadyForCapture true`. It ran until the
+diagnostic's deliberate 18-second timeout. The log is
+`out/try-kernel/live-plasma-camera-r112.txt`. This mode has substantially
+more processing cost than the 1280x720 tests; do not claim a 30 fps full
+resolution preview from those smaller captures.
+
+**Remaining camera quality work:** the samples are a very close,
+high-contrast scene illuminated by the phone's torch. They still contain
+clipped highlights and noise, especially on the wide camera, and the main
+camera remained scanning in this scene. Daylight colour, useful-distance
+autofocus, shading uniformity, motion and noise reduction remain to be
+validated/improved. Torch brightness was read back as zero after each
+bounded test; flash integration in camera applications is still separate.
+
+**Fingerprint target: Plasma Mobile plus fprintd.** The official
+[Plasma lock-screen source](https://invent.kde.org/plasma/plasma-mobile/-/blob/82a730ee4df2b9def5548f3aed910200dabdabfa/shell/contents/lockscreen/LockScreenState.qml)
+explicitly handles `ScreenLocker.Authenticator.Fingerprint`. KDE's
+[Users settings](https://invent.kde.org/plasma/plasma-workspace/-/tree/97f8d44d6ec4d09e546e0d1f10c2c767589f0d26/kcms/users)
+has mobile form factors and enrollment through the system D-Bus service
+`net.reactivated.Fprint`. KScreenLocker uses a separate `kde-fingerprint`
+PAM authenticator alongside its password authenticator.
+
+**Built and filesystem-checked:** a clean Plasma Mobile/systemd rootfs,
+including KDE Users settings, fprintd, pam_fprintd, the Egis TEE probe,
+Plasma Camera and libcamera r111. The image is preserved at
+`out/images/plasma-fingerprint/sony-pdx246.img` with SHA256SUMS and boot
+artifacts; filesystem UUID remains `07b8a001-695c-40eb-bdf7-27e11e8adb9f`.
+The previous Phosh configuration is
+`out/ui-research/pmbootstrap-phosh.cfg`. An attempted chroot backup under
+`.pmb/work/chroot_rootfs_sony-pdx246.phosh-backup` did not survive the
+pmbootstrap cleanup. It is **not** an available rollback image. Keep image
+artifacts and any future backups under `out/images`, outside the disposable
+pmbootstrap chroot names. Phosh can be rebuilt from its saved configuration.
+
+The new `postmarketos-ui-plasma-mobile-fingerprint` package supplies a
+Fingerprint Settings launcher and fixes `kde-fingerprint`: the upstream
+systemd-edge package referenced Fedora-specific `fingerprint-auth`,
+`postlogin` and SELinux modules absent from this image. The replacement
+uses pam_fprintd with Alpine's base-account/base-session; KDE's password
+PAM stack remains available. Device package r15 adds the systemd equivalent
+of the existing early ADSP sensors-domain attach, with the device's firmware
+path. It disables the unused ADSP root-domain and SDSP daemons, and ALSA
+state restore that would conflict with UCM routing.
+
+**Not yet fingerprint support:** installing this UI does not make EC617
+work. Existing hardware evidence proves egisap64 load/unload over qcomtee
+UID 122. Command 0/1 transport success with an unchanged response does not
+prove the BIX dispatcher or sensor worked. The next backend milestones are
+the embedded-buffer fixup for the 0xE0 BIX envelope, a read-only version/
+hello response, the documented power/reset/IRQ interface, and the required
+storage/listener services. Sensor SPI remains TrustZone-owned. Do not send
+0xE0 until the pointer fixup is proven; do not provision or write RPMB.
+
+The acceptance target is a real device returned by fprintd's GetDevices,
+successful KDE enrollment, persistence across reboot, fingerprint unlock
+with password fallback, cancellation and failed-match handling. A
+libfprint driver or a fprintd-compatible backend could provide that API;
+the implementation is still missing. No templates or enrollments were
+created by this session.
+
+The shipped fprintd systemd sandbox currently permits USB, SPI, hidraw and
+cros_fp devices, not `/dev/tee0` or GPIO chips. A future in-process Egis
+driver would need deliberate device access; a separate backend/broker is
+another option. The image does not loosen that sandbox for an unimplemented
+driver. The installed KScreenLocker binary contains `kde-fingerprint`, and
+the installed mobile lock-screen QML contains the fingerprint authenticator
+path, so the UI capability is not inferred only from upstream HEAD.
+
+**Verified, SD installation:** the unattended queue wrote the image into
+the existing `mmcblk0p1`, preserving the partition table and log region.
+The card reported the expected UUID, `fsck_rc=0` and `resize_rc=0`. The
+queue is `out/try-kernel/plan-plasma-fingerprint.sh`; its install transcript
+is `out/try-kernel/live-plasma-fingerprint-install.txt`.
+
+**Final image, built and booted:**
+`out/images/plasma-fingerprint-r112/sony-pdx246.img` includes libcamera and
+IPA r112, device r15, the fingerprint UI integration package, and the
+camera diagnostic tools. Its SHA256 is
+`b6e8c7f535f5eac1c179b375a6bfc01cd2f21a5cb3c98a81bab5b65456600813`.
+The directory also preserves boot images, the exact installed APK manifest,
+pmbootstrap configuration and SHA256SUMS. The detached
+`out/try-kernel/plan-plasma-fingerprint-r112.sh` queue installed it into SD
+p1, checked/resized the filesystem successfully, booted it and finished at
+23:03 local time. The phone remains running in STAYUP mode. This final
+image supersedes the earlier r111 image described above.
+
+The final boot has PID 1 systemd, KWin and plasmashell running, zero failed
+system units, and active SSH, ADSP sensors-domain and iio-sensor-proxy
+services. fprintd returns `ao 0` from GetDevices, as expected without an
+Egis backend. PIN unlock was exercised successfully. Screenshots confirm
+that Plasma's initial welcome screen and the Users settings render on the
+phone; onboarding preferences have been left for the user. Spectacle works
+after this cold boot with its package already installed; earlier attempts
+after a live package install were rejected by KWin's screenshot permission
+check. No KWin permission bypass was applied. Evidence is in
+`out/try-kernel/live-stayup-plasma-fingerprint-r112.txt`,
+`plasma-final-desktop.png` and `plasma-final-fingerprint.png`.
+
+**Repeatable unattended camera check:** run
+`scripts/camera-pattern-check.sh` as root on the phone with no camera app
+capturing. It uses bounded captures, enables each sensor's colour bars
+after streaming starts, checks all eight RGB bars, and restores normal
+sensor mode. All three cameras passed on the final r112 image; see
+`out/try-kernel/live-final-camera-pattern-check.txt`. The checker allows
+colour-matrix/gamma processing: the wide camera's blue bar has red=104,
+which failed the initial overly strict low-channel cutoff of 100. The
+final check requires high channels above 192 and low channels below 128.
+This validates channel order and complete output, not photographic colour
+accuracy. Image-quality limitations listed above still apply.
+
+Plasma Camera was also retested after the final cold boot. Its 3992x3000
+viewfinder streamed frames and rendered the main sensor's test bars in the
+actual GUI, captured in `out/try-kernel/plasma-final-camera-bars.png`.
+The log is `live-final-plasma-camera-bars.txt`. The ordinary scene appeared
+black in the unlit preview; bars distinguish that from a broken GUI image
+path. Both GUI runs were deliberately bounded by timeout, which returned
+241 through this command stack after terminating the application. They
+did not exercise the app's JPEG shutter or video recording. Sensor test
+patterns were restored to disabled and torch brightness was zero.
+
+## Historical bring-up record
+
 Last updated: 2026-10-12. **Our own kernel boots a full system: round 83
 took the 6.18 mainline kernel through OpenRC into Lomiri, and on
 2026-10-12 all three cameras streamed through libcamera (see "All three
@@ -5124,8 +5979,9 @@ as what it would have fixed.
   - **Rules for everything that follows:**
     - Load only `egisap64`. `fingerpr`, Qualcomm's ultrasonic app, is
       unused here and declares the same app name.
-    - Send nothing but command 0x01 until the pointer fix-up is proven.
-      Reasoned, from a precedent: a wrong one resets the phone.
+    - Use the gated read-only protocol checks described above before any
+      sensor commands. Never insert an unregistered userspace pointer into
+      the TA request.
     - Never provision or erase RPMB, and write nothing to it without
       the owner's word: its counters are shared with Android.
     - Leave the fingerprint's SPI engine and its pins to TrustZone.
@@ -5194,22 +6050,17 @@ as what it would have fixed.
     `embeddedBufOffsets`, `is64`=1; `reqOut`, `rspOut`; four null memory
     objects) returned `QCOMTEE_OK` for top commands 0x00 and 0x01. No
     listener, no RPMB and no shared-memory object were needed for this.
-  - **Verified, command 0x01 writes no response:** with the response
-    buffer pre-filled to 0xAA, commands 0x00 and 0x01 (operands 7 and 3)
-    both left it entirely 0xAA and left `reqOut` equal to `reqIn`. So
-    cmd 0x01 does **not** store `operand*10` at response offset 0; the
-    earlier reading of the handler — `out/dl-fp/notes-re/re-findings.md`
-    — overstated a C `return len*10` as a buffer write. The compat path
-    surfaces only the transport status (0), not the app's return, so
-    command 0x01 cannot by itself prove the in-TA handler ran.
-  - **Reasoned, real data needs the ETS path:** confirming the handler
-    and reaching the BIX commands (`get_version`, `hello`, enrol,
-    verify) needs top command 0xE0, which carries a pointer at request
-    offset 8 that TrustZone must fix up (route b,
-    `embeddedBufOffsets=[8]` with a memory object as `smo1`). A wrong
-    fix-up resets the phone, so 0xE0 stays gated until the fix-up is
-    proven, and enrol/verify will also need the RPMB and GP-FS
-    listeners and owner consent before any RPMB write.
+  - **Corrected 2026-10-13:** the unchanged 0xAA buffers were only 64
+    bytes. TA disassembly and execution in Unicorn prove they were rejected
+    before dispatch; command 0x01 does write operand*10 at response offset
+    0 with sufficiently sized buffers. See the framing review above.
+  - **Corrected, ETS layout:** metadata and input are inline; the pointer
+    at offset 8 is optional shared output storage. Pointer-free framing and
+    absent-output error checks need no fix-up. A real version response
+    requires registered memory through UID 122, now implemented behind
+    those checks. Whether enrollment needs RPMB listeners remains to be
+    demonstrated by the actual TA path; qseecomd's general startup rule
+    alone does not prove that requirement for this operation.
   - No TA blob is committed: `egisfp-tee` ships only the binary, and the
     `.bNN` segments were pushed to `/tmp` on the phone for the test.
 - **boot-deploy's v4 path builds the images the way this port needs** —

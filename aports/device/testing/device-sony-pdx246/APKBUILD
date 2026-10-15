@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=13
+pkgrel=20
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -29,12 +29,18 @@ depends="
 	postmarketos-base
 "
 makedepends="devicepkg-dev"
-install="$pkgname-openrc.post-install $pkgname-openrc.post-upgrade"
+install="$pkgname-openrc.post-install $pkgname-openrc.post-upgrade
+	$pkgname-systemd.post-install $pkgname-systemd.post-upgrade"
 source="
+	90-pdx246-usb.conf
+	unudhcpd-usb-address.conf
+	80-device-sony-pdx246.preset
+	fprintd-egisfp.conf
 	deviceinfo
 	81-libssc-sony-pdx246.rules
 	hexagonrpcd-adsp-fresh
 	hexagonrpcd-adsp-sensorspd.conf
+	hexagonrpcd-adsp-sensorspd.systemd.conf
 	kernel-cmdline.downstream.conf
 	kernel-cmdline.mainline.conf
 	lomiri-deviceinfo.yaml
@@ -48,6 +54,7 @@ subpackages="
 	$pkgname-kernel-mainline:kernel_mainline
 	$pkgname-lomiri:lomiri
 	$pkgname-openrc
+	$pkgname-systemd
 "
 
 build() {
@@ -96,21 +103,32 @@ kernel_downstream() {
 # domain asks for, hence the version. The domain also wants hexagonrpcd early,
 # and hexagonrpcd-adsp-fresh, run from the service's start_pre, restarts the
 # ADSP when it is not.
+#
+# qsee-supplicant answers the fingerprint TA's listener requests, the time
+# service without which its sensor initialisation fails, and its loader
+# keeps the TA loaded for libfprint's egisqsee driver. The systemd
+# subpackage's preset enables both, and lets fprintd at the device nodes.
 kernel_mainline() {
 	pkgdesc="Our own 6.18 mainline kernel, see docs/06-mainline.md"
 	depends="
 		alsa-ucm-conf
+		pdx246-diagnostics
+		pdx246-camera-calibration
+		firmware-sony-pdx246-cameras
 		firmware-sony-pdx246-adreno
 		firmware-sony-pdx246-adsp
 		firmware-sony-pdx246-audio
 		firmware-sony-pdx246-audioreach-topology
 		firmware-sony-pdx246-cdsp
+		firmware-sony-pdx246-fingerprint
 		firmware-sony-pdx246-hexagonfs
+		firmware-sony-pdx246-modem
 		firmware-sony-pdx246-wlan
 		hexagonrpcd>=0.4.0-r103
 		linux-firmware-ath10k
 		linux-firmware-qca
 		linux-postmarketos-qcom-sm6450
+		qsee-supplicant
 		soc-qcom
 		"
 	devicepkg_subpackage_kernel $startdir $pkgname $subpkgname
@@ -174,11 +192,34 @@ openrc() {
 	mkdir -p "$subpkgdir"
 }
 
+# Plasma Mobile uses systemd. Keep the same firmware path and early sensor
+# attachment as the OpenRC service; do not enable any slot-success writer.
+systemd() {
+	install_if="$pkgname-kernel-mainline=$pkgver-r$pkgrel systemd"
+	depends="hexagonrpcd-systemd iio-sensor-proxy qsee-supplicant-systemd systemd"
+	install -Dm644 "$srcdir"/90-pdx246-usb.conf \
+		"$subpkgdir"/usr/lib/NetworkManager/conf.d/90-pdx246-usb.conf
+	install -Dm644 "$srcdir"/unudhcpd-usb-address.conf \
+		"$subpkgdir"/usr/lib/systemd/system/unudhcpd@usb0.service.d/address.conf
+
+	install -Dm644 "$srcdir"/hexagonrpcd-adsp-sensorspd.systemd.conf \
+		"$subpkgdir"/usr/lib/systemd/system/hexagonrpcd-adsp-sensorspd.service.d/device.conf
+	install -Dm644 "$srcdir"/80-device-sony-pdx246.preset \
+		"$subpkgdir"/usr/lib/systemd/system-preset/80-device-sony-pdx246.preset
+	install -Dm644 "$srcdir"/fprintd-egisfp.conf \
+		"$subpkgdir"/usr/lib/systemd/system/fprintd.service.d/egisfp.conf
+}
+
 sha512sums="
+24acddc512f8f239751a738d3dfe6916618a520dfbcb57ec0e36088aa0c19cb9b571460f33b348ccfdd093d6dd0f278bf5a0a713a43231ff7209bb5806da699a  90-pdx246-usb.conf
+db0ea823df78c9535bf1b14025bf90cf875f7d878550e1372ee859c64696a190286228b9c2bf97365440fad5fb95ff955832b317ee8cf914f66522515b3a65bd  unudhcpd-usb-address.conf
+58af80a1b9ae40f231005b633dc1ec5c9c62c84a68d24ba723d5e1854285130f948a9fef05d6321e564fb7628f2637528a8523fd411506191168ef2ef7259b47  80-device-sony-pdx246.preset
+ce91c9c2e7581b1268644828d37b764d0705a26cd6edb895229b4a43372ebbf40da1f0e32b23cdbbb3d9611c6f6bd7518a86bb360a4354c0eb5677ffc30ba829  fprintd-egisfp.conf
 00687770c23f11cad6a889a544a32f18e02913689019b1752af2b8c290061f3707a46dc7aece1d64a47728a620f874117c091318efbd0a8001abde3dc6e9f189  deviceinfo
 0dd7721841995d40a94be2eb664d9924a583a72a368bbfc35baa03093cbcd002290fc226d1828a5cace6d125ef97867633f2b182eb41cd5845e98cc572014351  81-libssc-sony-pdx246.rules
 18f91894b9a77ca4d99a8ae154ccdef3fb05070266f44e0e3fcad4f10459a00a87b4c66436c4929b105cd4aecb6b5a0b7c3d11d8afdc8b9e78e1832992764652  hexagonrpcd-adsp-fresh
 d43fa56f8b8119ae57526c49ed704dfa2d16ac9ea9adbc78892dfb2dd04b15e246160a8cc8e3a0e8f1d39390f0865eb950a0b47b45f2f380844c2f2c1c0b1464  hexagonrpcd-adsp-sensorspd.conf
+9b10ccf23ea9c6acbd2afb6b06ad980b9f2d079c630ecb818116234f9cf181ecbefcbf6e3ef06ce425728cc15ced9a0e9e4029d1e2144ccec2d761a67dc47f90  hexagonrpcd-adsp-sensorspd.systemd.conf
 e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e57738a425bd75dfe7e28985cc60756f010bfd70fdbff79bb4  kernel-cmdline.downstream.conf
 0de42370419287d3b492ee279ca01d0169ced9b143aa1a4e4d1f94de9437b7df5cc552e5d5388d8909c3fe9c7bc765902f9a883feccd5e87eb0dc46d409c6066  kernel-cmdline.mainline.conf
 f21a83a2d72f89825ffe640e3e2af53f4603995e1e9027e64970c277d02b52229c3fa8995de65a4516571048fb2763f9d74a5dd1dbcce0359d262252e4f66180  lomiri-deviceinfo.yaml

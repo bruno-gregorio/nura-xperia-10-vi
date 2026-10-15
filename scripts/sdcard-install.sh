@@ -86,6 +86,10 @@ done
 [ -f "$IMG" ] || die "no image at $IMG - run scripts/make-rootfs-img.sh first"
 [ -r "$IMG" ] || die "$IMG is not readable as $(id -un)"
 IMG_SIZE=$(stat -c %s "$IMG")
+# A failed build allocates the image before filling it, so a file of the right
+# size can still be all zeros. Insist on the ext4 magic, 0xef53 at 1080.
+[ "$(od -An -tx1 -j1080 -N2 "$IMG" | tr -d ' ')" = 53ef ] \
+	|| die "$IMG holds no ext4 filesystem - rerun scripts/make-rootfs-img.sh"
 
 command -v python3 >/dev/null || die "python3 is needed for scripts/telnet.py"
 

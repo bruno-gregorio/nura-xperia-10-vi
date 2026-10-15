@@ -170,4 +170,4 @@ say "done: $IMG"
 echo "    $(as_root stat -c %s "$IMG" | sed ':a;s/\B[0-9]\{3\}\>/,&/;ta') bytes"
 echo
 echo "This image has no partition table - it is a bare ext4 filesystem, which"
-echo "is what gets flashed to userdata. scripts/flash.sh checks for that."
+echo "is what scripts/sdcard-install.sh writes to the SD card's first partition."

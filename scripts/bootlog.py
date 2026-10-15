@@ -10,24 +10,23 @@ with it.
 
 So the log has to go to flash, and there are two places it can go.
 
-The SD card is the first choice, because both kernels can reach it: sdhci-msm
-is builtin on mainline, which has no UFS driver at all. The log lives in a
-fixed raw region well past the rootfs partition, in space no partition
-claims, and the hook proves that again before every write - the disk must be
-this card, by exact size, and no partition on it may overlap the region. One
-slot per boot attempt, so the seventh attempt does not overwrite the first,
-and two alternating halves per slot, so a reset in the middle of a write
-always leaves the previous complete record behind.
+The SD card is the first choice, because no Android partition lives on it.
+The log lives in a fixed raw region well past the rootfs partition, in space
+no partition claims, and the hook proves that again before every write - the
+disk must be this card, by exact size, and no partition on it may overlap the
+region. One slot per boot attempt, so the seventh attempt does not overwrite
+the first, and two alternating halves per slot, so a reset in the middle of a
+write always leaves the previous complete record behind.
 
-'rddata' on UFS is the fallback, for a downstream boot whose card is missing:
+'rddata' on UFS is the fallback, for a boot whose card is missing:
 20 MiB of Qualcomm ramdump staging that is all zeros on this device and is only
 ever written when a debug-fused SoC collects a ramdump, which ours cannot.
 out/device-dump-root/stock/rddata.img is a backup of it taken before we ever
 wrote there.
 
 The trick that makes this work at all is that the kernel ring buffer is
-retroactive. We cannot write to flash early - UFS is a module, loaded eighty
-modules into the initramfs - but we do not have to. A single dump taken the
+retroactive. We cannot write to flash early - downstream, UFS is a module,
+loaded eighty modules into the initramfs - but we do not have to. A single dump taken the
 moment storage appears carries every message since the first line of kernel
 output. So the dumper is armed early and blocks until the block device shows
 up, then writes the whole history at once and keeps re-writing, which also
@@ -332,10 +331,10 @@ pmbootlog_record() {
 pmbootlog_start() {
 	(
 		# The card comes up early on mainline, where sdhci-msm is
-		# builtin, and in the middle of load_modules downstream; UFS only
-		# ever downstream. So wait for either, preferring the card, and
-		# give up after two minutes - if neither appeared, no amount of
-		# waiting produces a log.
+		# builtin, and in the middle of load_modules downstream. So
+		# wait for it or for UFS, preferring the card, and give up after
+		# two minutes - if neither appeared, no amount of waiting
+		# produces a log.
 		i=0
 		while :; do
 			card=$(pmbootlog_find_card) && break

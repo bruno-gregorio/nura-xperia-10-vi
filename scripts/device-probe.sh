@@ -6,8 +6,8 @@
 # Runs on the host, where adb lives. Writes nothing to the device, needs no
 # root and no unlock, so it is safe to run on a phone you still care about.
 # Point of the exercise: find out whether the assumptions in docs/01-device.md
-# and scripts/flash.sh hold against the real hardware, *before* unlocking
-# wipes it. Everything here is read-only.
+# hold against the real hardware, *before* unlocking wipes it. Everything here
+# is read-only.
 #
 # Deliberately does not collect the IMEI. The unlock code is tied to it, so
 # you will need it, but it does not belong in a file in this repo - read it
@@ -64,7 +64,8 @@ say "lock and verified boot state"
 # pass Play Integrity: a phh-based GSI reports flash.locked=1,
 # verifiedbootstate=green and veritymode=enforcing on a device that is in fact
 # unlocked. The only authority is the bootloader, via 'fastboot getvar
-# unlocked' - which is why flash.sh reads the slot from fastboot and not here.
+# unlocked' - which is why try-kernel.sh reads the slot from fastboot and not
+# here.
 for p in ro.boot.flash.locked ro.boot.verifiedbootstate ro.boot.veritymode \
          ro.boot.vbmeta.device_state sys.oem_unlock_allowed \
          ro.oem_unlock_supported ro.boot.slot_suffix; do
@@ -98,25 +99,19 @@ esac
 say "kernel we are replacing"
 adb shell cat /proc/version 2>/dev/null | sed 's/^/    /' || echo "    unavailable"
 
-say "partitions flash.sh will write"
+say "partitions the port writes"
 # Listing by-name needs no root. Sizes do, so this only confirms the names
 # exist and which slot suffixes are present.
 byname=$(adb shell 'ls /dev/block/by-name/ 2>/dev/null' || true)
 if [ -z "$byname" ]; then
 	echo "    could not list /dev/block/by-name (restricted on this build)"
 else
-	for p in boot vendor_boot dtbo vbmeta vbmeta_system userdata; do
+	for p in boot vendor_boot dtbo vbmeta vbmeta_system; do
 		hits=$(echo "$byname" | tr -d '\r' | grep -x "${p}\(_a\|_b\)\?" | tr '\n' ' ' || true)
 		printf '    %-16s %s\n' "$p" "${hits:-MISSING}"
 	done
 	echo "    (total $(echo "$byname" | tr -d '\r' | grep -c . ) entries)"
 fi
-
-say "pstore / ramoops - the console of last resort"
-# docs/04-flashing.md leans on this when nothing enumerates over USB. Worth
-# knowing now whether stock exposes it at all.
-adb shell 'ls /sys/fs/pstore/ 2>/dev/null' | tr -d '\r' | sed 's/^/    /' \
-	| grep . || echo "    /sys/fs/pstore is empty or not readable (normal after a clean boot)"
 
 say "A/B slot"
 printf '    %-38s %s\n' "current slot suffix" "$(prop ro.boot.slot_suffix)"
@@ -124,11 +119,10 @@ printf '    %-38s %s\n' "current slot suffix" "$(prop ro.boot.slot_suffix)"
 echo
 echo "Nothing was written to the device."
 echo
-echo "Next, in order:"
-echo "  1. Back up stock firmware. You cannot dd the partitions without root,"
-echo "     and you cannot get root without unlocking, which wipes - so the"
-echo "     backup is a firmware *download* (XperiFirm/Newflasher), not a dump."
-echo "     See docs/04-flashing.md."
+echo "Next, in order (docs/04-flashing.md):"
+echo "  1. Download stock firmware for this model (XperiFirm/Newflasher). You"
+echo "     cannot dd the partitions without root, and root needs the unlock,"
+echo "     which wipes."
 echo "  2. Enable OEM unlocking in Developer options, if the check above said OFF."
 echo "  3. Get the unlock code from Sony, using the IMEI from *#06#."
-echo "  4. scripts/flash.sh ramboot"
+echo "  4. After the unlock, back up both slots with scripts/device-collect.sh."

@@ -7,6 +7,7 @@
 aports = @ROOT@/.pmb/pmaports
 work = @ROOT@/.pmb/work
 device = sony-pdx246
-kernel = downstream
-ui = console
+kernel = mainline
+service_manager = systemd
+ui = plasma-mobile
 build_default_device_arch = True

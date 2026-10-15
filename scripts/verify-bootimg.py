@@ -238,35 +238,6 @@ def main():
             return 1
         print(f"        {p.stat().st_size:,} bytes")
 
-    rootfs = IMAGES / "sony-pdx246.img"
-    if rootfs.is_file():
-        # blockdevice.create() allocates this file *before* the loop mount, so
-        # a failed install leaves a correctly sized, completely empty sparse
-        # file behind. Flashing that would write zeros over userdata, so insist
-        # on a GPT rather than merely on the file existing.
-        # Two shapes are valid: pmbootstrap's own image carries a GPT, while
-        # make-rootfs-img.sh writes a bare ext4 (superblock magic 0xef53 at
-        # offset 1080).
-        with rootfs.open("rb") as fh:
-            fh.seek(512)
-            gpt = fh.read(8)
-            fh.seek(1080)
-            ext4 = fh.read(2)
-        shape = ("a GPT" if gpt == b"EFI PART"
-                 else "a bare ext4 filesystem" if ext4 == b"\x53\xef"
-                 else None)
-        if shape:
-            print(f"  ok   {rootfs.name} holds {shape}"
-                  f"\n        {rootfs.stat().st_size:,} bytes")
-        else:
-            check(False, f"{rootfs.name} holds a filesystem",
-                  f"{rootfs.stat().st_size:,} bytes, but neither a GPT at 512 nor "
-                  "an ext4 superblock at 1080 - allocated and never filled, "
-                  "do not flash it")
-    else:
-        print(f"  --   {rootfs.name} absent - ramboot does not need it, "
-              f"'flash.sh flash' does")
-
     print("\n-- boot.img --")
     b = parse_boot(boot_p)
     if not check(b is not None, "ANDROID! magic"):
@@ -371,8 +342,9 @@ def main():
               hint="run scripts/make-rootfs-img.sh")
     else:
         # An image of the right size that is all zeros is the dangerous case:
-        # flashing it would wipe userdata and boot nothing. Check for a real
-        # filesystem, not just for a file.
+        # a failed build allocates the file before filling it, and writing
+        # that to the card boots nothing. Check for a real filesystem, not
+        # just for a file.
         sb = ext4_superblock(img)
         check(sb is not None, "is a bare ext4 filesystem (no partition table)",
               hint="no ext4 superblock at offset 1024 - is the image all zeros?")

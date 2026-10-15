@@ -4,10 +4,10 @@
 #   scripts/console.sh            wait, diagnose, connect
 #   scripts/console.sh watch      wait and diagnose, do not connect
 #
-# Run this on the host, in a second terminal, right before or just after
-# 'scripts/flash.sh ramboot'. The device has no working display yet, so this
-# network gadget is the only way to see anything; docs/04-flashing.md covers
-# the pstore fallback for when it never shows up.
+# Run this on the host when a scripts/try-kernel.sh round has stopped at the
+# initramfs debug shell; try-kernel.sh calls it itself. Until the system is up
+# this network gadget is the only way in; docs/04-flashing.md covers what to
+# do when it never shows up.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -49,15 +49,12 @@ if [ -z "$found" ]; then
 	cat <<'EOF'
     What this means, in order of likelihood:
 
-    1. The kernel never got far enough to bring the gadget up. Read
-       /sys/fs/pstore/console-ramoops* after the next boot - see
-       docs/04-flashing.md. This is the common case on a first attempt.
-    2. The bootloader refused 'fastboot boot' or ignored the staged
-       vendor_boot, so the stock kernel ran instead. Check 'lsusb' for a
-       normal Android device, and docs/05-status.md on that risk.
-    3. Type-C role detection never decided the port is a device.
-       TYPEC_QCOM_PMIC is not set, so this goes through the PMIC driver and
-       extcon, and is the least verified part of the chain.
+    1. The kernel never got far enough to bring the gadget up. Once the
+       phone has fallen back to stock, 'scripts/try-kernel.sh --log' reads
+       what the boot wrote to the SD card - see docs/04-flashing.md.
+    2. The images did not come from scripts/try-kernel.sh, which patches
+       /init to ask dwc3 for peripheral mode. Without that no UDC is ever
+       created, whatever the kernel does.
 
     Currently attached:
 EOF
@@ -98,11 +95,11 @@ fi
 
 say "opening the debug shell on $DEVICE_IP:23"
 cat <<'EOF'
-    Once you are in, these are the four that matter:
+    Once you are in:
       cat /pmOS_init.log      what the initramfs did
       dmesg                   what the kernel did
-      pmos_logdump            hand both over as a USB mass-storage volume
-      pmos_continue_boot      carry on into the real rootfs
+    Leaving the shell to continue the boot tears this USB link down and
+    nothing brings it back; a FULLBOOT=1 round boots the system instead.
 EOF
 echo
 

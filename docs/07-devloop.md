@@ -1,358 +1,207 @@
 # Fast iteration on kernel builds
 
-How to test many kernels an hour with no hands on the device. The target is a
-single command an agent can run unattended, which returns a verdict and a log
-for every build and recovers by itself when a kernel does not boot; the short
-answer to "do I have to reboot and re-flash by hand" is **no for the common
-case, and the exceptions are bounded**, and most of the win comes from three
-cheap changes rather than anything exotic.
+How this port tests many kernels a day with no hands on the phone. Writing the
+code was never the expensive part; device time is, and what a static check can
+never know (regulator sequencing, panel timing, probe order) still has to be
+asked of the hardware. So the measure is rounds per hour, unattended, and every
+failure that can be caught before the phone is caught there.
 
-## Why the earlier estimates were the wrong unit
+## Before the phone
 
-Timelines of "weeks" in [06-mainline.md](06-mainline.md) priced human
-transcription throughput. That is the wrong unit here, and the correction
-changes what to optimise.
+Checks that cost no device time, in the order a round runs them.
 
-- **Transcription is near-free and mechanically checkable.** The 119/119 clock
-  offset comparison that identified SM4450 generalises into a test: for every
-  clock in a hand-written `gcc-sm6450.c`, assert the register offset matches
-  `gcc-parrot.c`. A whole class of typo-shaped bugs becomes impossible to ship.
-- **What does not compress is wall-clock per device test**, and the number of
-  tests needed for things no static check can know: regulator sequencing, panel
-  timing, probe order.
-- **So the metric to optimise is cycles per hour, hands-free**, not
-  person-hours. Everything below serves that.
+- **Register tables** — `scripts/check-tables.sh` compares a written clock or
+  pinctrl driver against the vendor source it came from, offset by offset.
+  Its self-test is the ravelin/sm4450 pair, which has to agree on 119 clocks
+  and 136 pins.
 
-## Tiers
+  ```sh
+  scripts/check-tables.sh clk     gcc-parrot.c     gcc-sm6450.c
+  scripts/check-tables.sh pinctrl pinctrl-parrot.h pinctrl-sm6450.c
+  ```
 
-Each tier is a place a build can fail. A failure caught in a lower tier costs
-no device time, so work is pushed down as far as it will go.
+- **The device tree against the live one** — `scripts/check-dt.py` checks
+  every address and interrupt in our tree against `/proc/device-tree` as stock
+  Android booted it, the resolved tree for this exact board. A deliberate
+  difference passes only when it is named on the command line.
 
-### Tier 0 — static, no device, seconds
+  ```sh
+  out/kbuild/scripts/dtc/dtc -I fs -O dts \
+      out/device-dump-root/devicetree/base > live.dts
+  scripts/check-dt.py --allow 0xf100000=tlmm-rebase ours.dts live.dts
+  ```
 
-1. **Table equivalence.** Implemented in `scripts/check-tables.sh`. Compares a
-   written driver against the vendor source it was derived from, generalising
-   the SM4450 proof; catches transposed digits, dropped entries, a mux function
-   in the wrong slot. Clock offsets are compared exactly; pinctrl allows
-   mainline's convention of collapsing downstream's per-signal names into one
-   function group per slot. Its self-test is the known-good ravelin/sm4450
-   pair, which must come out at 119 clocks and 136 pins, all agreeing.
+- **Bindings** — `make dt_binding_check` and `make dtbs_check`, plus `W=1` on
+  the drivers.
+- **The patch export** — `scripts/sync-kernel-patches.sh --check` fails when
+  the kernel aport would build from patches that no longer match the branches
+  in `out/linux`.
+- **The package** — `scripts/verify-build.sh [downstream|mainline]`: the DTB
+  we boot is in the package, and every module `modules-initfs` names was
+  built.
 
-   ```sh
-   scripts/check-tables.sh clk     gcc-parrot.c     gcc-sm6450.c
-   scripts/check-tables.sh pinctrl pinctrl-parrot.h pinctrl-sm6450.c
-   ```
+## A round
 
-2. **Device tree validation.** `make dt_binding_check` and `make dtbs_check`
-   against the bindings, plus `W=1` on the drivers.
-3. **DTB differential.** Implemented in `scripts/check-dt.py`. Decompile the
-   built DTB and check every address and interrupt in it against the tree the
-   device actually boots. The reference turned out to be better than this plan
-   assumed: not the stock `parrot.dtsi` but `/proc/device-tree` read off the
-   running stock Android, which is the resolved tree for this exact board.
-   A deliberate deviation passes only if it is named on the command line, so
-   the list of them stays honest.
+`scripts/try-kernel.sh` is a whole round in one command, and it runs from a
+copy of itself, so the script can be edited while a round is going.
 
-   ```sh
-   out/kbuild/scripts/dtc/dtc -I fs -O dts \
-       out/device-dump-root/devicetree/base > live.dts
-   scripts/check-dt.py --allow 0xf100000=tlmm-rebase ours.dts live.dts
-   ```
-4. **Package shape.** Already implemented in `scripts/verify-build.sh`: the DTB
-   we boot is present, and every module named in `modules-initfs` was built.
+1. **Reach fastboot** — over adb from Android or recovery, by itself. From a
+   running postmarketOS that is `scripts/to-fastboot.sh`'s job.
+2. **Make sure there is a way back** — the active slot has to be marked
+   successful. If it is not and the other one is, the round switches to it and
+   boots it once first.
+3. **Build the images** — the installed kernel's `vendor_boot` with the right
+   device tree for it, `/init` patched for this phone's USB, the log hook from
+   `scripts/bootlog.py`, and the command line edited in the header; the active
+   slot's `vbmeta` with the disable flags; and the `dtbo` the kernel needs.
+4. **Flash the spare slot and boot it** — `--set-active` resets its retry
+   counter to seven.
+5. **Wait, and say what happened** — the `RESULT` line is one of: our kernel
+   on adb, the USB gadget up, a fallback to the stock slot, the bootloader
+   dropping to fastboot, or nothing in the time allowed. A gadget gets
+   harvested or, on a full boot, the round's commands over ssh; a fallback gets
+   its log read straight away.
 
-### Tier 1 — build, no device, minutes
+### Modes
 
-1. **Incremental out-of-tree build.** Keep one warm kernel tree with `O=` and
-   `ccache` and run `make` directly, not through `abuild`, which re-extracts
-   the tarball every time.
-2. **Repack only the boot images.** A kernel change never changes the rootfs.
-   Rebuilding or reflashing the 16 GiB `userdata` image per iteration is the
-   single largest avoidable cost in the naive loop.
+Environment variables pick what a round flashes and does. The comments next to
+the code that reads each one say more.
 
-### Tier 2 — device, hands-free, the normal case
+- **No mode** — stops at `pmos.debug-shell` in the initramfs and harvests over
+  telnet into `out/probe-harvest.txt`. `LIVE=file` then runs a plan's own
+  commands there through `scripts/tsh.py`, into `out/live.txt`.
+- **`FULLBOOT=1`** — boots the whole system and runs `LIVE` over ssh through
+  `scripts/ssh.py` instead. The initramfs's log hook and USB watchdog keep
+  running past `switch_root` and reset the phone unless a host holds it, so
+  the round holds it while its commands run.
+- **`STAYUP=1`** — the whole system with no hook and no watchdog, for using
+  the phone rather than testing it; see [04-flashing.md](04-flashing.md).
+- **`CMDLINE_ADD` and `CMDLINE_DEL`** — edit the kernel command line in the
+  `vendor_boot` header rather than rebuilding the package; deletions go first,
+  and `CMDLINE_DEL` takes globs. What turns out to matter goes into
+  `kernel-cmdline.mainline.conf` before it is believed.
+- **`DTB=path`** — another device tree, for bisecting the one we wrote: a
+  `dtc` run, against minutes for a kernel build.
+- **`STAGE=1`, `PROBE=1`, `MARKS`, `BOOTLOG=0`** — bring-up probes for a kernel
+  that dies before anything else can report. `STAGE=1` loads the modules one
+  at a time; `PROBE=1` only reboots, so the retry counter says whether
+  userspace was reached; `MARKS` numbers the init's steps into the reset
+  timing; `BOOTLOG=0` leaves the log hook out, to tell a kernel that fails on
+  its own from one the hook broke.
+- **`WAIT`** — seconds to wait for a result, 2100 by default.
 
-1. **Known-good system is the harness.** One slot holds a system that boots
-   reliably. Test kernels never touch it. When a test kernel dies, the device
-   returns here, and *this* system reads the dead kernel's log.
-2. **ramoops is the instrument.** `parrot.dtb` reserves 768 K at `0xffd00000`
-   with 256 K of console ring, and `PSTORE_RAM` is builtin. The previous boot's
-   console survives a reset, so a kernel that never reached USB still produces
-   a full log, retrieved automatically by the next boot.
-3. **Failures must self-heal.** A panic currently waits forever for a human.
-   `panic=10` on the cmdline turns it into a reboot into the known-good system
-   with the panic in ramoops. The Qualcomm APPS watchdog covers hangs that
-   never reach the panic handler.
-4. **A non-interactive boot profile.** `pmos.debug-shell` deliberately stops
-   and waits for a person, which is correct for the first boot and wrong for
-   every automated one. The automated profile collects and reboots instead.
+### Reading a round
 
-### Tier 3 — reboot-free, if it works
+What a round leaves behind, and where.
 
-1. **kexec from a running system.** Load a new kernel over the network and jump
-   to it with no bootloader and no fastboot. This is the fastest possible loop
-   and the least certain: arm64 kexec is upstream and has been used on
-   Snapdragons, but Qualcomm's hypervisor and the remoteproc teardown are where
-   it tends to fail.
+- **The run log** — `out/try-kernel/run-NAME.log` for a queued round.
+- **The boot log** — `scripts/try-kernel.sh --log` reads the kernel's ring
+  buffer back from the SD card's log region, or from `rddata` when no card
+  turned up, and clears both. It gets into recovery from wherever the phone
+  is. Every attempt's record lands in `out/try-kernel/bootlog-card-*.txt`, and
+  each carries the round's id on its command line, so an old record cannot be
+  mistaken for a new one.
+- **The live session** — `out/probe-harvest.txt` and `out/live.txt`.
 
-### Tier 4 — one-time hardware, removes the last manual step
+## Queues
 
-1. **UART on the USB-C SBU pins.** The port at `0x98c000` is already configured
-   with `earlycon`. A breakout cable gives a permanent console that works for
-   panics too early for ramoops, which is exactly the class of failure that
-   otherwise costs a human debugging session.
-2. **Switchable USB power.** A hub with per-port power control (`uhubctl`)
-   automates re-enumeration. It does not power-cycle the phone, which has a
-   battery, so it complements the watchdog rather than replacing it.
+`scripts/queue.sh <plan>` runs rounds back to back. A plan is a shell fragment
+that calls `round NAME VAR=value ...` per round and can branch on
+`ROUND_RESULT` and `ROUND_TOTAL`. It reads each round's logs before starting
+the next, waits up to three hours for a phone that went quiet, and stops
+rather than go on without it. It logs to `out/try-kernel/queue-*.log`. Start
+it detached, or it dies with the session that started it:
 
-## The loop
+```sh
+setsid scripts/queue.sh plan.sh > /dev/null 2>&1 < /dev/null &
+```
 
-The unattended cycle, once a known-good system is on one slot.
+## Getting the phone back
 
-1. **Build.** Tier 1, incremental. Fail here and stop; no device involved.
-2. **Run Tier 0 checks** on the output. Fail here and stop.
-3. **Get the device to a known state.** Trigger `reboot bootloader` over the
-   network from the known-good system, or a plain reboot for a kexec run.
-4. **Load the test kernel.** RAM-boot if that works on this device, otherwise
-   flash the test slot. Never both slots.
-5. **Wait for a verdict, bounded.** Either the gadget enumerates and the
-   automated profile reports in, or the timeout expires.
-6. **Collect.** `dmesg` from the test kernel if it got that far; otherwise the
-   known-good system's `/sys/fs/pstore/console-ramoops-0` after the reset.
-7. **Classify and archive.** Write a machine-readable verdict and the logs
-   under `out/`, keyed by the build. An agent needs a deterministic
-   pass/fail/timeout primitive more than it needs pretty output.
-8. **Return to known-good** and leave the device ready for the next cycle.
+Every round needs fastboot, and there are three ways the phone can be sitting.
+
+- **In Android or recovery** — `adb reboot bootloader`, which `try-kernel.sh`
+  does itself.
+- **In a running postmarketOS** — `scripts/to-fastboot.sh` asks the kernel:
+  `systemctl reboot --reboot-argument=bootloader` reaches the restart-reason
+  driver the boot chain reads, about fifteen seconds in all. If that is ever
+  refused, it falls back to rebooting until the retry counter runs out.
+- **Hung** — nothing in software reaches it. Hold Power and Volume Up until it
+  vibrates, then Volume Up while plugging in USB.
+
+The retry counter is what makes failures hands-free. Our slot never marks
+itself successful, so each attempt at it spends one of seven, and when they are
+gone the bootloader boots the stock slot, where adb is waiting. Seven is the
+most the counter holds: it is three bits of the partition attributes in the
+GPT, and lowering it would mean writing the partition table, which this project
+never does.
 
 ## Rules
 
-Invariants that keep an unattended loop from destroying the device. These are
-the reasons the loop is safe to run without watching it.
+What keeps an unattended loop from damaging the phone.
 
-- **Never flash `dtbo` while iterating on the downstream kernel.** The stock
-  `parrot-qrd` overlay there is what turns our base `parrot.dtb` into this
-  device's tree. The mainline kernel inverts this and has to flash it: our own
-  tree is complete and has no `__symbols__`, so the overlay must not be applied,
-  and the only way to stop ABL applying one is to give it a dtbo it refuses to
-  read. What keeps that inside the rule's intent is that it goes on the spare
-  slot only, both slots are dumped byte-for-byte in
-  `out/device-dump-root/stock/`, and `try-kernel.sh --restore` puts them back.
-  See `scripts/no-dtbo.py`.
-- **Never write a `vbmeta` that is not the device's own.** Anti-rollback is
-  enforced in hardware and the disable flags do not exempt you; see
-  [04-flashing.md](04-flashing.md).
-- **Never touch both slots in one cycle.** The untouched slot is the only
-  recovery path that needs no human.
-- **Never reflash the rootfs during kernel iteration.** It did not change.
-- **Every device step gets a timeout.** An unattended loop that blocks forever
-  on a wedged device has turned into a manual process again.
-- **Treat a RAM-booted kernel as the default and a flashed one as the
-  exception.** Nothing written to flash cannot be un-written by hand.
+- **One slot per round** — the stock slot is the only way back that needs no
+  hands, so nothing writes it.
+- **Only the device's own `vbmeta`** — the active slot's, with the flags set;
+  anti-rollback refuses anything older, see [04-flashing.md](04-flashing.md).
+- **The `dtbo` follows the kernel** — a `dtbo` the bootloader cannot read on
+  mainline, stock's on downstream; [04-flashing.md](04-flashing.md) has why.
+  Both slots are backed up byte for byte, and `--restore` puts stock's back.
+- **The rootfs is not reflashed for a kernel round** — it did not change.
+  Anything in it is edited over ssh, and `scripts/sdcard-install.sh` rewrites
+  the card when a clean slate is wanted.
+- **Every device step has a timeout** — a loop that blocks on a wedged phone
+  has turned back into a manual process.
 
-## Exceptions
+## What the hardware ruled out
 
-Cases that fall outside the loop, with the cheapest way out of each.
+Four things the plan assumed before anything ran, each tried on the device and
+each recorded in [05-status.md](05-status.md).
 
-- **`fastboot boot` may not work on this device at all.** On GKI header-v4
-  devices, where the DTB lives in `vendor_boot`, RAM-booting a plain `boot.img`
-  gives a kernel with no device tree and no init: a black screen from an
-  otherwise fine kernel. The workaround to test is a self-contained header-v2
-  image carrying kernel, ramdisk and DTB together, since v2 has a `dtb` field
-  the bootloader may honour in RAM-boot mode. If that fails, Tier 2 falls back
-  to flashing the test slot, which is slower but still hands-free.
-- **A kernel that hangs before the watchdog starts.** Nothing in software can
-  recover it; the device needs a power cycle, and a phone with a battery does
-  not power off when USB power is cut. This is the one genuinely physical
-  exception. It is also rare, and Tier 4's UART is what diagnoses it.
-- **The first boot of all.** Unlock, backups and the first interactive bring-up
-  are human steps by design. [04-flashing.md](04-flashing.md) covers them, and
-  the automated loop should not be built until they are done once.
-- **Type-C role detection never comes up.** If no gadget ever enumerates,
-  `TYPEC_QCOM_PMIC` is unset and the loop has no network path in. Fall back to
-  ramoops only, which needs no USB at all.
+- **RAM boot** — the bootloader refuses `fastboot boot` outright, so every
+  round costs a flash.
+- **ramoops** — the region binds and the kernel writes to it, but the
+  bootloader scrubs that memory before the next boot. The log hook and the
+  card replaced it.
+- **A UART** — none is brought out on this phone.
+- **Continuing out of the debug shell** — releasing `pmos.debug-shell` tears
+  down the USB gadget and nothing rebinds it, so the boot goes on in silence.
+  That is why a full boot leaves the debug shell off rather than going through
+  it.
 
-## Confidence
+## Two kernels, one loop
 
-What is known to work versus what the loop assumes, on the same scale as
-[05-status.md](05-status.md).
+The device package offers Sony's 5.10 kernel as a reference and our own 6.18
+as the point of the project; `pmbootstrap init` picks one. The loop does not
+care which: the same round flashes whichever is installed and recovers the same
+way. Three things do differ.
 
-- **Verified.** ramoops is reserved in the DTB we build, `PSTORE_RAM` is
-  builtin, and 256 K of console ring survives a reset. A/B slots exist and
-  `fastboot --set-active` switches them.
-- **Reasoned.** `panic=10` converts panics into self-healing cycles. Flashing
-  only `boot` and `vendor_boot` per iteration is sufficient for a kernel
-  change. The known-good-system-as-harness pattern works because ramoops is
-  readable from any booting system.
-- **Guess.** `fastboot boot` working at all on pdx246, in any packaging. kexec
-  surviving Qualcomm's hypervisor on this SoC. The APPS watchdog being enabled
-  early enough to catch an early hang. Each is cheap to test and each has a
-  documented fallback above.
+- **Switching needs `pmb install --zap`** — both kernel packages own
+  `/boot/vmlinuz`, so apk refuses to put one over the other in the same rootfs
+  chroot.
+- **Different promises** — each kernel has its own DTB path, initramfs module
+  list and command line, and `scripts/verify-build.sh` checks the one that
+  applies.
+- **Different sources** — downstream builds from Sony's tarball unchanged.
+  Mainline builds from a kernel.org tarball plus one squashed patch per layer,
+  which `scripts/sync-kernel-patches.sh` writes out of `out/linux`; a round
+  that changes the kernel runs that and
+  `scripts/pmb checksum linux-postmarketos-qcom-sm6450` first.
 
-## Where the loop actually stands
+## What is still missing
 
-Written after the port first booted, on 2026-10-05. The tiers above were
-planned before any of this ran on hardware; this section is what the device
-actually does, and it corrects three of the guesses.
+Gaps in the loop, none of them blocking.
 
-### What is built and used every round
-
-- **`scripts/try-kernel.sh`** — one command for a whole round: build the boot
-  images, flash the test slot, wait for the gadget, and save a harvest. This is
-  the loop driver that `## Next` below used to call for.
-- **`scripts/bootlog.py`** — generates the staged probe initramfs. Each stage
-  is a numbered mark, so a boot that dies reports *where*, and `HANDOFF=1`
-  makes the last stage `exec` into the stock second stage instead of stopping.
-- **`scripts/telnet.py`** — a shell in the initramfs, before `switch_root`.
-- **`scripts/tsh.py`** — the same shell for a script: runs commands there one
-  at a time and waits for each to finish, which `telnet.py` fed from a pipe
-  does not. `try-kernel.sh` runs a file of them with `LIVE=file` as soon as a
-  round reaches the shell, so a queued round can carry its own experiment.
-- **`scripts/ssh.py`** — a shell in the booted system, after it.
-- **`scripts/sdcard-install.sh`** — writes the rootfs to the SD card from the
-  phone's own initramfs shell, so the card never has to come out.
-- **`scripts/check-tables.sh`** and **`scripts/verify-build.sh`** — the two
-  Tier 0 checks, unchanged and still the first thing every round runs.
-- **`scripts/check-dt.py`** — the third, written once the mainline device tree
-  existed to check.
-- **`scripts/clkmap.py`** — translates a vendor clock id into the mainline
-  define name, because the two headers share names and not numbers. Anything
-  copied out of the stock device tree goes through it.
-- **`scripts/sync-kernel-patches.sh`** — exports the three kernel branches,
-  `backports`, `sm6450` and `pdx246`, out of the gitignored `out/linux` into
-  `kernel/` and into the kernel aport. `--check` fails a round that would
-  build from a stale export.
-
-### Three corrections to the plan above
-
-- **ramoops was never the instrument.** Tier 2 assumed the previous boot's
-  console would survive a reset and be read back by the known-good system.
-  Nothing we tried produced a pstore entry on this device. What replaced it is
-  a probe that writes its own progress into a flash partition it is allowed to
-  write (`rddata`/`appslog`) and brings up a USB gadget as early as it can, so
-  the log is readable *during* the boot rather than after it. That is a better
-  instrument than ramoops anyway: it reports from a live kernel.
-- **There is no shell route to fastboot.** Neither `reboot bootloader` nor any
-  sysfs path gets this phone into the bootloader from a running system we
-  control, so step 3 of `## The loop` does not work as written. What does work
-  is the A/B retry counter: our test slot never marks itself booted, so each
-  attempt decrements it, and a probe that resets as soon as it is reachable
-  burns a retry in about 26 seconds instead of the probe's own 11-minute
-  patience. Four to six resets reach stock Android, two to two and a half
-  minutes apiece, hands-free. `fastboot --set-active` puts the counter back
-  to 7.
-- **The stock second stage's debug shell is fatal here, not merely
-  interactive.** Tier 2 called `pmos.debug-shell` "correct for the first boot";
-  on this phone its *exit* path tears the USB gadget down and nothing rebinds
-  it, so releasing that shell ends the boot in silence. The probe therefore
-  sets `debug_shell=n` across the handoff and keeps its own shell, which came
-  up forty marks earlier, as the inspection point. [05-status.md](05-status.md)
-  has the mechanism.
-
-### The round, as it is actually run
-
-1. `./scripts/try-kernel.sh` with `HANDOFF=1 STAGE=1`. Builds, flashes the test
-   slot, waits for the gadget, saves the harvest.
-2. If it boots: `scripts/ssh.py '<command>'`. Userspace is now editable in
-   place — no reflash, no card removal.
-3. If it does not: `scripts/telnet.py` into the probe shell and read the marks.
-   The last mark reached is the answer.
-4. To get back to a flashing state: burn the retry counter (reset from the
-   probe shell until stock Android comes up), then `fastboot --set-active` to
-   restore it.
-
-Steps 1, 3 and 4 need no hands. Step 2 is the new one, and it is the one that
-makes rootfs work cheap.
-
-### Two kernels, one loop
-
-Since 2026-10-06 the device package offers a choice: `-kernel-downstream`,
-Sony's 5.10 tree, which boots and has UFS and display drivers, and
-`-kernel-mainline`, our own 6.18, which has neither and is the point of the
-project. `pmbootstrap init` picks one, and `deviceinfo_dtb`, the initramfs
-module list, the USB controller name and the kernel command line all follow
-the choice; "Building it" in [06-mainline.md](06-mainline.md) says why each
-one differs.
-
-Nothing about the loop changes. The same `try-kernel.sh` round flashes
-whichever kernel is installed, to the same inactive slot, and recovers the
-same way, because the recovery path is the bootloader's A/B retry counter and
-knows nothing about what it is booting. That was the point of building the
-loop before the kernel.
-
-Two things do change:
-
-- Switching between them needs `pmb install --zap`. Both kernel packages own
-  `/boot/vmlinuz`, so installing one into a rootfs chroot that still holds the
-  other stops with "trying to overwrite boot/vmlinuz owned by
-  linux-sony-pdx246". That is apk behaving correctly, and it costs a rootfs
-  rebuild - about two minutes - on the rounds that change kernel, and nothing
-  on the rounds that do not.
-- `scripts/verify-build.sh` now takes `downstream` or `mainline`, and works
-  it out on its own when only one is built. Each kernel promises a different
-  DTB path and a different initramfs module list, and the script checks the
-  one that applies.
-- The kernel source of truth moved. Downstream builds from a GitHub tarball
-  with no patches of ours; mainline builds from a kernel.org tarball plus
-  one squashed patch per layer, which `scripts/sync-kernel-patches.sh` writes
-  out of `out/linux`. A round that changes the kernel therefore runs that script
-  and then `scripts/pmb checksum linux-postmarketos-qcom-sm6450` before
-  anything else, and `sync-kernel-patches.sh --check` is a Tier 0 check: it
-  fails if the aport would build from a series that does not match the tree
-  the work was done in.
-
-### Reaching fastboot from a pmOS that works
-
-The loop's route to fastboot had a hole in it that only opened once the port
-started succeeding. `try-kernel.sh`'s `need_fastboot()` assumes adb: either
-stock Android is up, or the experiment failed, burned the retry counter and
-fell back to stock, where adb is waiting. Both cases end in
-`adb reboot bootloader`.
-
-A pmOS that boots and stays up is neither. It has no adbd, and there is no
-sanctioned way to ask this kernel for the bootloader - the restart reason lives
-in a PMIC SDAM register, which was located and is writable but which this
-project is not authorised to poke. So the loop stalled on its own success: the
-phone sat up for twenty-one hours with a finished mainline kernel on the host
-and nothing able to flash it.
-
-`scripts/to-fastboot.sh` closes it. It tries fastboot, then adb, then asks the
-kernel: `systemctl reboot --reboot-argument=bootloader` hands `reboot(2)` the
-string `bootloader`, and the `qcom,reboot-reason` driver bound to the live tree
-turns that into the restart reason the boot chain reads. Fifteen seconds from a
-running pmOS to `fastboot devices` answering, which is the same mechanism
-`adb reboot bootloader` uses on stock. The script is safe to call at the top of
-any round whatever the device is doing.
-
-If that is ever refused it falls back to burning the slot's retry counter, which
-also works - our slot never reports its boot successful, so every attempt at it
-decrements the counter and nothing resets it, and slot a was measured dropping
-from 7 retries to 1 over a handful of reboots - it is just six or seven rounds
-slower. Two spellings that do not work are recorded in
-[05-status.md](05-status.md) so nobody spends an afternoon on them again:
-`systemctl reboot bootloader`, and writing `bootonce-bootloader` into the BCB
-at offset 0 of `misc`.
-
-With this the loop no longer has a hand in it on the rounds that *succeed*,
-which is the half that was missing. The rounds that fail were already
-hands-free, through the fallback to stock.
-
-### What is still missing
-
-- **Self-healing on panic.** `panic=5` is on the command line, but a kernel
-  that hangs without panicking still waits out a timeout. The in-memory
-  watchdog in the probe covers the stages it spans and nothing before them.
-- **Reboot-free iteration.** kexec is untested; see Tier 3.
-- **A verdict file.** Rounds are read by a human (or an agent) looking at the
-  harvest, not by a program. A machine-readable pass/fail/timeout per build is
-  still worth writing, and step 7 of `## The loop` describes it.
-- **UART.** Still the only thing that would diagnose a hang before the probe's
-  first mark — and on this SoC the console pins are not brought out at all, so
-  Tier 4 is harder here than it looks. See [06-mainline.md](06-mainline.md).
+- **A hang before the log hook** — needs the buttons and leaves nothing behind.
+  Only a console would diagnose it, and there is none.
+- **A verdict a program can read** — `queue.sh` branches on the `RESULT` line,
+  but what a round found is still read by a person or an agent.
+- **Reboot-free rounds** — kexec from a running system is untested, and
+  Qualcomm's hypervisor and remoteproc teardown are where it tends to fail.
 
 ## Related
 
-- [04-flashing.md](04-flashing.md) — the manual path, the AVB hazard, and every
-  way into a device with no display. Read for recovery procedures.
-- [06-mainline.md](06-mainline.md) — what the iteration is *for*, and the
-  static-verification trick this strategy generalises.
-- [05-status.md](05-status.md) — the confidence ledger these claims feed into.
+- [04-flashing.md](04-flashing.md) — installing, booting the system, getting
+  in, and recovery.
+- [06-mainline.md](06-mainline.md) — what the rounds are for.
+- [05-status.md](05-status.md) — the record each round's findings go into.

@@ -109,14 +109,14 @@ Each file states what it is sure of and what it is guessing.
   and what the downstream kernel costs.
 - **[docs/03-build.md](docs/03-build.md)** — one-time setup, the everyday build
   loop, and which files come out of it.
-- **[docs/04-flashing.md](docs/04-flashing.md)** — the flashing procedure, the
-  two irreversible steps, and how to get a console on a device with no display.
+- **[docs/04-flashing.md](docs/04-flashing.md)** — installing and booting the
+  port, the two irreversible things, getting in, and recovery.
 - **[docs/05-status.md](docs/05-status.md)** — the confidence ledger, and the
   next steps in the order they should happen.
 - **[docs/06-mainline.md](docs/06-mainline.md)** — what mainlining SM6450 would
   actually take, costed against the sources already on disk.
-- **[docs/07-devloop.md](docs/07-devloop.md)** — how to test many kernels an
-  hour with no hands on the device.
+- **[docs/07-devloop.md](docs/07-devloop.md)** — how a kernel round runs with
+  no hands on the device, its modes, and the queue.
 - **[docs/guidelines.md](docs/guidelines.md)** — the entity framework every
   document here is written to.
 

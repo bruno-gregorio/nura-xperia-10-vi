@@ -1,5 +1,55 @@
 # Status
 
+## Userspace packages and the install path, cleaned up, 2026-10-15
+
+**Built, and not run on the device.** Device package r23, libcamera r125 and
+pdx246-camera-calibration r4 move things to the layer they belong in and drop
+what nothing used. The changes:
+
+- **Camera tuning moved out of libcamera.** The tuning files for this phone's
+  modules (Sony's IMX582 and the two Hi-846s) were in our libcamera fork, in
+  `/usr/share`, under sensor names any phone with those sensors would pick up.
+  They are now in `pdx246-camera-calibration`, which `-kernel-mainline`
+  depends on, and live in `/etc/libcamera/ipa/simple`, which libcamera
+  searches first. The libcamera fork is back to upstream's generic
+  `hi846.yaml` and carries only patches meant for libcamera. **Verified:**
+  the package holds the IMX582 file and the two Hi-846 links into `/run`.
+  **Reasoned:** if the calibration service never runs, the links dangle,
+  libcamera's `File::exists` follows them and fails, and the search goes on
+  to the generic file; the front camera falls back through `hi846.yaml` the
+  same way.
+- **A front-camera failure no longer skips the back camera.** The old
+  calibration returned on the first sensor it could not calibrate, before
+  reaching the back one. Now a sensor it cannot calibrate gets the module
+  tuning unchanged and the other is still calibrated. **Verified in the
+  container:** output identical to r3's for both sensors, and with a broken
+  front checksum the front gets the module tuning, the back is calibrated,
+  and the exit status is 1.
+- **The fingerprint TA loads when fprintd starts, not at boot.** The presets
+  that enabled `qsee-supplicant` and `qsee-app-loader@egisap64` are gone. The
+  fprintd drop-in already wanted the loader, and the loader wants the
+  supplicant, so the presets only made the TA load at boot. A phone that
+  already had them enabled keeps them enabled until someone disables them.
+  **Reasoned, untested:** on a fresh install the first fprintd activation,
+  usually the lock screen's, now waits for the TA to load. If that is slow
+  enough to trip D-Bus activation, put the presets back.
+- **The shipped command line boots the whole system.** `pmos.debug-shell` is
+  no longer in `kernel-cmdline.mainline.conf`; `try-kernel.sh` adds it to
+  every round short of `FULLBOOT=1` and removes it from those, so rounds boot
+  exactly as before. **Verified:** the built package's line is the old one
+  without `pmos.debug-shell`.
+- **Dropped:** `pdx246-diagnostics`, a GPU benchmark launcher that pulled
+  `foot` and `glmark2` into every mainline image; and `scripts/flash.sh`,
+  whose RAM boot the bootloader refuses, whose boot-only flash would leave
+  the stock `dtbo` under a mainline kernel, and whose install wrote
+  `userdata`, against the SD card decision. `docs/04-flashing.md` and `docs/07-devloop.md` now
+  describe the procedure as it is run. `sdcard-install.sh` took over the
+  check that an image is really ext4.
+
+The next device round should check all of these: `systemctl status
+pdx246-camera-calibration` and the two files in `/run`, a preview on each
+camera, an unlock with the fingerprint from a fresh boot, and `/proc/cmdline`.
+
 ## Kernel r50 is three layers and less bring-up, 2026-10-15
 
 **Kernel r50 is built and has not run on the device.** It reorganises the
@@ -1236,8 +1286,9 @@ closed every gap the unprivileged pass left open.
   `kvm-arm.mode=protected` and `bootconfig`.
 - **A complete backup of both slots** — Verified. `boot`, `vendor_boot`,
   `dtbo`, `vbmeta` and `vbmeta_system` for slots a and b, in
-  `out/device-dump-root/stock/`. `flash.sh flash` needs three of these and now
-  has them, so the firmware download is no longer on the critical path.
+  `out/device-dump-root/stock/`. `try-kernel.sh` flashes from these and
+  `--restore` writes them back, so the firmware download is no longer on the
+  critical path.
 - **`dtbo` holds 37 overlays** — Verified. Three carry `board-id <0x1000b
   0x00>` and all three name the same Samsung panel; extracted and decompiled
   under `out/device-dump-root/dtbo/`.
@@ -6463,8 +6514,8 @@ as what it would have fixed.
   supported` to `fastboot boot`, and fastbootd answers `Unrecognized command
   boot` because userspace fastboot does not implement it. The image uploads
   fine in both, 29788 KB OKAY; it is only the boot command that is refused,
-  and staging `vendor_boot` first changes nothing. `scripts/flash.sh
-  flash-boot` is what replaces it.
+  and staging `vendor_boot` first changes nothing. A flash to the spare slot,
+  `scripts/try-kernel.sh`, is what replaces it.
 - **The debug shell works without a rootfs** — Verified 2026-10-08 by
   round 23. `pmos.debug-shell` is handled in `init_2nd.sh` before root is
   looked for. On pkgrel 10 with `regs.dtb` the harvest reached it over
@@ -6756,8 +6807,10 @@ as what it would have fixed.
 
 ## Flashing
 
-- **The procedure in [04-flashing.md](04-flashing.md)** — Reasoned. Derived
-  from AVB behaviour; **not executed**.
+- **The procedure in [04-flashing.md](04-flashing.md)** — Verified by use
+  since 2026-10-05, except the unlock, which the owner had done before the
+  port began. Its first version, a manual install to `userdata` through
+  `scripts/flash.sh`, was never run; both were replaced on 2026-10-15.
 - **The bootloader on this unit is already unlocked** — Owner-reported. Not
   yet confirmed against `ro.boot.flash.locked`; `scripts/device-probe.sh`
   reads it. This takes the wipe-and-lose-DRM decision off the critical path,
@@ -6769,21 +6822,23 @@ as what it would have fixed.
   write access and so cannot claim an interface. There are no android udev
   rules on the host and nothing tags the device `uaccess`, so no ACL is
   granted either. The host has android-tools 37.0.0 and the owner has
-  authorised using it. `flash.sh` calls `fastboot` directly with
+  authorised using it. `try-kernel.sh` calls `fastboot` directly with
   project-relative paths, so it runs on the host unchanged.
 - **This bootloader refuses `fastboot boot` outright** — Verified 2026-10-05,
   superseding the guess that it might silently ignore the staged ramdisk and
   run the stock kernel. An explicit refusal is the better of the two
   outcomes: there is no ambiguity about what ran. The consequence is that
-  every kernel test costs a flash, which is why `flash-boot` and
-  `restore-boot` exist and touch nothing but the two boot partitions.
+  every kernel test costs a flash, which `try-kernel.sh` puts on the spare
+  slot.
 - **Backing up stock by dumping partitions needs root, which a stock Xperia
   has not got** — Verified by construction: unlocking the bootloader does not
-  grant root, so the `dd` recipe only applies to an already-rooted phone. The
-  realistic backup is a firmware download, which is also the true recovery
-  path. 04-flashing.md step 1 says so.
+  grant root from Android. Recovery does, and the backup came from there;
+  see "What root in recovery gave us".
 - **Leaving the stock `dtbo` in place gives the right device tree** —
-  Reasoned. This is what stock does; untested with *our* base.
+  Withdrawn. Its overlays do not apply to our downstream base, and the
+  bootloader rejects the result, so a downstream round carries Sony's device
+  trees; a mainline round carries a `dtbo` the bootloader cannot read
+  instead. [04-flashing.md](04-flashing.md) has both.
 
 ## The port boots
 
@@ -7177,8 +7232,8 @@ each entry says how much of it held.
   `scripts/make-rootfs-img.sh` works around it with `mkfs.ext4 -d` and produces
   a bare ext4 image instead of a partitioned one, so this is no longer a
   blocker. A failed `pmb install` does still leave a correctly sized, wholly
-  empty `sony-pdx246.img` behind; `flash.sh` and `verify-bootimg.py` both
-  refuse an image that holds neither a GPT nor an ext4 superblock.
+  empty `sony-pdx246.img` behind; `verify-bootimg.py` and
+  `sdcard-install.sh` both refuse an image with no ext4 superblock.
 - **Sony's board-level device tree, which nothing on disk has.** The device
   tree release carries Qualcomm's `parrot-atp`, `-idp` and `-qrd` reference
   boards but no pdx246 tree, so panel model, battery parameters and GPIO

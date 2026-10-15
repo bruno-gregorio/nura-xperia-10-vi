@@ -17,7 +17,8 @@ Run these once, in order.
    ```
 
 2. **Initialise the work directory.** Accept the defaults; the config already
-   selects `sony-pdx246`, the `systemd-edge` channel and the `console` UI.
+   selects `sony-pdx246`, the `mainline` kernel, systemd and the
+   `plasma-mobile` UI.
 
    ```sh
    distrobox enter pmport -- ./scripts/pmb init
@@ -228,15 +229,15 @@ distrobox enter pmport -- ./scripts/make-rootfs-img.sh
 
 ### What comes out
 
-- **A bare ext4 filesystem with no partition table** — which is what gets
-  flashed to `userdata`. `pmb install`'s own image would have had a GPT; both
-  shapes are accepted by `flash.sh` and `verify-bootimg.py`, and both refuse an
-  image that holds neither, since a failed install leaves behind a correctly
-  sized file full of zeros that would wipe `userdata` if flashed.
-- **Nothing that `flash.sh ramboot` depends on** — a RAM boot needs no rootfs
-  image at all, because `pmos.debug-shell` stops inside the initramfs before
-  any root filesystem is looked for. The first round of debugging works without
-  this step.
+- **A bare ext4 filesystem with no partition table** — which is what
+  `sdcard-install.sh` writes to the SD card's first partition.
+  `verify-bootimg.py` and `sdcard-install.sh` both refuse an image without an
+  ext4 superblock, since a failed build leaves behind a correctly sized file
+  full of zeros.
+- **Nothing that a first kernel round depends on** — a `try-kernel.sh` round
+  short of `FULLBOOT=1` stops at `pmos.debug-shell` inside the initramfs,
+  before any root filesystem is looked for, so it needs no rootfs image at
+  all.
 
 ## Housekeeping
 
@@ -251,7 +252,7 @@ All state lives under `.pmb/`, so cleaning up is local to this folder.
 
 ## Flashing
 
-What to do with the images once they exist, and the two irreversible steps to
-understand before connecting the phone.
+What to do with the images once they exist: the spare slot, the SD card, and
+the two irreversible things to understand before connecting the phone.
 
 See [04-flashing.md](04-flashing.md).

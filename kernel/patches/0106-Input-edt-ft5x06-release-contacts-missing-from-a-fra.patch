@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 15 Oct 2026 14:38:05 -0300
+Subject: [PATCH] Input: edt-ft5x06 - release contacts missing from a frame
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The controller lists every contact it tracks in every frame and reports
+a lift once. The interrupt handler only ever released a slot on that
+lift, so a contact the firmware stopped tracking without one stayed down
+for good, and userspace saw a finger that never left. It was seen on an
+FT3519T with the panel off, where it kept KWin's double tap to wake
+from ever seeing a second tap.
+
+Let the input core drop the slots a frame did not mention.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/input/touchscreen/edt-ft5x06.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/input/touchscreen/edt-ft5x06.c b/drivers/input/touchscreen/edt-ft5x06.c
+index 4efdb467b..832380e07 100644
+--- a/drivers/input/touchscreen/edt-ft5x06.c
++++ b/drivers/input/touchscreen/edt-ft5x06.c
+@@ -339,7 +339,12 @@ static irqreturn_t edt_ft5x06_ts_isr(int irq, void *dev_id)
+ 					       x, y, true);
+ 	}
+ 
+-	input_mt_report_pointer_emulation(tsdata->input, true);
++	/*
++	 * The controller reports every contact in every frame, and a lift
++	 * only once. A contact that is gone without one, as happens when the
++	 * firmware gives up tracking it, would otherwise stay down for good.
++	 */
++	input_mt_sync_frame(tsdata->input);
+ 	input_sync(tsdata->input);
+ 
+ out:
+@@ -1325,7 +1330,7 @@ static int edt_ft5x06_ts_probe(struct i2c_client *client)
+ 	touchscreen_parse_properties(input, true, &tsdata->prop);
+ 
+ 	error = input_mt_init_slots(input, tsdata->max_support_points,
+-				    INPUT_MT_DIRECT);
++				    INPUT_MT_DIRECT | INPUT_MT_DROP_UNUSED);
+ 	if (error) {
+ 		dev_err(&client->dev, "Unable to init MT slots.\n");
+ 		return error;

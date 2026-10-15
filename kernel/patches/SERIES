@@ -108,3 +108,6 @@ leds: flash: qcom: Fix the safety timer by one step
 leds: flash: qcom: Release every V4L2 flash device
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable the flash LED
 arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Link the flash LED to the main camera
+Input: edt-ft5x06 - release contacts missing from a frame
+Input: edt-ft5x06 - follow the panel and wake on a double tap
+arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Wake on a double tap

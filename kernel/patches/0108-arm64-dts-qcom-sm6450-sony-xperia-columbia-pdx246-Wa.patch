@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Thu, 15 Oct 2026 14:38:06 -0300
+Subject: [PATCH] arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Wake on
+ a double tap
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The touchscreen sits on the panel. Have it follow the panel, so that it
+stops reporting while the screen is off and wakes it on a double tap
+instead, from suspend too.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts     | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index 8b202b4e2..797c9424c 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -751,6 +751,9 @@ touchscreen@38 {
+ 
+ 		touchscreen-size-x = <1080>;
+ 		touchscreen-size-y = <2520>;
++
++		panel = <&panel>;
++		wakeup-source;
+ 	};
+ };
+ 
+@@ -767,7 +770,7 @@ &mdss_dsi0 {
+ 
+ 	status = "okay";
+ 
+-	panel@0 {
++	panel: panel@0 {
+ 		compatible = "samsung,sofef01-m-ams605dk01";
+ 		reg = <0>;
+ 

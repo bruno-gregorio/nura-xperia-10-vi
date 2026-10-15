@@ -1,0 +1,12 @@
+config EGISFP
+	bool "Egis EC617 TrustZone sensor hardware control (Rust)"
+	depends on RUST && GPIOLIB && OF && EVENTFD
+	help
+	  Power, reset and interrupt notifications for an EC617 whose SPI bus
+	  belongs to TrustZone. This is bring-up hardware control, not a
+	  fingerprint matching or enrollment driver. A userspace libfprint
+	  adapter and trusted-app protocol client are also required.
+
+	  Built-in only: Linux 6.18's Rust miscdevice abstraction does not set
+	  file_operations.owner to pin a loadable driver during open files.
+	  No suspend wakeup support yet. Say N unless developing this driver.

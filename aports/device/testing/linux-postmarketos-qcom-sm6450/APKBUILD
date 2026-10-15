@@ -6,7 +6,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 _flavor="postmarketos-qcom-sm6450"
 pkgname=linux-$_flavor
 pkgver=6.18.55
-pkgrel=39
+pkgrel=48
 pkgdesc="Mainline kernel for Qualcomm SM6450 (Snapdragon 6 Gen 1) devices"
 arch="aarch64"
 _carch="arm64"
@@ -31,6 +31,10 @@ makedepends="
 	pahole
 	perl
 	python3
+	rust
+	rust-bindgen
+	rust-src
+	rustfmt
 	zstd
 "
 
@@ -126,12 +130,21 @@ source="
 	backport-0008-drm-msm-adreno-set-cx_misc_mmio-regardless-of-LLCC.patch
 	backport-0009-ASoC-qcom-q6apm-lpass-dais-Add-MI2S-clock-control.patch
 	backport-0010-ASoC-qcom-common-validate-cpu-dai-id-during-parsing.patch
+	bringup-qseecom-tee.patch
+	bringup-qseecom-app-log.patch
+	bringup-egisfp-rust.patch
+	bringup-rust-irq-cfi.patch
+	bringup-rmtfs-memory.patch
+	bringup-hi846-pdx246.patch
 "
 builddir="$srcdir/linux-$pkgver"
 
 prepare() {
 	default_prepare
 	cp "$srcdir/$_config" .config
+	# Rust availability and compiler capability symbols depend on the native
+	# build toolchain. Resolve them without an interactive configuration prompt.
+	make ARCH="$_carch" LLVM=1 olddefconfig
 }
 
 build() {
@@ -177,7 +190,7 @@ package() {
 
 sha512sums="
 4c8c6ec5a87d695a2ab2141ed75101911996f24a1c3cbb8497d9642e168a7145a724f12433aa46febe85b8a4257ceeff3ee4a4e1765ab08f1fec904ca2a42663  linux-6.18.55.tar.xz
-efa492a106a468145f00ff584afab158b513ca207e5690410138d4eddb897c103f7fb3253b9f0f70049979c5d7ae6eec288396eae9fc40f79c7d325cd39027fc  config-postmarketos-qcom-sm6450.aarch64
+e75f8ea2c6af2f41cf44e6346ab6961600890f066011b424359c642797b616efdd887f2a8f879ab940c854e1f0886818fd97fce4d859db497b69b583167f8012  config-postmarketos-qcom-sm6450.aarch64
 3577bd58be52c0dee2aa26e1124ba75e96ae00802948a70fe82090bbea56dcaa4c6da3cacc5b5556e8e928a4401887b1079e458fcd7efd9d6fff405f5f73d0a4  sm6450-mainline.patch
 8a668e14d1a656a8843aabc427fa930b8976f120fcdabb4042c17a4c4aeee7518dcc2403b6f8090a633ff741b0766ece418d47ce603401f73407df2d94d19b26  backport-0001-firmware-qcom-scm-Register-gunyah-watchdog-device.patch
 c008b7cf41b8820bf26deb4fef5b8e68d093e88106eeda58b4828f4f7ac031a6374e0815f1d4a72e01ea03cf42070285455d7720ff382c08d88d4163d25bff77  backport-0002-watchdog-Add-driver-for-Gunyah-Watchdog.patch
@@ -195,4 +208,10 @@ a4307c5157f745f2824069b0d32515866cdb631803d0aa4e3bbb4e4d1d21ffcb952d19ff0424fb32
 ecb3c87131cf1082accfc31594d2c6728539dcfcdcc6bf3d383bb930036a89535b8ae68519a639fb1836ca1664fbead07aefdc93e5176d8188db57f778deac13  backport-0008-drm-msm-adreno-set-cx_misc_mmio-regardless-of-LLCC.patch
 eed4b432c128ddfabef55c6041ff5a38ac0305e146f497618f05c6b9b9f9ca4b18c87499fb48042ee8f8c0d2a80d0e75cbc5a3965dab747fc715ff3b4071a104  backport-0009-ASoC-qcom-q6apm-lpass-dais-Add-MI2S-clock-control.patch
 20088d456f0e2334a15f346e2df73d43ee85a4f3319060353ea3bc792d4317034308b30d00cc02a859a5a9e7c674eb6a11aa6403a355757eddc88c773e49f6a1  backport-0010-ASoC-qcom-common-validate-cpu-dai-id-during-parsing.patch
+053210ce5247585e7a2c4ab1209ea91e3b1aa2f03fdf0dd7ffa96f2364ca18773114757024e577ba9cf1966e3e29aa81abd1611a7fa41e2618b786721ab1d3a6  bringup-qseecom-tee.patch
+2767c38a6e654e2234db0bde72679c441f96402b1d57eb3dd726174a88c50ef482a4250d8295295eb8f2ee2812ba613f6ebcea81ca3f50697471f3de93bb1a2d  bringup-qseecom-app-log.patch
+c449d03636ee41055c3c8e75c4e38a5ee151887d287e997ad0cf0827e11da96b8e856c6ab3c016489fdb89e87c23c9910efd29a93188a648bcb53ceb73013dcc  bringup-egisfp-rust.patch
+37467904b7bf91dda07525665b258d949f8fa878f74ba2ae8ff8cf4c608ff413aa7b89688b29017df795e00c6e5b099539429bfbcf1c88e11119eb782619e2ef  bringup-rust-irq-cfi.patch
+3fd3e97c8a921201570fa530a49e9a552e8c4cf2c8e4a7ca29f76f1c71c1991ce09dec02ee4b6d7fd0bf7d626b5f9783fd9ceff77573180fc4a4cfe6a6d5f233  bringup-rmtfs-memory.patch
+a40ac6447b3bcb136d57f4af10d6d361fde92109977dd4cd316e52fd8901c7dd360c80ade282dc84e4e21f3ceed29bb6a2314a9103eed47956e2128ebac03076  bringup-hi846-pdx246.patch
 "

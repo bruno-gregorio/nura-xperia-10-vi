@@ -1,0 +1,701 @@
+Use the pdx246 stock sensor programs, full wide field, and cached read-only OTP.
+
+diff --git a/Documentation/devicetree/bindings/media/i2c/hynix,hi846.yaml b/Documentation/devicetree/bindings/media/i2c/hynix,hi846.yaml
+index 1a57f2aa1..0dad9a11c 100644
+--- a/Documentation/devicetree/bindings/media/i2c/hynix,hi846.yaml
++++ b/Documentation/devicetree/bindings/media/i2c/hynix,hi846.yaml
+@@ -19,7 +19,10 @@ allOf:
+ 
+ properties:
+   compatible:
+-    const: hynix,hi846
++    enum:
++      - hynix,hi846
++      - sony,pdx246-hi846-front
++      - sony,pdx246-hi846-back
+ 
+   reg:
+     maxItems: 1
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index 8b202b4e2..e7021eb09 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -532,7 +532,7 @@ &cci0_i2c1 {
+ 
+ 	/* The ultra-wide camera. */
+ 	camera@21 {
+-		compatible = "hynix,hi846";
++		compatible = "sony,pdx246-hi846-back";
+ 		reg = <0x21>;
+ 
+ 		clocks = <&camcc CAM_CC_MCLK1_CLK>;
+@@ -554,8 +554,7 @@ camera@21 {
+ 		port {
+ 			cam_wide_out: endpoint {
+ 				data-lanes = <1 2 3 4>;
+-				link-frequencies = /bits/ 64 <90000000 180000000
+-							      360000000>;
++				link-frequencies = /bits/ 64 <360000000>;
+ 				remote-endpoint = <&camss_wide_in>;
+ 			};
+ 		};
+@@ -571,7 +570,7 @@ &cci1_i2c1 {
+ 
+ 	/* The front camera. */
+ 	camera@20 {
+-		compatible = "hynix,hi846";
++		compatible = "sony,pdx246-hi846-front";
+ 		reg = <0x20>;
+ 
+ 		clocks = <&camcc CAM_CC_MCLK3_CLK>;
+@@ -587,20 +586,14 @@ camera@20 {
+ 		pinctrl-0 = <&cam_mclk3_default &cam_front_reset>;
+ 		pinctrl-names = "default";
+ 
+-		/*
+-		 * Stock reads this sensor out turned 180 degrees from the
+-		 * ultra-wide, GRBG where that one is GBRG, and so reports the
+-		 * opposite angle for it. The driver here reads both out the
+-		 * same way, so both take the same correction.
+-		 */
++		/* Stock GRBG readout is turned 180 degrees from the wide module. */
+ 		orientation = <0>;
+-		rotation = <270>;
++		rotation = <90>;
+ 
+ 		port {
+ 			cam_front_out: endpoint {
+ 				data-lanes = <1 2 3 4>;
+-				link-frequencies = /bits/ 64 <90000000 180000000
+-							      360000000>;
++				link-frequencies = /bits/ 64 <180000000 346500000>;
+ 				remote-endpoint = <&camss_front_in>;
+ 			};
+ 		};
+diff --git a/drivers/media/i2c/hi846.c b/drivers/media/i2c/hi846.c
+index 5bec2105d..976c99111 100644
+--- a/drivers/media/i2c/hi846.c
++++ b/drivers/media/i2c/hi846.c
+@@ -5,8 +5,11 @@
+ #include <linux/clk.h>
+ #include <linux/delay.h>
+ #include <linux/gpio/consumer.h>
++#include <linux/firmware.h>
++#include <linux/unaligned.h>
+ #include <linux/i2c.h>
+ #include <linux/module.h>
++#include <linux/nvmem-provider.h>
+ #include <linux/pm_runtime.h>
+ #include <linux/pm.h>
+ #include <linux/property.h>
+@@ -61,7 +64,7 @@
+  */
+ #define HI846_REG_EXPOSURE		0x0074
+ #define HI846_EXPOSURE_MIN		6
+-#define HI846_EXPOSURE_MAX_MARGIN	2
++#define HI846_EXPOSURE_MAX_MARGIN	6
+ #define HI846_EXPOSURE_STEP		1
+ 
+ /* Analog gain controls from sensor */
+@@ -224,13 +227,14 @@ struct hi846_mode {
+ 	u8 mipi_clk_div_4lane;
+ 
+ 	u16 fps;
++	u16 mipi_pll; /* zero uses the generic 0x025a PLL */
+ 
+ 	/* Vertical timining size */
+ 	u16 frame_len;
+ 
+-	const struct hi846_reg_list reg_list_config;
+-	const struct hi846_reg_list reg_list_2lane;
+-	const struct hi846_reg_list reg_list_4lane;
++	struct hi846_reg_list reg_list_config;
++	struct hi846_reg_list reg_list_2lane;
++	struct hi846_reg_list reg_list_4lane;
+ 
+ 	/* Position inside of the 3264x2448 pixel array */
+ 	struct v4l2_rect crop;
+@@ -1304,6 +1308,11 @@ static const char * const hi846_supply_names[] = {
+ #define HI846_NUM_SUPPLIES ARRAY_SIZE(hi846_supply_names)
+ 
+ struct hi846 {
++	const struct hi846_mode *modes;
++	unsigned int num_modes;
++	u32 format_code;
++	const char *module;
++	struct hi846_reg_list module_init;
+ 	struct gpio_desc *rst_gpio;
+ 	struct gpio_desc *shutdown_gpio;
+ 	struct regulator_bulk_data supplies[HI846_NUM_SUPPLIES];
+@@ -1335,6 +1344,7 @@ static inline struct hi846 *to_hi846(struct v4l2_subdev *sd)
+ 
+ static const struct hi846_datafmt hi846_colour_fmts[] = {
+ 	{ HI846_MEDIA_BUS_FORMAT, V4L2_COLORSPACE_RAW },
++	{ MEDIA_BUS_FMT_SGRBG10_1X10, V4L2_COLORSPACE_RAW },
+ };
+ 
+ static const struct hi846_datafmt *hi846_find_datafmt(u32 code)
+@@ -1364,6 +1374,10 @@ hi846_get_link_freq(const struct hi846 *hi846, const struct hi846_mode *mode)
+ 	 * [11:8]: 0x02 => pre_div = 3
+ 	 * [7:0]: 0x5a => multiplier = 90
+ 	 */
++	if (mode->mipi_pll)
++		return mul_u64_u32_div(mclk, mode->mipi_pll & 0xff,
++			(((mode->mipi_pll >> 8) & 0xf) + 1) * mipi_clk_div);
++
+ 	return mul_u64_u32_div(mclk, 90, 3 * mipi_clk_div);
+ }
+ 
+@@ -1500,16 +1514,13 @@ static int hi846_test_pattern(struct hi846 *hi846, u32 pattern)
+ 	int ret;
+ 	u8 val;
+ 
+-	if (pattern) {
+-		ret = hi846_read_reg(hi846, HI846_REG_ISP, &val);
+-		if (ret)
+-			return ret;
+-
+-		ret = hi846_write_reg(hi846, HI846_REG_ISP,
+-				      val | HI846_REG_ISP_TPG_EN);
+-		if (ret)
+-			return ret;
+-	}
++	ret = hi846_read_reg(hi846, HI846_REG_ISP, &val);
++	if (ret)
++		return ret;
++	val = pattern ? val | HI846_REG_ISP_TPG_EN : val & ~HI846_REG_ISP_TPG_EN;
++	ret = hi846_write_reg(hi846, HI846_REG_ISP, val);
++	if (ret)
++		return ret;
+ 
+ 	return hi846_write_reg(hi846, HI846_REG_TEST_PATTERN, pattern);
+ }
+@@ -1549,7 +1560,7 @@ static int hi846_set_ctrl(struct v4l2_ctrl *ctrl)
+ 
+ 	case V4L2_CID_EXPOSURE:
+ 		shutter = ctrl->val;
+-		frame_len = hi846->cur_mode->frame_len;
++		frame_len = hi846->cur_mode->height + hi846->vblank->val;
+ 
+ 		if (shutter > frame_len - 6) { /* margin */
+ 			frame_len = shutter + 6;
+@@ -1711,7 +1722,9 @@ static int hi846_start_streaming(struct hi846 *hi846)
+ 	int ret = 0;
+ 	u8 val;
+ 
+-	if (hi846->nr_lanes == 2)
++	if (hi846->module)
++		ret = hi846_write_reg_list(hi846, &hi846->module_init);
++	else if (hi846->nr_lanes == 2)
+ 		ret = hi846_write_reg_list(hi846, &hi846_init_regs_list_2lane);
+ 	else
+ 		ret = hi846_write_reg_list(hi846, &hi846_init_regs_list_4lane);
+@@ -1737,7 +1750,8 @@ static int hi846_start_streaming(struct hi846 *hi846)
+ 		return ret;
+ 	}
+ 
+-	hi846_set_video_mode(hi846, hi846->cur_mode->fps);
++	if (!hi846->module)
++		hi846_set_video_mode(hi846, hi846->cur_mode->fps);
+ 
+ 	ret = __v4l2_ctrl_handler_setup(hi846->sd.ctrl_handler);
+ 	if (ret)
+@@ -1808,10 +1822,51 @@ static int hi846_set_stream(struct v4l2_subdev *sd, int enable)
+ 	return ret;
+ }
+ 
++/* The two modules use opposite rail order in their stock power tables. */
++static int hi846_module_power(struct hi846 *hi846, bool on)
++{
++	bool front = !strcmp(hi846->module, "front");
++	unsigned int order[3] = { front ? 0 : 2, 1, front ? 2 : 0 };
++	int i, ret, first = 0;
++
++	gpiod_set_value_cansleep(hi846->rst_gpio, 1);
++	usleep_range(1000, 1500);
++	if (!on) {
++		clk_disable_unprepare(hi846->clock);
++		usleep_range(1000, 1500);
++		for (i = 2; i >= 0; i--) {
++			ret = regulator_disable(hi846->supplies[order[i]].consumer);
++			if (ret && !first)
++				first = ret;
++		}
++		return first;
++	}
++	for (i = 0; i < 3; i++) {
++		ret = regulator_enable(hi846->supplies[order[i]].consumer);
++		if (ret)
++			goto disable;
++		usleep_range(1000, 1500);
++	}
++	ret = clk_prepare_enable(hi846->clock);
++	if (ret)
++		goto disable;
++	usleep_range(4000, 5000);
++	gpiod_set_value_cansleep(hi846->rst_gpio, 0);
++	usleep_range(6000, 7000);
++	return 0;
++disable:
++	while (--i >= 0)
++		regulator_disable(hi846->supplies[order[i]].consumer);
++	return ret;
++}
++
+ static int hi846_power_on(struct hi846 *hi846)
+ {
+ 	int ret;
+ 
++	if (hi846->module)
++		return hi846_module_power(hi846, true);
++
+ 	ret = regulator_bulk_enable(HI846_NUM_SUPPLIES, hi846->supplies);
+ 	if (ret < 0)
+ 		return ret;
+@@ -1839,6 +1894,9 @@ static int hi846_power_on(struct hi846 *hi846)
+ 
+ static int hi846_power_off(struct hi846 *hi846)
+ {
++	if (hi846->module)
++		return hi846_module_power(hi846, false);
++
+ 	if (hi846->rst_gpio)
+ 		gpiod_set_value_cansleep(hi846->rst_gpio, 1);
+ 
+@@ -1889,19 +1947,25 @@ static int hi846_set_format(struct v4l2_subdev *sd,
+ 	struct hi846 *hi846 = to_hi846(sd);
+ 	struct v4l2_mbus_framefmt *mf = &format->format;
+ 	struct i2c_client *client = v4l2_get_subdevdata(sd);
+-	const struct hi846_datafmt *fmt = hi846_find_datafmt(mf->code);
++	const struct hi846_datafmt *fmt = hi846_find_datafmt(hi846->format_code);
++	const struct hi846_mode *mode;
+ 	u32 tgt_fps;
+ 	s32 vblank_def, h_blank;
+ 	int idx;
+ 
+-	if (!fmt) {
+-		mf->code = hi846_colour_fmts[0].code;
+-		mf->colorspace = hi846_colour_fmts[0].colorspace;
+-		fmt = &hi846_colour_fmts[0];
+-	}
+-
++	mode = v4l2_find_nearest_size_conditional(hi846->modes, hi846->num_modes,
++						 width, height, mf->width, mf->height,
++						 filter_modes, hi846);
++	if (!mode)
++		return -EINVAL;
++	mf->code = fmt->code;
++	mf->colorspace = fmt->colorspace;
++	mf->width = mode->width;
++	mf->height = mode->height;
++	mf->field = V4L2_FIELD_NONE;
+ 	if (format->which == V4L2_SUBDEV_FORMAT_TRY) {
+ 		*v4l2_subdev_state_get_format(sd_state, format->pad) = *mf;
++		*v4l2_subdev_state_get_crop(sd_state, format->pad) = mode->crop;
+ 		return 0;
+ 	}
+ 
+@@ -1914,12 +1978,7 @@ static int hi846_set_format(struct v4l2_subdev *sd,
+ 
+ 	hi846->fmt = fmt;
+ 
+-	hi846->cur_mode =
+-		v4l2_find_nearest_size_conditional(supported_modes,
+-						   ARRAY_SIZE(supported_modes),
+-						   width, height,
+-						   mf->width, mf->height,
+-						   filter_modes, hi846);
++	hi846->cur_mode = mode;
+ 
+ 	dev_dbg(&client->dev, "%s: found mode: %dx%d\n", __func__,
+ 		hi846->cur_mode->width, hi846->cur_mode->height);
+@@ -1929,13 +1988,14 @@ static int hi846_set_format(struct v4l2_subdev *sd,
+ 
+ 	mf->width = hi846->cur_mode->width;
+ 	mf->height = hi846->cur_mode->height;
+-	mf->code = HI846_MEDIA_BUS_FORMAT;
++	mf->code = hi846->format_code;
+ 	mf->field = V4L2_FIELD_NONE;
+ 
+ 	idx = hi846_get_link_freq_index(hi846, hi846->cur_mode);
+ 	if (idx < 0) {
+ 		dev_err(&client->dev,
+ 			"failed to get link freq index: %d\n", idx);
++		mutex_unlock(&hi846->mutex);
+ 		return -EINVAL;
+ 	}
+ 
+@@ -1981,7 +2041,7 @@ static int hi846_get_format(struct v4l2_subdev *sd,
+ 	}
+ 
+ 	mutex_lock(&hi846->mutex);
+-	mf->code        = HI846_MEDIA_BUS_FORMAT;
++	mf->code        = hi846->format_code;
+ 	mf->colorspace  = V4L2_COLORSPACE_RAW;
+ 	mf->field       = V4L2_FIELD_NONE;
+ 	mf->width       = hi846->cur_mode->width;
+@@ -2001,7 +2061,7 @@ static int hi846_enum_mbus_code(struct v4l2_subdev *sd,
+ 	if (code->pad || code->index > 0)
+ 		return -EINVAL;
+ 
+-	code->code = HI846_MEDIA_BUS_FORMAT;
++	code->code = to_hi846(sd)->format_code;
+ 
+ 	return 0;
+ }
+@@ -2014,22 +2074,22 @@ static int hi846_enum_frame_size(struct v4l2_subdev *sd,
+ 	struct hi846 *hi846 = to_hi846(sd);
+ 	int i, count;
+ 
+-	if (fse->pad || fse->index >= ARRAY_SIZE(supported_modes))
++	if (fse->pad || fse->index >= hi846->num_modes)
+ 		return -EINVAL;
+ 
+-	if (fse->code != HI846_MEDIA_BUS_FORMAT) {
++	if (fse->code != hi846->format_code) {
+ 		dev_err(&client->dev, "frame size enum not matching\n");
+ 		return -EINVAL;
+ 	}
+ 
+-	for (count = i = 0; i < ARRAY_SIZE(supported_modes); i++) {
+-		if (!filter_modes(&supported_modes[i], i, hi846))
++	for (count = i = 0; i < hi846->num_modes; i++) {
++		if (!filter_modes(&hi846->modes[i], i, hi846))
+ 			continue;
+ 
+ 		if (count == fse->index) {
+-			fse->min_width = supported_modes[i].width;
++			fse->min_width = hi846->modes[i].width;
+ 			fse->max_width = fse->min_width;
+-			fse->min_height = supported_modes[i].height;
++			fse->min_height = hi846->modes[i].height;
+ 			fse->max_height = fse->min_height;
+ 			dev_dbg(&client->dev, "%s: max width: %d max height: %d\n", __func__,
+ 				fse->max_width, fse->max_height);
+@@ -2083,11 +2143,12 @@ static int hi846_init_state(struct v4l2_subdev *sd,
+ 	mf = v4l2_subdev_state_get_format(sd_state, 0);
+ 
+ 	mutex_lock(&hi846->mutex);
+-	mf->code        = HI846_MEDIA_BUS_FORMAT;
++	mf->code        = hi846->format_code;
+ 	mf->colorspace  = V4L2_COLORSPACE_RAW;
+ 	mf->field       = V4L2_FIELD_NONE;
+ 	mf->width       = hi846->cur_mode->width;
+ 	mf->height      = hi846->cur_mode->height;
++	*v4l2_subdev_state_get_crop(sd_state, 0) = hi846->cur_mode->crop;
+ 	mutex_unlock(&hi846->mutex);
+ 
+ 	return 0;
+@@ -2159,18 +2220,18 @@ static int hi846_add_link_freqs(struct hi846 *hi846, struct device *dev,
+ 	 * Since the MCLK freq varies between platforms, calculating driver
+ 	 * supported link freqs here.
+ 	 */
+-	for (i = 0; i < ARRAY_SIZE(supported_modes); i++)
+-		hi846_link_freqs[i] = hi846_get_link_freq(hi846, &supported_modes[i]);
++	for (i = 0; i < hi846->num_modes; i++)
++		hi846_link_freqs[i] = hi846_get_link_freq(hi846, &hi846->modes[i]);
+ 
+ 	ret = v4l2_link_freq_to_bitmap(dev, ep->link_frequencies,
+ 				       ep->nr_of_link_frequencies,
+ 				       hi846_link_freqs,
+-				       ARRAY_SIZE(hi846_link_freqs),
++				       hi846->num_modes,
+ 				       &freq_bitmap);
+ 	if (ret || !freq_bitmap)
+ 		return ret;
+ 
+-	for (i = 0; i < ARRAY_SIZE(hi846_link_freqs); i++)
++	for (i = 0; i < hi846->num_modes; i++)
+ 		if (BIT(i) & freq_bitmap) {
+ 			hi846->link_freqs[hi846->num_link_freqs++] = hi846_link_freqs[i];
+ 			dev_dbg(dev, "Add supported link frequency %lld\n", hi846_link_freqs[i]);
+@@ -2210,6 +2271,10 @@ static int hi846_parse_dt(struct hi846 *hi846, struct device *dev)
+ 	}
+ 
+ 	hi846->nr_lanes = bus_cfg.bus.mipi_csi2.num_data_lanes;
++	if (hi846->module && hi846->nr_lanes != 4) {
++		ret = -EINVAL;
++		goto check_hwcfg_error;
++	}
+ 
+ 	if (!bus_cfg.nr_of_link_frequencies) {
+ 		dev_err(dev, "link-frequency property not found in DT\n");
+@@ -2248,6 +2313,231 @@ static int hi846_parse_dt(struct hi846 *hi846, struct device *dev)
+ 	return ret;
+ }
+ 
++/* These programs were recovered from this phone's CamX sensor modules.
++ * Keep the sensor microcode in the private firmware package, with the exact
++ * ordered writes (including repeats), rather than substituting generic code.
++ */
++static int hi846_load_program(struct device *dev, const char *module,
++                             const char *suffix, struct hi846_reg_list *list)
++{
++	const struct firmware *fw;
++	struct hi846_reg *regs;
++	char name[96];
++	u32 count, i;
++	int ret;
++
++	snprintf(name, sizeof(name), "hynix/pdx246/hi846-%s-%s.bin", module, suffix);
++	ret = request_firmware(&fw, name, dev);
++	if (ret)
++		return dev_err_probe(dev, ret, "missing sensor program %s\n", name);
++	ret = -EINVAL;
++	if (fw->size < 12 || memcmp(fw->data, "HI846R1", 8))
++		goto out;
++	count = get_unaligned_le32(fw->data + 8);
++	if (!count || count > 2048 || fw->size != 12 + count * 4)
++		goto out;
++	regs = devm_kcalloc(dev, count, sizeof(*regs), GFP_KERNEL);
++	if (!regs) {
++		ret = -ENOMEM;
++		goto out;
++	}
++	for (i = 0; i < count; i++) {
++		regs[i].address = get_unaligned_le16(fw->data + 12 + i * 4);
++		regs[i].val = get_unaligned_le16(fw->data + 14 + i * 4);
++		if (regs[i].address > 0x3fff)
++			goto out;
++	}
++	list->regs = regs;
++	list->num_of_regs = count;
++	ret = 0;
++out:
++	release_firmware(fw);
++	return ret;
++}
++
++static int hi846_module_config(struct hi846 *hi846, struct device *dev)
++{
++	struct hi846_mode *modes;
++	bool front;
++	char suffix[32];
++	unsigned int i, j;
++	int ret;
++
++	hi846->modes = supported_modes;
++	hi846->num_modes = ARRAY_SIZE(supported_modes);
++	hi846->format_code = HI846_MEDIA_BUS_FORMAT;
++	hi846->module = device_get_match_data(dev);
++	if (!hi846->module)
++		return 0;
++	if (clk_get_rate(hi846->clock) != 24000000)
++		return dev_err_probe(dev, -EINVAL, "stock programs require 24 MHz\n");
++	front = !strcmp(hi846->module, "front");
++	modes = devm_kcalloc(dev, 2, sizeof(*modes), GFP_KERNEL);
++	if (!modes)
++		return -ENOMEM;
++	modes[0] = (struct hi846_mode) {
++		.width = 3264, .height = 2448, .llp = 3800,
++		.fps = 30, .frame_len = 2526, .mipi_clk_div_4lane = 2,
++		.crop = { .width = 3264, .height = 2448 },
++	};
++	modes[1] = front ? (struct hi846_mode) {
++		.width = 1280, .height = 720, .llp = 3800,
++		.fps = 90, .frame_len = 842, .mipi_clk_div_4lane = 4,
++		.crop = { .left = 352, .top = 504, .width = 2560, .height = 1440 },
++	} : (struct hi846_mode) {
++		.width = 2304, .height = 1728, .llp = 3800,
++		.fps = 30, .frame_len = 2526, .mipi_clk_div_4lane = 2,
++		.crop = { .left = 480, .top = 360, .width = 2304, .height = 1728 },
++	};
++	ret = hi846_load_program(dev, hi846->module, "init", &hi846->module_init);
++	if (ret)
++		return ret;
++	for (i = 0; i < 2; i++) {
++		struct hi846_reg_list *list = &modes[i].reg_list_4lane;
++
++		snprintf(suffix, sizeof(suffix), "%ux%u", modes[i].width, modes[i].height);
++		ret = hi846_load_program(dev, hi846->module, suffix, list);
++		if (ret)
++			return ret;
++		for (j = 0; j < list->num_of_regs; j++)
++			if (list->regs[j].address == HI846_REG_PLL_CFG_MIPI1_H)
++				modes[i].mipi_pll = list->regs[j].val;
++		if (!modes[i].mipi_pll)
++			return -EINVAL;
++	}
++	hi846->modes = modes;
++	/* The smaller back mode is a centre crop, not binning. Advertising
++	 * it as a preview mode makes the simple pipeline silently lose the
++	 * ultra-wide field of view. Use the full array for normal capture.
++	 */
++	hi846->num_modes = front ? 2 : 1;
++	hi846->format_code = front ? MEDIA_BUS_FMT_SGRBG10_1X10 : HI846_MEDIA_BUS_FORMAT;
++	dev_info(dev, "using stock pdx246 %s sensor programs\n", hi846->module);
++	return 0;
++}
++
++/* Stock CamX OTP memory map: read-only mode, 19.2 MHz MCLK.
++ * No programming command is provided. Cache once before publishing the
++ * video subdevice, then reset/power down and restore the normal 24 MHz.
++ */
++#define HI846_OTP_SIZE 5449
++static const struct {
++	u16 address, value;
++	u8 width, delay_ms, read;
++} hi846_otp_sequence[] = {
++	{ 0xa00, 0x0, 2, 0, 0 },
++	{ 0x2000, 0x0, 2, 10, 0 },
++	{ 0x2002, 0xff, 2, 0, 0 },
++	{ 0x2004, 0x0, 2, 0, 0 },
++	{ 0x2008, 0x3fff, 2, 0, 0 },
++	{ 0x23fe, 0xc056, 2, 0, 0 },
++	{ 0xa00, 0x0, 2, 0, 0 },
++	{ 0xe04, 0x12, 2, 0, 0 },
++	{ 0xf08, 0x2f04, 2, 0, 0 },
++	{ 0xf30, 0x1f, 2, 0, 0 },
++	{ 0xf36, 0x1f, 2, 10, 0 },
++	{ 0xf04, 0x3a00, 2, 0, 0 },
++	{ 0xf32, 0x25a, 2, 0, 0 },
++	{ 0xf38, 0x25a, 2, 0, 0 },
++	{ 0xf2a, 0x4124, 2, 0, 0 },
++	{ 0x6a, 0x100, 2, 0, 0 },
++	{ 0x4c, 0x100, 2, 0, 0 },
++	{ 0xa02, 0x1, 1, 0, 0 },
++	{ 0xa00, 0x0, 1, 10, 0 },
++	{ 0xf02, 0x0, 1, 0, 0 },
++	{ 0x71a, 0x1, 1, 0, 0 },
++	{ 0x71b, 0x9, 1, 0, 0 },
++	{ 0xd04, 0x0, 1, 0, 0 },
++	{ 0xd00, 0x7, 1, 0, 0 },
++	{ 0x3e, 0x10, 1, 0, 0 },
++	{ 0xa00, 0x1, 1, 0, 0 },
++	{ 0x70a, 0x2, 1, 0, 0 },
++	{ 0x70b, 0x1, 1, 0, 0 },
++	{ 0x702, 0x1, 1, 0, 0 },
++	{ 0x708, 0x1549, 1, 1, 1 },
++	{ 0xa00, 0x0, 1, 10, 0 },
++	{ 0x3e, 0x0, 1, 0, 0 },
++	{ 0xa00, 0x1, 1, 0, 0 },
++};
++
++static int hi846_otp_nvmem_read(void *priv, unsigned int off, void *val, size_t bytes)
++{
++	if (off > HI846_OTP_SIZE || bytes > HI846_OTP_SIZE - off)
++		return -EINVAL;
++	memcpy(val, (u8 *)priv + off, bytes);
++	return 0;
++}
++
++/* Called while powered off; always leaves it powered off at 24 MHz. */
++static int hi846_cache_otp(struct hi846 *hi846)
++{
++	struct i2c_client *client = v4l2_get_subdevdata(&hi846->sd);
++	struct device *dev = &client->dev;
++	struct nvmem_config config = {
++		.dev = dev,
++		.id = NVMEM_DEVID_AUTO,
++		.owner = THIS_MODULE,
++		.read_only = true,
++		.root_only = true,
++		.size = HI846_OTP_SIZE,
++		.word_size = 1,
++		.stride = 1,
++		.reg_read = hi846_otp_nvmem_read,
++	};
++	struct nvmem_device *nvmem;
++	u8 *data;
++	unsigned int i, j;
++	int ret, restore;
++
++	data = devm_kmalloc(dev, HI846_OTP_SIZE, GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++	ret = clk_set_rate(hi846->clock, 19200000);
++	if (ret)
++		goto restore_clock;
++	if (clk_get_rate(hi846->clock) != 19200000) {
++		ret = -EINVAL;
++		goto restore_clock;
++	}
++	ret = hi846_power_on(hi846);
++	if (ret)
++		goto restore_clock;
++	for (i = 0; i < ARRAY_SIZE(hi846_otp_sequence) && !ret; i++) {
++		if (hi846_otp_sequence[i].read) {
++			for (j = 0; j < HI846_OTP_SIZE && !ret; j++)
++				ret = hi846_read_reg(hi846, 0x0708, &data[j]);
++		} else if (hi846_otp_sequence[i].width == 2) {
++			hi846_write_reg_16(hi846, hi846_otp_sequence[i].address,
++					   hi846_otp_sequence[i].value, &ret);
++		} else {
++			ret = hi846_write_reg(hi846, hi846_otp_sequence[i].address,
++					      hi846_otp_sequence[i].value);
++		}
++		if (hi846_otp_sequence[i].delay_ms)
++			msleep(hi846_otp_sequence[i].delay_ms);
++	}
++	/* Reset and remove power even when an OTP read failed. */
++	restore = hi846_power_off(hi846);
++	if (!ret)
++		ret = restore;
++restore_clock:
++	restore = clk_set_rate(hi846->clock, 24000000);
++	if (restore || clk_get_rate(hi846->clock) != 24000000)
++		return restore ? restore : -EINVAL;
++	if (ret)
++		return ret;
++	config.name = devm_kasprintf(dev, GFP_KERNEL, "hi846-%s-otp", hi846->module);
++	if (!config.name)
++		return -ENOMEM;
++	config.priv = data;
++	nvmem = devm_nvmem_register(dev, &config);
++	if (IS_ERR(nvmem))
++		return PTR_ERR(nvmem);
++	dev_info(dev, "cached %s OTP calibration (%u bytes) read-only\n",
++		 hi846->module, HI846_OTP_SIZE);
++	return 0;
++}
++
+ static int hi846_probe(struct i2c_client *client)
+ {
+ 	struct hi846 *hi846;
+@@ -2265,6 +2555,10 @@ static int hi846_probe(struct i2c_client *client)
+ 				     "failed to get clock: %pe\n",
+ 				     hi846->clock);
+ 
++	ret = hi846_module_config(hi846, &client->dev);
++	if (ret)
++		return ret;
++
+ 	ret = hi846_parse_dt(hi846, &client->dev);
+ 	if (ret) {
+ 		dev_err(&client->dev, "failed to check HW configuration: %d",
+@@ -2285,6 +2579,17 @@ static int hi846_probe(struct i2c_client *client)
+ 
+ 	mutex_init(&hi846->mutex);
+ 
++	if (hi846->module) {
++		ret = hi846_cache_otp(hi846);
++		if (ret)
++			dev_warn(&client->dev, "OTP calibration unavailable: %d\n", ret);
++		/* Never start video with an incorrect clock after an OTP failure. */
++		if (clk_get_rate(hi846->clock) != 24000000) {
++			ret = -EINVAL;
++			goto err_mutex;
++		}
++	}
++
+ 	ret = hi846_power_on(hi846);
+ 	if (ret)
+ 		goto err_mutex;
+@@ -2293,7 +2598,7 @@ static int hi846_probe(struct i2c_client *client)
+ 	if (ret)
+ 		goto err_power_off;
+ 
+-	hi846->cur_mode = &supported_modes[0];
++	hi846->cur_mode = &hi846->modes[0];
+ 
+ 	ret = hi846_init_controls(hi846);
+ 	if (ret) {
+@@ -2361,6 +2666,8 @@ static const struct dev_pm_ops hi846_pm_ops = {
+ };
+ 
+ static const struct of_device_id hi846_of_match[] = {
++	{ .compatible = "sony,pdx246-hi846-front", .data = "front" },
++	{ .compatible = "sony,pdx246-hi846-back", .data = "back" },
+ 	{ .compatible = "hynix,hi846", },
+ 	{},
+ };

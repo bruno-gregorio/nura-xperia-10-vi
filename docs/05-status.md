@@ -1,5 +1,189 @@
 # Status
 
+## Double-tap to wake works with the screen off, 2026-10-15
+
+**With the panel off and the system awake, the owner double-tapped the
+screen and KWin turned it on.** Nothing on the phone was changed for this.
+Kernel r48's `edt-ft5x06` keeps the FT3519T scanning when the panel blanks,
+and KWin 6.7.5's `DpmsInputEventFilter` already wakes on a double tap
+(`[Wayland] DoubleTapWakeup`, default true) unless iio-sensor-proxy reports
+proximity near. Stock Android does not offer this. Two failed attempts came
+first and found two bugs. Their logs are `out/try-kernel/live-dt2w-run1.txt`
+and `live-dt2w-run2.txt`, from `out/try-kernel/dt2w-touchprox.py`. The
+third attempt, the one that worked, came after the logger's ten minutes and
+is owner-observed.
+
+- **Verified, touch with the panel off:** DSI-1 read `disabled` and `Off`,
+  and the backlight's `bl_power` 4, while five single taps arrived with
+  their coordinates. The touch supply, `ts_avdd` on GPIO 103, is separate
+  from the panel's `vci` and `vddio`. Our driver does not follow the panel.
+  Stock's touch node has a `panel` phandle. **Reasoned:** Sony's driver
+  uses it to put the chip to sleep on blank, which would explain why
+  Android lacks the feature.
+- **Verified, a contact the driver never releases:** a palm over the top
+  edge left slot 2 held (x=710, y=16), with `BTN_TOUCH` still 1 minutes
+  later. `edt_ft5x06_ts_isr` frees a slot only on an explicit up event and
+  skips entries marked reserved, so a contact the firmware drops without an
+  up event stays down. Which of those the FT3519T sent here was not
+  captured. Reloading the module cleared the slot.
+- **Verified, KWin's filter keeps the stuck point:** `DpmsInputEventFilter`
+  tracks held touch points and counts a double tap only when none are held.
+  It has no `touchCancel`, and `Workspace::requestDpmsState` creates it once
+  per screen-off. After the reload, clean double taps (270 ms from first
+  down to last up) still did nothing. Turning the screen on and off gave a
+  fresh filter, and the next double tap woke the phone.
+- **Verified, proximity:** `ssccli` and iio-sensor-proxy both went to NEAR
+  at 91.4 s under a palm, and back to FAR at 95.8 s. Light fell from 31 to
+  0 lux. This is the reading KWin's filter checks to ignore taps in a
+  pocket. The pocket case itself is untested.
+- **Verified, not from suspend:** Plasma suspended the phone four times
+  today (`PM: suspend entry (deep)`). With `reset-gpios` and no
+  `wakeup-source`, `edt_ft5x06_ts_suspend` hibernates the chip and cuts its
+  power, so a tap cannot wake a suspended phone. GPIO 13 is wake-capable:
+  `sm6450_pdc_map` routes it to PDC 54.
+- **Verified, hexagonrpcd stops at the first suspend:** upstream's unit
+  carries `Conflicts=suspend.target`, so systemd stopped
+  `hexagonrpcd-adsp-sensorspd` at 00:11:42 and nothing restarted it. Two
+  suspends later the sensors still streamed through `ssccli`: proximity,
+  light at 31 lux and the accelerometer. **Reasoned:** the loss would show
+  after an ADSP restart, or when the sensors domain next asks for a file.
+  Restarting the service as it stands would also restart the ADSP, through
+  `hexagonrpcd-adsp-fresh`.
+- **Verified, the controller has no usable gesture mode:** chip ID
+  `0x5452`, firmware `0x26`, vendor `0x48`. With the panel off, the
+  sequence from FocalTech's reference driver (`0xD1`, `0xD2` and `0xD5` to
+  `0xD8` set to `0xFF`, then `0xD0` set to 1) read back as set, but taps
+  still raised 5 to 46 interrupts each, like ordinary contacts, and the
+  gesture output at `0xD3` stayed `0x00`. KWin woke the screen from those
+  ordinary touches. The registers were written back to 0 and the driver
+  reloaded. Log: `out/try-kernel/live-dt2w-gesture-mode.txt`, from
+  `out/try-kernel/gesturetest.py`.
+- **Verified, Sony never enables gestures:** kernel-copyleft
+  `70.2.A.1.xxx`, `drivers/input/touchscreen/focaltech_touch`, sets
+  `FTS_GESTURE_EN` to 0. On the panel's early blank event it writes sleep
+  (`0xA5` = 3) and disables the interrupt. **Reasoned:** the firmware was
+  built without gestures. Firmware is not something to reflash for this.
+- **Verified, which key wakes Plasma:** from a uinput keyboard with the
+  panel off, `KEY_WAKEUP` left it off and `KEY_POWER` turned it on. KWin's
+  DPMS filter passes `Key_WakeUp` through on purpose, because drivers send
+  it on resume. Script: `out/try-kernel/keytest.py`.
+- **Next:** finish testing kernel r49 (below); keep hexagonrpcd running
+  across suspend. KWin's missing `touchCancel` no longer matters on this
+  phone, whose device package turns KWin's double tap off from r22, but it
+  is still a bug to report upstream.
+
+### Kernel r49: double tap to wake in the driver
+
+The owner asked for this to be a kernel feature that works under any UI,
+waking from suspend too, but only while the proximity sensor is clear. With
+the screen on, a double tap must stay an ordinary pair of touches. Kernel
+r49 and device package r22 do this. **Running on the phone since 14:47 on
+2026-10-15: waking with the panel off is verified, while proximity, stray
+touches with the panel off and suspend are not yet tested.**
+
+- **Patches:** `kernel/patches/0106` releases contacts missing from a
+  frame (`INPUT_MT_DROP_UNUSED`). `0107` makes `edt-ft5x06` follow the
+  panel named by its `panel` property. `0108` gives the pdx246 touchscreen
+  `panel = <&panel>` and `wakeup-source`.
+- **Panel on:** touches are reported as before and nothing watches for
+  taps.
+- **Panel off:** no touches are reported. The driver reports a double tap
+  as `KEY_POWER` on a second input device, "generic ft5x06 (48) wake
+  gesture". A double tap is two taps, each lifted within 250 ms and moving
+  less than 134 px. The second goes down 40 to 300 ms after the first lifts,
+  within 134 px of it. The key is dropped if the panel has come back on
+  meanwhile, because there it would turn the screen off.
+- **Proximity:** `wake-gesture-proximity` (device package) reads
+  iio-sensor-proxy through `monitor-sensor --proximity`. While the sensor
+  reads near, it writes 1 to that device's `inhibited` attribute. While
+  the panel is off, inhibiting the device powers the controller down. The
+  driver would do the same for a device nobody has open, but with
+  `CONFIG_VT=y` the console's keyboard handler always holds it open. If the
+  sensor or the script goes away, the gesture is left on.
+- **Suspend:** with `power/wakeup` enabled (the default from
+  `wakeup-source`), the controller stays scanning through suspend and its
+  interrupt is a wake source. The driver arms it, not the I2C core, so
+  only gesture mode wakes the phone. **Reasoned:** the touch that wakes a
+  deep suspend has lifted before I2C is back, so it counts as the first
+  tap, and a second within 2 s wakes the screen. Resume latency decides
+  whether an ordinary double tap is enough or a third tap is needed.
+- **logind:** `71-wake-gesture.rules` removes the `power-switch` tag that
+  `70-power-switch.rules` gives every key device. Without it, a double tap
+  with no session holding the power key (PowerDevil holds it in Plasma)
+  would hit logind's default, power off.
+- **Checked without the phone:** the driver builds with `W=1` and no
+  warnings, checkpatch `--strict` is clean, the DTB compiles with both
+  properties, and `backport-0005` to `0007` still apply on top, with an
+  offset.
+- **Verified, the boot:** `to-fastboot.sh` and then `STAYUP=1
+  try-kernel.sh` put r49 on slot a, and sshd answered 20 s after the
+  gadget appeared. The driver registered input3 for touches and input4,
+  "generic ft5x06 (48) wake gesture". The client's `power/wakeup` read
+  `enabled`, and `wake-gesture-proximity` was running. Log:
+  `out/try-kernel/run-dt2w49.log` and `live-dt2w49.txt`.
+- **Verified, the driver with the panel on and off:** the owner used the
+  phone and double-tapped with the panel on and off, while
+  `out/try-kernel/dt2w-watch.py` logged. With the panel on, touches reached
+  userspace and the gesture device sent nothing. With the panel off, no
+  touch reached userspace. Three double taps raised the interrupt, the
+  gesture device sent `KEY_POWER`, and the panel came on 0.26 s later each
+  time. Log: `out/try-kernel/dt2w-watch-run1.txt`.
+- **Verified, logind:** it watches only event0, `pmic_pwrkey`. The gesture
+  device's event4 still lists `power-switch` in `TAGS`, which keeps every
+  tag a device ever had. It has no `CURRENT_TAGS`, and the current tags are
+  what logind checks.
+- **Verified, Plasma's double tap to lock:** with the panel on, a double tap
+  on the lock screen turned it off 0.3 to 0.5 s later. The gesture device
+  sent nothing. The mobile shell's `lockscreen/LockScreen.qml` has a
+  `MouseArea` whose `onDoubleClicked` calls `deviceLock.triggerLock()`
+  when `ShellSettings.KWinSettings.doubleTapWakeup` is set. That is KWin's
+  `[Wayland] DoubleTapWakeup`, so this predates r49. With the driver
+  keeping touches while the panel is off, KWin's own double tap has nothing
+  to act on, and the setting's only remaining effect is this lock action.
+  Device package r22 ships `/etc/xdg/kwinrc` with it set to false.
+- **Verified, the home screen locks too:** with r22 installed, a run of
+  taps on the home screen still turned the panel off. The journal shows
+  an unlock at 16:02:54, a new greeter starting at 16:03:02.53 and the
+  panel off at 16:03:02.82, with nothing from the gesture device. That is
+  a lock, the same `triggerLock` the lock screen uses, from plasmashell.
+  Restarting plasmashell at 16:08 made it worse: from then on a single
+  double tap on the home screen locked the phone (16:10:26). The
+  plasma-mobile 6.7.5 sources explain the lock, though not why it first
+  took 4 or 5 taps. The Folio home screen's `HomeScreenPages.qml` and
+  `FavouritesBar.qml` lock on `onDoubleClicked` when
+  `FolioSettings.doubleTapToLock` is set, and only the lock screen checks
+  KWin's setting. Folio's setting, "Double tap to lock device" in the home
+  screen's own settings, is read from its group in
+  `plasma-org.kde.plasma.mobileshell-appletsrc` with a default of true.
+  That file on the phone had no such key. So the home screen has locked on
+  a double tap since the first boot, and r22 does not touch it.
+  **Verified:** the owner switched it off in the home screen's settings,
+  which wrote `doubleTapToLock=false` under `[Containments][1][Folio]`,
+  and double taps on the home screen stopped locking the phone.
+- **Side effect of r22's kwinrc:** the Shell settings page shows "Double
+  Tap to Wakeup" off, while the driver keeps waking the phone. The
+  driver does not follow that switch.
+- **Verified, an ssh session blocks suspend:** in the 20 minutes after
+  boot, 10 of them with the panel off and the phone untouched, the system
+  never suspended (`suspend_stats/success` 0). `systemd-inhibit --list`
+  shows why: sshd takes a `sleep` lock in `block` mode for each active
+  PAM session, and the logger held one for those 10 minutes. A suspend
+  test therefore has to run with no session open and be read from `dmesg`
+  afterwards.
+- **Observed, one suspend without a touch wake:** the phone suspended
+  from 15:23:27 to 15:41:09. The touch interrupt count stayed at 298 from
+  15:10 to 16:02, so no touch interrupt arrived during that suspend, and
+  something else woke it. Whether anyone tapped during it is not recorded.
+  `hexagonrpcd-adsp-sensorspd` was inactive afterwards, as before, yet
+  `monitor-sensor` still found the proximity sensor.
+- **Untested:** proximity inhibiting the gesture (the inhibit never went
+  to 1 between 15:10 and 16:04), single taps and swipes with the panel
+  off, and waking from suspend.
+- **Next:** test those three. Decide whether this phone should ship
+  Folio's double tap to lock off by default, and whether
+  `wake-gesture-proximity` should also follow the Shell settings switch so
+  that the switch turns the driver's gesture on and off.
+
 ## Fingerprint enrollment and verification work, 2026-10-15
 
 **The owner enrolled a finger from Plasma's own fingerprint settings, and

@@ -1,0 +1,26 @@
+# Bring-up target for the Xperia's future fprintd-compatible Egis backend.
+maintainer="Bruno Gregório <accounts@bruno.pw>"
+pkgname=postmarketos-ui-plasma-mobile-fingerprint
+pkgver=0.1
+pkgrel=0
+pkgdesc="Plasma Mobile fingerprint enrollment and screen-lock integration"
+url="https://invent.kde.org/plasma/plasma-mobile"
+arch="noarch"
+license="MIT"
+depends="postmarketos-ui-plasma-mobile plasma-workspace fprintd fprintd-pam"
+# systemd-edge's kscreenlocker currently ships Fedora's PAM includes
+# fingerprint-auth/postlogin and SELinux modules, absent in this rootfs.
+# Own just its fingerprint stack with Alpine's base-account/base-session.
+replaces="kscreenlocker"
+source="kde-fingerprint fingerprint-settings.desktop"
+options="!check"
+
+package() {
+	install -Dm644 "$srcdir"/kde-fingerprint "$pkgdir"/etc/pam.d/kde-fingerprint
+	install -Dm644 "$srcdir"/fingerprint-settings.desktop \
+		"$pkgdir"/usr/share/applications/fingerprint-settings.desktop
+}
+sha512sums="
+5bf8658ba56b54b5c4e3820423ed6822f49b4055096989eaa7e9a43e7a4b5c363c5477c638836919690640b62286d8d2006b9659eee43477cb92eed9a341edce  kde-fingerprint
+e353eef2fb48bd4ebcd911b328449231c5b6bcb86c011216e626a505e3cf59cde0e6876e22afd72c24f4683358900211a64a412fbddaba972260a235ca12d058  fingerprint-settings.desktop
+"

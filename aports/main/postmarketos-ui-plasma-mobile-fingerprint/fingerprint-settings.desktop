@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Fingerprint Settings
+Comment=Enroll fingerprints and manage your user account
+Exec=kcmshell6 kcm_users
+Icon=fingerprint-symbolic
+Terminal=false
+Categories=Settings;Security;
+X-KDE-FormFactor=handset;tablet;desktop;

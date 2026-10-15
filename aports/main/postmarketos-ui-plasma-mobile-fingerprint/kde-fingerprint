@@ -1,0 +1,5 @@
+#%PAM-1.0
+# KScreenLocker runs this alongside its separate password authenticator.
+auth       required    pam_fprintd.so max-tries=3 timeout=30
+account    include     base-account
+session    include     base-session

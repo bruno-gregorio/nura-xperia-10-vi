@@ -67,9 +67,12 @@ phone_state() {
 
 # Whether the phone answers on a TCP port; the host has no nc.
 port_open() {
+	# The initramfs telnet shell stays on USB; rootfs SSH may use Wi-Fi.
+	port_host=172.16.42.1
+	[ "$1" != 22 ] || port_host=${PMOS_HOST:-172.16.42.1}
 	timeout 5 python3 -I -c 'import socket, sys
 socket.create_connection((sys.argv[1], int(sys.argv[2])), 3).close()' \
-		172.16.42.1 "$1" >/dev/null 2>&1
+		"$port_host" "$1" >/dev/null 2>&1
 }
 
 # Ask a boot of ours that is up on the network gadget to reset now, rather

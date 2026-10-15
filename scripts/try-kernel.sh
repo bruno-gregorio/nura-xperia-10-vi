@@ -689,7 +689,7 @@ run_live() {
 port_open() {
 	timeout 5 python3 -I -c 'import socket, sys
 socket.create_connection((sys.argv[1], int(sys.argv[2])), 3).close()' \
-		172.16.42.1 "$1" >/dev/null 2>&1
+		"${PMOS_HOST:-172.16.42.1}" "$1" >/dev/null 2>&1
 }
 
 fullboot_cmds() {
@@ -729,7 +729,7 @@ run_live_ssh() {
 	{
 		python3 "$ROOT/scripts/ssh.py" -t "${LIVE_STEP:-120}" -f "$cmds" < /dev/null 2>&1
 		echo $? > "$cmds.rc"
-	} | sed -E 's/[0-9A-Z]{12,}/<r>/g' > "$out"
+	} | sed -u -E 's/[0-9A-Z]{12,}/<r>/g' > "$out"
 	echo "   ssh.py exited $(cat "$cmds.rc" 2>/dev/null) - the transcript is $out"
 	rm -f "$cmds" "$cmds.rc"
 	tail -15 "$out"

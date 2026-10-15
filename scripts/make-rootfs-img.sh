@@ -133,7 +133,7 @@ HASH=$(openssl passwd -6 "$PASSWORD") || die "openssl passwd failed"
 as_root sed -i "s|^user:[^:]*:|user:$HASH:|" "$CHROOT/etc/shadow"
 as_root grep -qF "user:$HASH:" "$CHROOT/etc/shadow" \
 	|| die "failed to write the password hash into /etc/shadow"
-echo "    user / $PASSWORD"
+echo "    login password configured for user"
 
 # ---------------------------------------------------------------------------
 # pmbootstrap uses folder size * 1.20 + 50 MiB. The initramfs grows the

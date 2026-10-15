@@ -15,6 +15,7 @@ import gzip
 import hashlib
 import io
 import struct
+import subprocess
 import sys
 import tarfile
 import uuid
@@ -155,15 +156,26 @@ KERNEL_PKG = {
 
 
 def dtb_from_kernel_apk():
-    apks = sorted(KERNEL_APK.glob(f"{KERNEL_PKG}-*.apk"))
-    if not apks:
+    # Match the rootfs's installed version. Lexical sorting selected r9 over
+    # r43 and silently compared a new image against an unrelated old kernel.
+    installed = (BOOT.parent / "lib/apk/db/installed").read_text()
+    version = None
+    for record in installed.split("\n\n"):
+        fields = dict(line.split(":", 1) for line in record.splitlines() if ":" in line)
+        if fields.get("P") == KERNEL_PKG:
+            version = fields.get("V")
+            break
+    if version is None:
         return None, None
+    apk = KERNEL_APK / f"{KERNEL_PKG}-{version}.apk"
+    if not apk.is_file():
+        return None, apk.name
     want = deviceinfo().get("deviceinfo_dtb", "") + ".dtb"
-    with tarfile.open(apks[-1], "r:gz") as t:
+    with tarfile.open(apk, "r:gz") as t:
         for m in t:
             if m.name == f"boot/dtbs/{want}":
-                return t.extractfile(m).read(), apks[-1].name
-    return None, apks[-1].name
+                return t.extractfile(m).read(), apk.name
+    return None, apk.name
 
 
 def ext4_superblock(path):
@@ -186,10 +198,15 @@ def ext4_superblock(path):
 
 
 def initramfs_entries(path):
-    """Names in the gzip-compressed cpio initramfs, without extracting it."""
+    """Names in the gzip or zstd cpio initramfs, without extracting it."""
     names = []
-    with gzip.open(path, "rb") as fh:
-        data = fh.read()
+    compressed = path.read_bytes()
+    if compressed.startswith(b"\x1f\x8b"):
+        data = gzip.decompress(compressed)
+    elif compressed.startswith(b"\x28\xb5\x2f\xfd"):
+        data = subprocess.check_output(["zstd", "-dc", str(path)])
+    else:
+        raise ValueError("Unknown initramfs compression")
     off = 0
     while off + 110 <= len(data):
         if data[off:off + 6] != b"070701":

@@ -1,0 +1,181 @@
+From 59f72b59234f1b0c613856d34ed6cdcacdaf1904 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Wed, 14 Oct 2026 23:45:29 -0300
+Subject: [PATCH] Add the REE time listener, 11
+
+Egis' fingerprint TA on the Sony Xperia 10 VI asks listener 11 for the
+wall clock while it initialises its sensor, and the initialisation fails
+when nobody answers. Implement Qualcomm's time service protocol as
+minkipc's listeners/libtimeservice does: GET_UTC_SEC, GET_SYSTIME,
+GET_TIME_MS, GET_HLOS_UTC and END, replied in place.
+---
+ Makefile                  |  2 +-
+ include/qsee_supplicant.h |  3 ++
+ src/services.c            |  1 +
+ src/time.c                | 80 +++++++++++++++++++++++++++++++++++++++
+ tests/test_protocol.c     | 15 ++++++++
+ 5 files changed, 100 insertions(+), 1 deletion(-)
+ create mode 100644 src/time.c
+
+diff --git a/Makefile b/Makefile
+index ba1ada5..56c1f19 100644
+--- a/Makefile
++++ b/Makefile
+@@ -3,7 +3,7 @@ CPPFLAGS += -D_GNU_SOURCE -Iinclude
+ CFLAGS ?= -O2 -g
+ CFLAGS += -std=c11 -Wall -Wextra -Werror
+ 
+-COMMON = src/path.c src/services.c src/handle_db.c src/fs.c src/gpfs.c
++COMMON = src/path.c src/services.c src/handle_db.c src/fs.c src/gpfs.c src/time.c
+ NOTIFY = src/notify.c
+ APP_ACQUIRE = src/app_acquire.c
+ THREAD_LIBS = -pthread
+diff --git a/include/qsee_supplicant.h b/include/qsee_supplicant.h
+index bf66f9e..6412fb7 100644
+--- a/include/qsee_supplicant.h
++++ b/include/qsee_supplicant.h
+@@ -8,8 +8,10 @@
+ 
+ #define QS_FS_SERVICE_ID 10u
+ #define QS_GPFS_SERVICE_ID 0x7000u
++#define QS_TIME_SERVICE_ID 11u
+ #define QS_FS_BUFFER_SIZE (20u * 1024u)
+ #define QS_GPFS_BUFFER_SIZE (504u * 1024u)
++#define QS_TIME_BUFFER_SIZE (20u * 1024u)
+ 
+ struct qs_store {
+ 	int root_fd;
+@@ -37,6 +39,7 @@ int qs_open_parent(struct qs_store *store, const char *path, bool create,
+ int qs_fs_dispatch(struct qs_store *store, void *buffer, size_t size);
+ void qs_fs_reset(void);
+ int qs_gpfs_dispatch(struct qs_store *store, void *buffer, size_t size);
++int qs_time_dispatch(struct qs_store *store, void *buffer, size_t size);
+ 
+ extern const struct qs_service qs_builtin_services[];
+ extern const size_t qs_builtin_service_count;
+diff --git a/src/services.c b/src/services.c
+index e323233..fa1bbdb 100644
+--- a/src/services.c
++++ b/src/services.c
+@@ -4,6 +4,7 @@
+ const struct qs_service qs_builtin_services[] = {
+ 	{ QS_FS_SERVICE_ID, QS_FS_BUFFER_SIZE, qs_fs_dispatch, qs_fs_reset },
+ 	{ QS_GPFS_SERVICE_ID, QS_GPFS_BUFFER_SIZE, qs_gpfs_dispatch, NULL },
++	{ QS_TIME_SERVICE_ID, QS_TIME_BUFFER_SIZE, qs_time_dispatch, NULL },
+ };
+ 
+ const size_t qs_builtin_service_count =
+diff --git a/src/time.c b/src/time.c
+new file mode 100644
+index 0000000..73fa11d
+--- /dev/null
++++ b/src/time.c
+@@ -0,0 +1,80 @@
++// SPDX-License-Identifier: BSD-2-Clause
++/*
++ * Listener 11, the REE time service. TAs ask it for the normal world's wall
++ * clock; Egis' fingerprint TA does so while it initialises its sensor, and
++ * fails the initialisation when nobody answers. The protocol is Qualcomm's,
++ * as its open-source minkipc listeners/libtimeservice implements it: every
++ * request is a single command word and the reply is written over it, in the
++ * same buffer, starting with that word again. A command it does not know is
++ * answered as minkipc answers it, with -1 in the reply's result word rather
++ * than a failed listener request.
++ */
++#include "qsee_supplicant.h"
++
++#include <string.h>
++#include <time.h>
++
++enum {
++	TIME_GET_UTC_SEC = 0x302,
++	TIME_GET_SYSTIME = 0x303,
++	TIME_GET_TIME_MS = 0x304,
++	TIME_GET_HLOS_UTC = 0x305,
++	TIME_END = 0x306,
++};
++
++static void put32(unsigned char *buffer, size_t offset, uint32_t value)
++{
++	memcpy(buffer + offset, &value, sizeof(value));
++}
++
++int qs_time_dispatch(struct qs_store *store, void *buffer, size_t size)
++{
++	unsigned char *b = buffer;
++	struct timespec now;
++	struct tm utc;
++	uint32_t command;
++	uint64_t ms;
++	int32_t fields[9];
++
++	(void)store;
++	if (size < 48)
++		return -1;
++	memcpy(&command, b, sizeof(command));
++	if (clock_gettime(CLOCK_REALTIME, &now))
++		command = 0;
++
++	switch (command) {
++	case TIME_GET_UTC_SEC:
++	case TIME_GET_HLOS_UTC:
++		/* {command, tv_sec, tv_nsec, ret}, packed. */
++		put32(b, 4, (uint32_t)now.tv_sec);
++		put32(b, 8, (uint32_t)now.tv_nsec);
++		put32(b, 12, 0);
++		return 0;
++	case TIME_GET_SYSTIME:
++		/* {command, struct tm as nine 32-bit ints, ret}, in UTC. */
++		if (!gmtime_r(&now.tv_sec, &utc)) {
++			put32(b, 40, (uint32_t)-1);
++			return 0;
++		}
++		fields[0] = utc.tm_sec; fields[1] = utc.tm_min;
++		fields[2] = utc.tm_hour; fields[3] = utc.tm_mday;
++		fields[4] = utc.tm_mon; fields[5] = utc.tm_year;
++		fields[6] = utc.tm_wday; fields[7] = utc.tm_yday;
++		fields[8] = utc.tm_isdst;
++		memcpy(b + 4, fields, sizeof(fields));
++		put32(b, 40, 0);
++		return 0;
++	case TIME_GET_TIME_MS:
++		/* {command, milliseconds as a 64-bit unsigned long}. */
++		ms = (uint64_t)now.tv_sec * 1000 + (uint64_t)now.tv_nsec / 1000000;
++		memcpy(b + 4, &ms, sizeof(ms));
++		return 0;
++	case TIME_END:
++		put32(b, 4, 0);
++		return 0;
++	default:
++		put32(b, 4, (uint32_t)-1);
++		return 0;
++	}
++}
+diff --git a/tests/test_protocol.c b/tests/test_protocol.c
+index 1bd1001..bc27b91 100644
+--- a/tests/test_protocol.c
++++ b/tests/test_protocol.c
+@@ -132,5 +132,20 @@ int main(void)
+ 	snprintf(file, sizeof(file), "%s/evil", root); assert(!symlink("/tmp", file));
+ 	memset(b, 0, QS_GPFS_BUFFER_SIZE); p32(b, 1); strcpy((char *)b + 4, "evil/escaped");
+ 	p32(b + 0x108, 1); b[0x110] = 1; assert(!qs_gpfs_dispatch(&store, b, QS_GPFS_BUFFER_SIZE)); assert(u32(b + 4) != 0);
++
++	/* Listener 11 answers in place: {command, seconds, nanoseconds, 0}. */
++	memset(b, 0, QS_TIME_BUFFER_SIZE); p32(b, 0x302);
++	assert(!qs_time_dispatch(&store, b, QS_TIME_BUFFER_SIZE));
++	assert(u32(b) == 0x302 && u32(b + 4) > 1700000000u && u32(b + 8) < 1000000000u);
++	assert(u32(b + 12) == 0);
++	memset(b, 0, QS_TIME_BUFFER_SIZE); p32(b, 0x303);
++	assert(!qs_time_dispatch(&store, b, QS_TIME_BUFFER_SIZE));
++	assert(u32(b + 24) >= 124 && u32(b + 40) == 0);
++	memset(b, 0, QS_TIME_BUFFER_SIZE); p32(b, 0x304);
++	assert(!qs_time_dispatch(&store, b, QS_TIME_BUFFER_SIZE));
++	{ uint64_t ms; memcpy(&ms, b + 4, 8); assert(ms > 1700000000000ull); }
++	memset(b, 0, QS_TIME_BUFFER_SIZE); p32(b, 0x399);
++	assert(!qs_time_dispatch(&store, b, QS_TIME_BUFFER_SIZE));
++	assert(u32(b + 4) == UINT32_MAX);
+ 	qs_store_close(&store); free(b); puts("protocol tests: OK"); return 0;
+ }
+-- 
+2.55.0
+

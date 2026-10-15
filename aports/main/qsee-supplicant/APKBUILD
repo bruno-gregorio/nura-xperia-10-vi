@@ -1,0 +1,55 @@
+# Maintainer: Bruno Gregório <accounts@bruno.pw>
+#
+# Dawid Wróbel's userspace for QSEECom trusted applications: the listener
+# daemon and a loader that keeps a named TA loaded. It speaks the same
+# /dev/teeN and /dev/teeprivN UAPI as our kernel's bringup-qseecom-tee.patch.
+# The patch adds listener 11, the REE time service, which Egis' fingerprint
+# TA calls while it initialises the sensor and without which that fails.
+# It belongs upstream; until then it is here.
+pkgname=qsee-supplicant
+pkgver=0.1.1
+pkgrel=0
+pkgdesc="Userspace services for Qualcomm QSEECOM trusted applications"
+url="https://github.com/wrobelda/qsee-supplicant"
+arch="all"
+license="BSD-2-Clause AND BSD-3-Clause-Clear"
+makedepends="linux-headers"
+subpackages="$pkgname-doc $pkgname-openrc $pkgname-systemd:systemd"
+source="$pkgname-$pkgver.tar.gz::https://github.com/wrobelda/qsee-supplicant/archive/refs/tags/v$pkgver.tar.gz
+	0001-add-the-ree-time-listener.patch
+	"
+
+build() {
+	make
+}
+
+check() {
+	make check
+}
+
+package() {
+	make DESTDIR="$pkgdir" \
+		install-bin install-systemd install-openrc install-doc
+	install -Dm644 LICENSE "$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+	install -Dm644 LICENSES/BSD-3-Clause-Clear.txt \
+		"$pkgdir"/usr/share/licenses/$pkgname/BSD-3-Clause-Clear.txt
+}
+
+openrc() {
+	pkgdesc="$pkgdesc (OpenRC services)"
+	depends="openrc"
+	install_if="$pkgname=$pkgver-r$pkgrel openrc"
+	default_openrc
+}
+
+systemd() {
+	pkgdesc="$pkgdesc (systemd services)"
+	depends="systemd"
+	install_if="$pkgname=$pkgver-r$pkgrel systemd"
+	amove usr/lib/systemd/system
+}
+
+sha512sums="
+821eb35f222fd7c941787aa350c8ea42466b1c701b10b15fc0cb42989e8d83b2123571aa86e9350770344ad908a8975476e1c880217aa4ae979b3e65e2d04771  qsee-supplicant-0.1.1.tar.gz
+8032c7252d99273b22ca600621124de8d846b3881bd6364a67f042133c0ac234e4e2b996e8a6f1ad04289ae0febd991e0efcbe7333d6a2fd3becd89ee5bc01fd  0001-add-the-ree-time-listener.patch
+"

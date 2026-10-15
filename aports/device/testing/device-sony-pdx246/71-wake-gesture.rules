@@ -1,0 +1,6 @@
+# The touchscreen reports its double tap to wake as KEY_POWER, and udev's
+# 70-power-switch.rules tags every device with a key as a power switch. The
+# desktop takes the key from logind and turns the screen on, but with no one
+# holding that inhibitor logind would act on it itself, and its default for
+# the power key is to power off. A tap must never do that.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="* wake gesture", TAG-="power-switch"

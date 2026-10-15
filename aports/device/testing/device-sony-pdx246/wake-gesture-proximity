@@ -1,0 +1,38 @@
+#!/bin/sh
+# Keep the touchscreen's double tap to wake off while the proximity sensor
+# is covered, so a phone in a pocket or face down does not light up.
+#
+# The kernel side is edt-ft5x06: with the panel off it hides touches and
+# reports a double tap as KEY_POWER on its own input device, named
+# "<touchscreen> wake gesture". Inhibiting that device through the input
+# core's standard "inhibited" attribute powers the controller down until
+# the panel comes back or the inhibit is lifted, so a covered phone does not
+# even scan. The sensor itself is read through iio-sensor-proxy.
+#
+# If iio-sensor-proxy goes away, or this script does, the gesture is left
+# on: a missing sensor should not cost the feature.
+
+set_inhibited() {
+	for d in /sys/class/input/input*; do
+		case "$(cat "$d/name" 2>/dev/null)" in
+		*" wake gesture")
+			echo "$1" > "$d/inhibited"
+			;;
+		esac
+	done
+}
+
+trap 'set_inhibited 0' EXIT
+trap 'exit 0' INT TERM
+
+monitor-sensor --proximity | while IFS= read -r line; do
+	case "$line" in
+	*"(near: 1)"* | *"Proximity value changed: 1"*)
+		set_inhibited 1
+		;;
+	*"(near: 0)"* | *"Proximity value changed: 0"* | \
+	*"No proximity sensor"* | *"vanished"*)
+		set_inhibited 0
+		;;
+	esac
+done

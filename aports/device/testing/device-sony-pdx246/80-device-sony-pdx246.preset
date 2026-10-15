@@ -9,3 +9,5 @@ disable alsa-state.service
 # itself, held loaded so that libfprint's egisqsee attaches to it.
 enable qsee-supplicant.service
 enable qsee-app-loader@.service egisap64
+# Double tap to wake stays off while the proximity sensor is covered.
+enable wake-gesture-proximity.service

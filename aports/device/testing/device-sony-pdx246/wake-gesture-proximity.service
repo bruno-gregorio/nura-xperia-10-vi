@@ -1,0 +1,14 @@
+[Unit]
+Description=Keep double tap to wake off while the proximity sensor is covered
+After=iio-sensor-proxy.service
+
+[Service]
+ExecStart=/usr/libexec/device-sony-pdx246/wake-gesture-proximity
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

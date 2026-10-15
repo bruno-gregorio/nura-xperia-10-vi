@@ -1,4 +1,5 @@
 #!/bin/sh
 # Presets only apply to a fresh install; the fingerprint TA and its
 # listeners have to be enabled on upgraded phones too.
-systemctl --quiet preset qsee-supplicant.service qsee-app-loader@egisap64.service || true
+systemctl --quiet preset qsee-supplicant.service qsee-app-loader@egisap64.service \
+	wake-gesture-proximity.service || true

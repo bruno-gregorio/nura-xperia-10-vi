@@ -1,0 +1,10 @@
+# KWin defaults for the mainline kernel
+#
+# Double tap to wake is the touchscreen driver's job on this phone: with the
+# panel off edt-ft5x06 keeps touches to itself and reports a double tap as
+# KEY_POWER, so KWin's own double tap to wake never sees a touch to act on.
+# What its setting still switches on is Plasma Mobile's double tap to lock,
+# which turns the screen off on a double tap anywhere on the lock screen. A
+# double tap with the screen on should do nothing.
+[Wayland]
+DoubleTapWakeup=false

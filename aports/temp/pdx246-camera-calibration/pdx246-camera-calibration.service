@@ -1,0 +1,14 @@
+[Unit]
+Description=Apply Xperia Hi846 per-unit camera calibration
+After=systemd-udev-trigger.service
+Before=display-manager.service
+ConditionPathExists=/sys/bus/nvmem/devices
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/pdx246-camera-calibrate
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target

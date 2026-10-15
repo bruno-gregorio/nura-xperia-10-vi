@@ -16,24 +16,22 @@
 # falls back to the other slot. So the experiment goes on the *inactive* slot
 # while the stock images stay on the active one, and a crash lands us back in
 # stock Android - where adb is waiting and 'adb reboot bootloader' starts the
-# next round. kernel-cmdline.conf carries panic=5 to make a panic reset rather
-# than hang, which is what feeds the counter.
+# next round. The kernel command line carries panic=60 to make a panic reset
+# rather than hang, which is what feeds the counter.
 #
 # The other half is the log. There is no console on this device - no exposed
 # UART, no USB outside fastboot, and ramoops is scrubbed by the bootloader - so
 # every image flashed here carries scripts/bootlog.py's hook, which writes the
 # kernel ring buffer to flash once storage comes up: to a raw region of the SD
-# card, which both kernels can reach, or failing that to the unused 'rddata'
-# partition on UFS, which only the downstream one can. That makes a dead boot
-# readable instead of merely counted.
+# card, or failing that to the unused 'rddata' partition on UFS. That makes a
+# dead boot readable instead of merely counted.
 #
-# The card is what makes that work under mainline, which does not drive UFS
-# yet (docs/06-mainline.md, "The UFS PHY"). It is still an instrument that
-# runs in the initramfs, so a mainline kernel that dies before /init leaves
-# nothing on it. What is left then is the USB gadget if it comes up, and
-# otherwise the retry counter as a one-bit channel: PROBE=1 reboots on purpose
-# from inside the initramfs, so seven attempts and a fallback mean userspace
-# was reached and one attempt and a hang mean it was not.
+# It is still an instrument that runs in the initramfs, so a kernel that dies
+# before /init leaves nothing behind. What is left then is the USB gadget if
+# it comes up, and otherwise the retry counter as a one-bit channel: PROBE=1
+# reboots on purpose from inside the initramfs, so seven attempts and a
+# fallback mean userspace was reached and one attempt and a hang mean it was
+# not.
 #
 # The two kernels also need opposite handling of the device tree and the dtbo
 # partition, which is read out of pmbootstrap's config rather than guessed; see
@@ -316,10 +314,14 @@ build_vendor_boot() {
 	# CMDLINE_DEL='panic=*' CMDLINE_ADD='panic=5'. Anything that turns out to
 	# matter goes into kernel-cmdline.mainline.conf before it is believed.
 	#
-	# FULLBOOT=1 takes pmos.debug-shell off, so the boot goes on through
-	# switch_root into the rootfs; see run_live_ssh.
-	if [ "${FULLBOOT:-0}" = "1" ]; then
-		CMDLINE_DEL="pmos.debug-shell ${CMDLINE_DEL:-}"
+	# A FULLBOOT=1 round boots the whole system, through switch_root into
+	# the rootfs; see run_live_ssh. Any other round stops in the initramfs
+	# at pmos.debug-shell, with telnet on the USB link, where the probes and
+	# scripts/sdcard-install.sh do their work. The mainline package boots
+	# the whole system and the downstream one stops, so set it either way.
+	CMDLINE_DEL="pmos.debug-shell ${CMDLINE_DEL:-}"
+	if [ "${FULLBOOT:-0}" != "1" ]; then
+		CMDLINE_ADD="pmos.debug-shell ${CMDLINE_ADD:-}"
 	fi
 	if [ -n "${CMDLINE_ADD:-}" ] || [ -n "${CMDLINE_DEL:-}" ]; then
 		say "patching the command line in the vendor_boot header"
@@ -674,11 +676,10 @@ fullboot_cmds() {
 	printf '%s\n' \
 		'uname -a; cut -d" " -f1 /proc/uptime; cat /proc/cmdline' \
 		'cat "$J/pmwd.log"; ls "$J"' \
-		'rc-status -a' \
-		'dmesg | grep -E "pdx246|hexagonrpcd|switch|Run /|OpenRC|msm|adreno|a6xx|drm|firmware|Call trace|BUG|WARNING" | tail -120' \
-		'ps -eo pid,ppid,comm 2>/dev/null || ps -o pid,ppid,comm' \
+		'systemctl is-system-running; systemctl --failed --no-legend' \
+		'dmesg | grep -E "pdx246|hexagonrpcd|switch|Run /|msm|adreno|a6xx|drm|firmware|Call trace|BUG|WARNING" | tail -120' \
 		'ls -la /dev/dri /dev/fastrpc-* 2>&1; cat /sys/class/drm/*/status 2>/dev/null' \
-		'tail -60 /var/log/tinydm.log 2>/dev/null; ls -la /var/log/ /home/user/.local/state/tinydm 2>&1 | head -30' \
+		'journalctl -b -p warning --no-pager | tail -60' \
 		'dmesg | tail -60'
 }
 

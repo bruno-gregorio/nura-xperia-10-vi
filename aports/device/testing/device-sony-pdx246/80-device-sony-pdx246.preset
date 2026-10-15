@@ -5,9 +5,5 @@ enable iio-sensor-proxy.service
 # UCM owns the amplifier routes and conservative levels.
 disable alsa-restore.service
 disable alsa-state.service
-# The fingerprint TA's listeners, its time service among them, and the TA
-# itself, held loaded so that libfprint's egisqsee attaches to it.
-enable qsee-supplicant.service
-enable qsee-app-loader@.service egisap64
 # Double tap to wake stays off while the proximity sensor is covered.
 enable wake-gesture-proximity.service

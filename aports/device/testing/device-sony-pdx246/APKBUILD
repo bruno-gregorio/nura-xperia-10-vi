@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=22
+pkgrel=23
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -111,7 +111,12 @@ kernel_downstream() {
 # qsee-supplicant answers the fingerprint TA's listener requests, the time
 # service without which its sensor initialisation fails, and its loader
 # keeps the TA loaded for libfprint's egisqsee driver. The systemd
-# subpackage's preset enables both, and lets fprintd at the device nodes.
+# subpackage's fprintd drop-in starts the loader, which starts the
+# supplicant, before fprintd opens the sensor, and lets fprintd at the
+# device nodes.
+#
+# pdx246-camera-calibration is the cameras' tuning: Sony's, for these
+# modules, with the Hi-846s' lens shading calibrated per unit at boot.
 #
 # The touchscreen reports a double tap with the panel off as KEY_POWER, on
 # an input device of its own (docs/05-status.md, "Double tap to wake").
@@ -124,7 +129,6 @@ kernel_mainline() {
 	pkgdesc="Our own 6.18 mainline kernel, see docs/06-mainline.md"
 	depends="
 		alsa-ucm-conf
-		pdx246-diagnostics
 		pdx246-camera-calibration
 		firmware-sony-pdx246-cameras
 		firmware-sony-pdx246-adreno
@@ -231,7 +235,7 @@ systemd() {
 sha512sums="
 24acddc512f8f239751a738d3dfe6916618a520dfbcb57ec0e36088aa0c19cb9b571460f33b348ccfdd093d6dd0f278bf5a0a713a43231ff7209bb5806da699a  90-pdx246-usb.conf
 db0ea823df78c9535bf1b14025bf90cf875f7d878550e1372ee859c64696a190286228b9c2bf97365440fad5fb95ff955832b317ee8cf914f66522515b3a65bd  unudhcpd-usb-address.conf
-8ec49b4ee673c1a292c3abeb326532ae995c4b5d5e008941ba6300929664863c96755c6d69596f37c80efa2b85af092dc0cf3b487406d7a1f08d82afbc27139c  80-device-sony-pdx246.preset
+91b7228da015ff7a79a753b18811cd9f8d3fe241c3d25e05e9e1fe068ebfcd29189aabb225f08273fc259c71520af775b79a75c07929c65e297ea85fa16af6be  80-device-sony-pdx246.preset
 ce91c9c2e7581b1268644828d37b764d0705a26cd6edb895229b4a43372ebbf40da1f0e32b23cdbbb3d9611c6f6bd7518a86bb360a4354c0eb5677ffc30ba829  fprintd-egisfp.conf
 00687770c23f11cad6a889a544a32f18e02913689019b1752af2b8c290061f3707a46dc7aece1d64a47728a620f874117c091318efbd0a8001abde3dc6e9f189  deviceinfo
 0dd7721841995d40a94be2eb664d9924a583a72a368bbfc35baa03093cbcd002290fc226d1828a5cace6d125ef97867633f2b182eb41cd5845e98cc572014351  81-libssc-sony-pdx246.rules
@@ -240,7 +244,7 @@ ce91c9c2e7581b1268644828d37b764d0705a26cd6edb895229b4a43372ebbf40da1f0e32b23cdbb
 d43fa56f8b8119ae57526c49ed704dfa2d16ac9ea9adbc78892dfb2dd04b15e246160a8cc8e3a0e8f1d39390f0865eb950a0b47b45f2f380844c2f2c1c0b1464  hexagonrpcd-adsp-sensorspd.conf
 9b10ccf23ea9c6acbd2afb6b06ad980b9f2d079c630ecb818116234f9cf181ecbefcbf6e3ef06ce425728cc15ced9a0e9e4029d1e2144ccec2d761a67dc47f90  hexagonrpcd-adsp-sensorspd.systemd.conf
 e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e57738a425bd75dfe7e28985cc60756f010bfd70fdbff79bb4  kernel-cmdline.downstream.conf
-0de42370419287d3b492ee279ca01d0169ced9b143aa1a4e4d1f94de9437b7df5cc552e5d5388d8909c3fe9c7bc765902f9a883feccd5e87eb0dc46d409c6066  kernel-cmdline.mainline.conf
+8e45adf2650cb7b5e7040affb5f32e9226a01705c381d4e5f1806eecb106c90bf875df93bbf2892176b5f3637310129709d3bcb1fcea48039088282a57187d51  kernel-cmdline.mainline.conf
 521ed763f09c3f633c1a114029ba1d8a7c52704c1b06b61cd4c52ef2daa8d14512f7012789917d4f14818aefa68ba583cecae7defefe11f29b946c7ac84b931c  kwinrc
 f21a83a2d72f89825ffe640e3e2af53f4603995e1e9027e64970c277d02b52229c3fa8995de65a4516571048fb2763f9d74a5dd1dbcce0359d262252e4f66180  lomiri-deviceinfo.yaml
 603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs.downstream

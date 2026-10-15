@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=GPU Test
-Comment=Check hardware rendering and compare display and offscreen performance
-Icon=applications-graphics
-Exec=foot --hold --title=GPU-Test pdx246-gpu-check
-Terminal=false
-Categories=System;Utility;
-StartupNotify=false

@@ -11,7 +11,7 @@ password.
 Defaults match what scripts/make-rootfs-img.sh builds and what the USB gadget
 hands out, so the common case needs no arguments:
 
-    scripts/ssh.py 'rc-status'
+    scripts/ssh.py 'systemctl --failed'
     scripts/ssh.py -t 300 -f commands.sh
 
 With -f, the file is a plan's live commands, the way scripts/tsh.py takes

@@ -1,5 +1,40 @@
 # Status
 
+## The modem at boot, mobile data and GNSS, 2026-10-20
+
+**SMS works, and the modem now allows 4G and 5G at every boot. Mobile data
+is refused by the network, and GNSS does not start.** Kernel r51, the
+modem stack of 2026-10-19 running as services. Evidence in
+`out/modem-diag-16.txt` to `out/modem-diag-18.txt` and
+`out/gnss-diag-*.txt`.
+
+- **Verified by the owner, SMS reception.**
+- **Verified, the modem's stored preference is 2G and 3G only.**
+  ModemManager can widen it, but rmtfs -r loses that at the next modem
+  start. Device r25's `uim-selection-modes.conf` sets GSM, UMTS, LTE and
+  NR on every boot, after the SIM is selected and before ModemManager
+  starts, as Android's RIL does. Tested as a runtime drop-in: after a
+  restart of rmtfs, which reloads the stored preference, ModemManager came
+  up allowing 2G to 5G.
+- **Verified, data is refused by the network, not the phone.** The phone
+  registers on a 3G network that rejects packet service with cause #7
+  (`gprs-not-allowed`), and it stays there with 4G allowed.
+  **Untested:** the data path itself (IPA,
+  rmnet, a bearer); that needs a SIM the network gives data to.
+- **Verified, GNSS does not start.** The modem's LOC service answers
+  `GeneralError` to starting a session, from both ModemManager and qmicli.
+  It answers `InvalidArgument` to libqmi's event registration and
+  `NotSupported` to NMEA types. The engine lock is `mt`, which allows the
+  phone's own sessions, in standalone mode. **Reasoned, untested:** Android's
+  GNSS stack prepares the engine in ways libqmi does not; that is the next
+  question. Device r25's `modem-gnss.conf` drops soc-qcom's NMEA step, the
+  one that failed at every boot; the engine-lock step still runs. Tested
+  the same way.
+- **Not started: call audio.** `q6voiced` needs a voice PCM in the sound
+  card, and the AudioReach topology has none.
+- **Device r25 is built, not installed.** The phone still runs r22, with
+  `sony-modem-qmi` and `soc-qcom-modem` installed by hand.
+
 ## The fingerprint verifies again; one failure is unexplained, 2026-10-20
 
 **The owner reported the fingerprint had stopped working. It had, twice,

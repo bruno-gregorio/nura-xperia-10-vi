@@ -3,7 +3,7 @@ maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=device-sony-pdx246
 pkgdesc="Sony Xperia 10 VI"
 pkgver=0.1
-pkgrel=24
+pkgrel=25
 url="https://postmarketos.org"
 license="MIT"
 arch="aarch64"
@@ -46,11 +46,13 @@ source="
 	kernel-cmdline.mainline.conf
 	kwinrc
 	lomiri-deviceinfo.yaml
+	modem-gnss.conf
 	modules-initfs.downstream
 	modules-initfs.mainline
 	ucm-HiFi.conf
 	sim-wait-time.conf
 	ucm-Sony-Xperia-10-VI.conf
+	uim-selection-modes.conf
 	wake-gesture-proximity
 	wake-gesture-proximity.service
 "
@@ -134,6 +136,9 @@ kernel_downstream() {
 # three QMI services of Android, which sony-modem-qmi serves: without them
 # it never registers DMS or UIM (docs/05-status.md, "The modem registers
 # with a SIM"). sim-wait-time.conf is Fairphone 6's, for SIMs slow to answer.
+# uim-selection-modes.conf allows 4G and 5G at every boot, which the modem's
+# stored preference does not, and modem-gnss.conf drops the step of
+# soc-qcom's GNSS setup that this modem refuses; both say why.
 kernel_mainline() {
 	pkgdesc="Our own 6.18 mainline kernel, see docs/06-mainline.md"
 	depends="
@@ -244,6 +249,10 @@ systemd() {
 		-t "$subpkgdir"/usr/lib/systemd/system/
 	install -Dm644 "$srcdir"/sim-wait-time.conf \
 		"$subpkgdir"/usr/lib/systemd/system/msm-modem-uim-selection.service.d/sim-wait-time.conf
+	install -Dm644 "$srcdir"/uim-selection-modes.conf \
+		"$subpkgdir"/usr/lib/systemd/system/msm-modem-uim-selection.service.d/modes.conf
+	install -Dm644 "$srcdir"/modem-gnss.conf \
+		"$subpkgdir"/usr/lib/systemd/system/modem-gnss.service.d/device.conf
 }
 
 sha512sums="
@@ -261,11 +270,13 @@ e2c92f95815479e4842c46e4b2c3c7e17d6a6053f5d6a780d76b75fe5b3938c344607f5ae7d299e5
 8e45adf2650cb7b5e7040affb5f32e9226a01705c381d4e5f1806eecb106c90bf875df93bbf2892176b5f3637310129709d3bcb1fcea48039088282a57187d51  kernel-cmdline.mainline.conf
 521ed763f09c3f633c1a114029ba1d8a7c52704c1b06b61cd4c52ef2daa8d14512f7012789917d4f14818aefa68ba583cecae7defefe11f29b946c7ac84b931c  kwinrc
 f21a83a2d72f89825ffe640e3e2af53f4603995e1e9027e64970c277d02b52229c3fa8995de65a4516571048fb2763f9d74a5dd1dbcce0359d262252e4f66180  lomiri-deviceinfo.yaml
+a1f59c850239807d2cbcc330ade405298c4b4f2e855e5459d05fcfaf8fd171d3c862ebcaf7eb8517f8c1d9054450fba9d496dad7974918220bcf1694b8188619  modem-gnss.conf
 603f8b9cb38dff9d62fc3f3c52c6a4a30080149287cd644257de108044436fa88e1c721793b5e5392744e8de71fde363985fe9d5173762deccf8cb7dc5ec3179  modules-initfs.downstream
 427a4881e9e9b169d05a96d681378c0dc91179cab6bd2e3e6865147507558f537d9558a03caf50962e4013709bcc54f6303fc01e2f8cd34443ba76564ee2505f  modules-initfs.mainline
 1866b559231ecf5943ee386d17a308bef856583f1ff26e4fbff65e7b6f0f6f145a31fc3777d8e7eb61f57a6a86cbdfa15ad91d79853fbfda7fec3fd1804c7773  ucm-HiFi.conf
 5b94d596fb02a71f78f888996df102055c8ef50e719d39d7f61151407759c8f7345924918dd227af79a8220bcf44dd1b3bdfbc2d4c206322d0dd57ebb4520207  sim-wait-time.conf
 2e0ea13e2885198814854da47b21485e56fab1de650d31feda44da6133d546ad42bcba76c382168eb11e2e9cb746fac64684ec91b23b6bbedbe74ad51e849f07  ucm-Sony-Xperia-10-VI.conf
+dd22a20db3ddadfaf9afff105899cecc345319cf7c7d1e309ba7898c8c32f224e83c870bd438a5bbff04c62ae613ea84a79ed169e97445443585b25ba08ee329  uim-selection-modes.conf
 d60b4cb06e26041a5e2dcf20d75f50d26dd983240fb4d8b29ada7fd348c8988131a514b3bcf7017737e9d5ef70c75f4603733cdbf6925e83b7338d2e317553ff  wake-gesture-proximity
 eb0aaadede026658111fc5b43153b3a84e5817a3998b374f9cea230da05edd10a49620e038b07bd966d3a3516212b7a86065159bcdd45e300ead1d529e57ff0a  wake-gesture-proximity.service
 "

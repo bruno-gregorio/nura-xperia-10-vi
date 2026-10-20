@@ -15,3 +15,8 @@ media: hi846: Fix hi846_write_reg_16 handling
 media: hi846: Fix link frequency handling
 media: hi846: Fix modes handling for different lane cases
 media: hi846: Add 6MP and 8MP modes support
+dt-bindings: net: qcom,ipa: Add sram property for describing IMEM slice
+net: ipa: Grab IMEM slice base/size from DTS
+dt-bindings: net: qcom,ipa: add Milos compatible
+net: ipa: add IPA v5.2 configuration data
+dt-bindings: sram: qcom,imem: Allow modem-tables subnode

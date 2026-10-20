@@ -1,0 +1,93 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Date: Mon, 2 Mar 2026 16:58:45 +0100
+Subject: [PATCH] net: ipa: Grab IMEM slice base/size from DTS
+
+This is a detail that differ per chip, and not per IPA version (and
+there are cases of the same IPA versions being implemented across very
+very very different SoCs).
+
+This region isn't actually used by the driver, but we most definitely
+want to iommu-map it, so that IPA can poke at the data within.
+
+Reviewed-by: Alex Elder <elder@riscstar.com>
+Acked-by: Dmitry Baryshkov <dmitry.baryshkov@oss.qualcomm.com>
+Reviewed-by: Simon Horman <horms@kernel.org>
+Signed-off-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Link: https://patch.msgid.link/20260302-topic-ipa_imem-v6-3-c0ebbf3eae9f@oss.qualcomm.com
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ drivers/net/ipa/ipa_data.h |  9 +++++++--
+ drivers/net/ipa/ipa_mem.c  | 24 +++++++++++++++++++++++-
+ 2 files changed, 30 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/net/ipa/ipa_data.h b/drivers/net/ipa/ipa_data.h
+index 2fd03f079..f3bdc64ce 100644
+--- a/drivers/net/ipa/ipa_data.h
++++ b/drivers/net/ipa/ipa_data.h
+@@ -185,8 +185,13 @@ struct ipa_resource_data {
+ struct ipa_mem_data {
+ 	u32 local_count;
+ 	const struct ipa_mem *local;
+-	u32 imem_addr;
+-	u32 imem_size;
++
++	/* These values are now passed via DT, but to support
++	 * older systems we must allow this to be specified here.
++	 */
++	u32 imem_addr; /* DEPRECATED */
++	u32 imem_size; /* DEPRECATED */
++
+ 	u32 smem_size;
+ };
+ 
+diff --git a/drivers/net/ipa/ipa_mem.c b/drivers/net/ipa/ipa_mem.c
+index 835a3c9c1..078d32a18 100644
+--- a/drivers/net/ipa/ipa_mem.c
++++ b/drivers/net/ipa/ipa_mem.c
+@@ -7,6 +7,7 @@
+ #include <linux/dma-mapping.h>
+ #include <linux/io.h>
+ #include <linux/iommu.h>
++#include <linux/of_address.h>
+ #include <linux/platform_device.h>
+ #include <linux/types.h>
+ 
+@@ -617,7 +618,9 @@ static void ipa_smem_exit(struct ipa *ipa)
+ int ipa_mem_init(struct ipa *ipa, struct platform_device *pdev,
+ 		 const struct ipa_mem_data *mem_data)
+ {
++	struct device_node *ipa_slice_np;
+ 	struct device *dev = &pdev->dev;
++	u32 imem_base, imem_size;
+ 	struct resource *res;
+ 	int ret;
+ 
+@@ -656,7 +659,26 @@ int ipa_mem_init(struct ipa *ipa, struct platform_device *pdev,
+ 	ipa->mem_addr = res->start;
+ 	ipa->mem_size = resource_size(res);
+ 
+-	ret = ipa_imem_init(ipa, mem_data->imem_addr, mem_data->imem_size);
++	ipa_slice_np = of_parse_phandle(dev->of_node, "sram", 0);
++	if (ipa_slice_np) {
++		struct resource sram_res;
++
++		ret = of_address_to_resource(ipa_slice_np, 0, &sram_res);
++		of_node_put(ipa_slice_np);
++		if (ret)
++			goto err_unmap;
++
++		imem_base = sram_res.start;
++		imem_size = resource_size(&sram_res);
++	} else {
++		/* Backwards compatibility for DTs lacking
++		 * an explicit reference
++		 */
++		imem_base = mem_data->imem_addr;
++		imem_size = mem_data->imem_size;
++	}
++
++	ret = ipa_imem_init(ipa, imem_base, imem_size);
+ 	if (ret)
+ 		goto err_unmap;
+ 

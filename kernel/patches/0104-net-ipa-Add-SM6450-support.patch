@@ -1,0 +1,83 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Sun, 18 Oct 2026 22:28:19 -0300
+Subject: [PATCH] net: ipa: Add SM6450 support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SM6450 has IPA v5.2. Its endpoints, channels, QSB limits and local
+memory layout are those of Milos, but the modem expects 0x9000 bytes of
+SMEM for its filter tables rather than 0xb000, so it gets configuration
+data of its own that differs only in that.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ drivers/net/ipa/data/ipa_data-v5.2.c | 20 ++++++++++++++++++++
+ drivers/net/ipa/ipa_data.h           |  1 +
+ drivers/net/ipa/ipa_main.c           |  4 ++++
+ 3 files changed, 25 insertions(+)
+
+diff --git a/drivers/net/ipa/data/ipa_data-v5.2.c b/drivers/net/ipa/data/ipa_data-v5.2.c
+index c56c4f183..067e71650 100644
+--- a/drivers/net/ipa/data/ipa_data-v5.2.c
++++ b/drivers/net/ipa/data/ipa_data-v5.2.c
+@@ -416,6 +416,13 @@ static const struct ipa_mem_data ipa_mem_data = {
+ 	.smem_size	= 0x0000b000,
+ };
+ 
++/* SM6450 gives the modem a smaller share of SMEM than Milos does */
++static const struct ipa_mem_data ipa_mem_data_sm6450 = {
++	.local_count	= ARRAY_SIZE(ipa_mem_local_data),
++	.local		= ipa_mem_local_data,
++	.smem_size	= 0x00009000,
++};
++
+ /* Interconnect rates are in 1000 byte/second units */
+ static const struct ipa_interconnect_data ipa_interconnect_data[] = {
+ 	{
+@@ -450,3 +457,16 @@ const struct ipa_data ipa_data_v5_2 = {
+ 	.mem_data		= &ipa_mem_data,
+ 	.power_data		= &ipa_power_data,
+ };
++
++/* Configuration data for SM6450, which has IPA v5.2. */
++const struct ipa_data ipa_data_v5_2_sm6450 = {
++	.version		= IPA_VERSION_5_2,
++	.qsb_count		= ARRAY_SIZE(ipa_qsb_data),
++	.qsb_data		= ipa_qsb_data,
++	.modem_route_count	= 11,
++	.endpoint_count		= ARRAY_SIZE(ipa_gsi_endpoint_data),
++	.endpoint_data		= ipa_gsi_endpoint_data,
++	.resource_data		= &ipa_resource_data,
++	.mem_data		= &ipa_mem_data_sm6450,
++	.power_data		= &ipa_power_data,
++};
+diff --git a/drivers/net/ipa/ipa_data.h b/drivers/net/ipa/ipa_data.h
+index 3eb9dc2ce..c1145c328 100644
+--- a/drivers/net/ipa/ipa_data.h
++++ b/drivers/net/ipa/ipa_data.h
+@@ -254,6 +254,7 @@ extern const struct ipa_data ipa_data_v4_9;
+ extern const struct ipa_data ipa_data_v4_11;
+ extern const struct ipa_data ipa_data_v5_0;
+ extern const struct ipa_data ipa_data_v5_2;
++extern const struct ipa_data ipa_data_v5_2_sm6450;
+ extern const struct ipa_data ipa_data_v5_5;
+ 
+ #endif /* _IPA_DATA_H_ */
+diff --git a/drivers/net/ipa/ipa_main.c b/drivers/net/ipa/ipa_main.c
+index 2b9fe3694..4fa87461c 100644
+--- a/drivers/net/ipa/ipa_main.c
++++ b/drivers/net/ipa/ipa_main.c
+@@ -673,6 +673,10 @@ static const struct of_device_id ipa_match[] = {
+ 		.compatible	= "qcom,milos-ipa",
+ 		.data		= &ipa_data_v5_2,
+ 	},
++	{
++		.compatible	= "qcom,sm6450-ipa",
++		.data		= &ipa_data_v5_2_sm6450,
++	},
+ 	{
+ 		.compatible	= "qcom,sm8550-ipa",
+ 		.data		= &ipa_data_v5_5,

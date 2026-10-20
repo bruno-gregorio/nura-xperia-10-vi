@@ -116,7 +116,7 @@ index 000000000..2b3db9c87
 +	};
 +};
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index 5a162904c..5fa75cdd7 100644
+index 741acd00d..6b49d8fdd 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 @@ -25,6 +25,18 @@ / {
@@ -190,7 +190,7 @@ index 5a162904c..5fa75cdd7 100644
  				remote-endpoint = <&camss_front_in>;
  			};
  		};
-@@ -1215,3 +1220,5 @@ &wifi {
+@@ -1224,3 +1229,5 @@ &wifi {
  
  	status = "okay";
  };

@@ -1,5 +1,121 @@
 # Status
 
+## The modem waits for IPA; the lost workspace rebuilt, 2026-10-18
+
+**ModemManager rejects the modem because the modem never offers DMS.** Its
+QRTR bus watcher accepts a node only once WDS, NAS and DMS all appear,
+within 4 s of the node itself
+(`src/mm-qrtr-bus-watcher.c`, upstream main). Two bounded runs on kernel r49
+(`rmtfs -r`, the modem stopped afterwards) found the following:
+
+- **Verified, rmtfs works:** the modem opened `modem_fs1` and `modem_fs2`,
+  read both headers, loaded all 5118 sectors of `modemst2` through the
+  buffer at `0xff97f000`, and wrote back into RAM only. This settles the
+  "protocol operation is still unverified" item of 2026-10-13.
+- **Verified, tqftpserv serves the carrier configuration:** PDC lists 25
+  MCFG profiles, with `ROW_Commercial` active. The one file the modem asks
+  for and does not get, `modem_pr/mcfg/configs/mcfg_ddr/rf/rf_static_888_00_00.mbn`,
+  is in neither stock modem partition, so Android does not serve it either.
+- **Verified, the data side never comes up:** UIM and PDC answer; NAS and WDS
+  are registered but time out on every request, and DMS and WMS never
+  register, not after 150 s. Evidence: `out/modem-diag-1.txt` and
+  `out/modem-diag-2.txt`.
+- **Verified, the SIM reads as absent:** both physical slots report
+  `Card state: absent` and `Slot status: inactive`, with the owner's SIM in
+  the tray.
+- **Reasoned, untested:** DMS, NAS, WDS and WMS are all served on the
+  modem's data-services side, which cannot finish starting until the
+  AP's IPA driver sends `INIT_DRIVER` with the IPA memory layout. The
+  kernel had no IPA. The SIM may be a second problem or the same one.
+
+**The modem's stack comes from one release.** `modem.mbn` (the installed
+file, the aport's pinned hash, and a fresh `pil-squash.py` of slot b's
+partition all agree), `modem_pr` and `ipa_fws` are all slot b's
+`A16-COLUMBIA-AMSS-260420-0847`. Slot a carries an older modem.
+
+**Kernel r51 adds IPA 5.2. It boots, and IPA works; the modem still does
+not.** A `STAYUP=1` round on slot a, with the images the phone's own
+`boot-deploy` made, booted the whole system: sshd answered after about
+20 s, and Wi-Fi and the GPU came up as before.
+
+- **Verified, IPA works:** the driver initialized and finished setup (the AP
+  loaded `ipa_fws.mbn` through TZ), received the modem's starting and running
+  events, and created `rmnet_ipa0`. The AP's IPA QMI service (49, instance
+  1) is up beside the modem's.
+- **Verified, the modem is unchanged:** DMS and WMS still never register,
+  NAS still times out, both SIM slots still read absent, and ModemManager
+  still finds nothing. Evidence: `out/modem-diag-3.txt` and
+  `out/modem-diag-4.txt`. So the 2026-10-18 guess that the data side was
+  waiting for IPA was wrong, or at least not the whole story.
+- **Verified, what the modem expects from the AP and does not get:** the
+  modem firmware contains a client for Sony's MiscTA (trim area) QMI
+  service. On stock that service is provided by Sony's
+  `/vendor/bin/ta_qmi_service`, started at early boot by `init.taqmi.rc`,
+  and nothing provides it here. **Reasoned, untested:** the modem's tasks
+  waiting on that service would explain DMS never registering. This port
+  does not reimplement Sony's service.
+
+The details of the build:
+
+
+- **Backports:** Konrad Dybcio's `sram` binding and driver change, which
+  take the IMEM slice from DT, plus the `modem-tables` IMEM child; Luca
+  Weiss's Milos binding and IPA v5.2 data. Without the `sram` change, the
+  v5.2 data has no IMEM address on 6.18, and the modem tables would quietly
+  go unmapped. The generic-command, event-ring-index and EV_PER_EE fixes
+  the 2026-10-13 notes mention are already in 6.18.55, and so are the
+  QTIME and TX-queue fixes. The SMP2P
+  leak fix does not apply and is left out.
+- **The series:** a `qcom,sm6450-ipa` compatible with its own data, because
+  Sony's DT gives the modem `0x9000` bytes of SMEM where Milos has
+  `0xb000`; a `qcom,sm6450-imem` compatible; IMEM and IPA nodes in
+  `sm6450.dtsi`; IPA enabled on the board, its GSI firmware loaded by the
+  AP.
+- **Verified against Sony's DT:** IPA at `0x3e00000` plus config offset
+  `0x140000` (`0x3f40000`), GSI at `0x3e04000`, SPI 654 and 432,
+  `RPMH_IPA_CLK`, SMMU streams `0x4a0` and `0x4a2`, the interconnect
+  endpoints (which our driver puts on `aggre2_noc`, `cnoc2` and `mc_virt`),
+  the modem tables at `0x146a8000` (size `0x2000`), PAS ID `0xf`.
+- **A guess:** the IMEM's extent, `0x14680000` plus `0x2c000`, comes from
+  Milos and SM8550. SM6350 shares the base and the modem-tables offset.
+- **Verified in the container:** the board DTB passes `dt-validate` against
+  the IPA and IMEM schemas (and the validator rejects a planted bad
+  property), and the IPA driver builds cleanly with `W=1`.
+
+**Firmware r7 adds `ipa_fws.mbn`.** It is assembled from slot b's
+`ipa_fws.mdt` and its segments, 32,664 bytes. It is also installed by hand
+on the SD rootfs until the package is.
+
+**The gitignored workspace was lost and has been rebuilt.** `out/`, `.pmb/`
+and the `pmport` container were gone. What came back, and how:
+
+- **The kernel tree:** `out/linux` was cloned from v6.18.55 and its three
+  branches rebuilt with `git am` from `kernel/`. The re-export is
+  byte-identical to the committed patches, except the `SERIES` headers,
+  which name the new commit hashes.
+- **The firmware sources:** all 28 were pulled from the files installed on
+  the phone. Each matches the aport's pinned sha512, the two tars
+  included once rebuilt deterministically.
+- **The boot partitions:** slot b's `boot`, `vendor_boot`, `dtbo`, `vbmeta`
+  and `vbmeta_system` were read back into `out/device-dump-root/stock/`.
+  Slot b is Sony's 5.10.246 and nothing in this project writes it. Its
+  `vbmeta` is **not pristine**: it carries flags `0x3`, so it was flashed
+  with verification disabled at some point. That is the image
+  `build_vbmeta` would derive anyway, and no untouched copy exists any more.
+  Slot a's stock images are gone; its current contents (our r49) are in
+  `out/device-dump-root/slot-a-current/`.
+- **The modem's storage:** `modemst1`, `modemst2`, `fsg` and `fsc` were
+  backed up (read-only `dd`) into `out/modem-backup/` before anything that
+  could write them. That is the only copy, so put another one somewhere
+  safe.
+- **Rollback:** the r49 modules and `/boot` are saved on the phone in
+  `/var/lib/pdx246-rollback/r49/`. r51 is installed on the SD rootfs and
+  flashed to slot a; `ipa_fws.mbn` was installed there by hand.
+
+`try-kernel.sh` and `verify-bootimg.py` now take `BOOT=dir`, so a round can
+flash the images the phone's own `boot-deploy` made, without a
+`pmb install`.
+
 ## Userspace packages and the install path, cleaned up, 2026-10-15
 
 **Built, and not run on the device.** Device package r23, libcamera r125 and

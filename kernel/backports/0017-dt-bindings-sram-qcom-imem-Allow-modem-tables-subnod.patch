@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Date: Mon, 2 Mar 2026 16:58:43 +0100
+Subject: [PATCH] dt-bindings: sram: qcom,imem: Allow modem-tables subnode
+
+The IP Accelerator hardware/firmware owns a sizeable region within the
+IMEM, named 'modem-tables', containing various packet processing
+configuration data.
+
+It's not actually accessed by the OS, although we have to IOMMU-map it
+with the IPA device, so that presumably the firmware can act upon it.
+
+Allow it as a subnode of IMEM.
+
+Reviewed-by: Krzysztof Kozlowski <krzysztof.kozlowski@oss.qualcomm.com>
+Reviewed-by: Alex Elder <elder@riscstar.com>
+Signed-off-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Link: https://patch.msgid.link/20260302-topic-ipa_imem-v6-1-c0ebbf3eae9f@oss.qualcomm.com
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ .../devicetree/bindings/sram/qcom,imem.yaml        | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/Documentation/devicetree/bindings/sram/qcom,imem.yaml b/Documentation/devicetree/bindings/sram/qcom,imem.yaml
+index 6a627c57a..c63026904 100644
+--- a/Documentation/devicetree/bindings/sram/qcom,imem.yaml
++++ b/Documentation/devicetree/bindings/sram/qcom,imem.yaml
+@@ -67,6 +67,20 @@ properties:
+     $ref: /schemas/power/reset/syscon-reboot-mode.yaml#
+ 
+ patternProperties:
++  "^modem-tables@[0-9a-f]+$":
++    type: object
++    description:
++      Region containing packet processing configuration for the IP Accelerator.
++
++    properties:
++      reg:
++        maxItems: 1
++
++    required:
++      - reg
++
++    additionalProperties: false
++
+   "^pil-reloc@[0-9a-f]+$":
+     $ref: /schemas/remoteproc/qcom,pil-info.yaml#
+     description: Peripheral image loader relocation region

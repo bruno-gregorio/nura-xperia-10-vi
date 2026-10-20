@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Luca Weiss <luca.weiss@fairphone.com>
+Date: Fri, 10 Apr 2026 09:40:07 +0200
+Subject: [PATCH] dt-bindings: net: qcom,ipa: add Milos compatible
+
+Add support for the Milos SoC, which uses IPA v5.2.
+
+Acked-by: Krzysztof Kozlowski <krzysztof.kozlowski@oss.qualcomm.com>
+Signed-off-by: Luca Weiss <luca.weiss@fairphone.com>
+Link: https://patch.msgid.link/20260410-ipa-v5-2-v2-1-778422a05060@fairphone.com
+Signed-off-by: Jakub Kicinski <kuba@kernel.org>
+---
+ Documentation/devicetree/bindings/net/qcom,ipa.yaml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/net/qcom,ipa.yaml b/Documentation/devicetree/bindings/net/qcom,ipa.yaml
+index 1109f4d17..ccb7eb315 100644
+--- a/Documentation/devicetree/bindings/net/qcom,ipa.yaml
++++ b/Documentation/devicetree/bindings/net/qcom,ipa.yaml
+@@ -45,6 +45,7 @@ properties:
+   compatible:
+     oneOf:
+       - enum:
++          - qcom,milos-ipa
+           - qcom,msm8998-ipa
+           - qcom,sc7180-ipa
+           - qcom,sc7280-ipa

@@ -1,0 +1,38 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Sun, 18 Oct 2026 22:28:42 -0300
+Subject: [PATCH] arm64: dts: qcom: sm6450-sony-xperia-columbia-pdx246: Enable
+ IPA
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The modem's data goes through the IP Accelerator. Have the kernel load
+its GSI firmware, as stock does.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+index 5a162904c..741acd00d 100644
+--- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
++++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
+@@ -786,6 +786,15 @@ touchscreen@38 {
+ 	};
+ };
+ 
++&ipa {
++	firmware-name = "qcom/sm6450/Sony/columbia/ipa_fws.mbn";
++	memory-region = <&pil_ipa_fw_mem>;
++
++	qcom,gsi-loader = "self";
++
++	status = "okay";
++};
++
+ &lpass_tlmm {
+ 	status = "okay";
+ };

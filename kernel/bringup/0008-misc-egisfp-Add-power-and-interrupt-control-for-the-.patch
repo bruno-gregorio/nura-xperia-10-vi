@@ -88,10 +88,10 @@ index 000000000..2b3db9c87
 +	};
 +};
 diff --git a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-index fbaeee341..fe55eab1d 100644
+index 41a2ff0fc..8abe6421a 100644
 --- a/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
 +++ b/arch/arm64/boot/dts/qcom/sm6450-sony-xperia-columbia-pdx246.dts
-@@ -1227,3 +1227,5 @@ &wifi {
+@@ -1236,3 +1236,5 @@ &wifi {
  
  	status = "okay";
  };

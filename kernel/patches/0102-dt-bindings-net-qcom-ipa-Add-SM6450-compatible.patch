@@ -1,0 +1,30 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Bruno=20Greg=C3=B3rio?= <accounts@bruno.pw>
+Date: Sun, 18 Oct 2026 22:27:52 -0300
+Subject: [PATCH] dt-bindings: net: qcom,ipa: Add SM6450 compatible
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+SM6450 has IPA v5.2, like Milos, but gives the modem a smaller share of
+shared memory for its filter tables, so it cannot fall back to the Milos
+compatible and needs one of its own.
+
+Signed-off-by: Bruno Gregório <accounts@bruno.pw>
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Documentation/devicetree/bindings/net/qcom,ipa.yaml | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/Documentation/devicetree/bindings/net/qcom,ipa.yaml b/Documentation/devicetree/bindings/net/qcom,ipa.yaml
+index ccb7eb315..957aded4f 100644
+--- a/Documentation/devicetree/bindings/net/qcom,ipa.yaml
++++ b/Documentation/devicetree/bindings/net/qcom,ipa.yaml
+@@ -53,6 +53,7 @@ properties:
+           - qcom,sdx55-ipa
+           - qcom,sdx65-ipa
+           - qcom,sm6350-ipa
++          - qcom,sm6450-ipa
+           - qcom,sm8350-ipa
+           - qcom,sm8550-ipa
+       - items:

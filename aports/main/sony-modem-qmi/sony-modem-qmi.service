@@ -1,0 +1,14 @@
+[Unit]
+Description=QMI services Sony's modem expects of the AP
+# The modem asks for these services while it starts, and rmtfs -s is what
+# starts it.
+Before=rmtfs.service
+ConditionPathExists=/dev/disk/by-partlabel/TA
+
+[Service]
+ExecStart=/usr/bin/sony-modem-qmi
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

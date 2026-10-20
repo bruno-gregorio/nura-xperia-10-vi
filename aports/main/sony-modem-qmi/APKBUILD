@@ -1,0 +1,68 @@
+# Maintainer: Bruno Gregório <accounts@bruno.pw>
+#
+# Sony's modem firmware wants three QMI services of Android. It reads units
+# of the trim area (TA) partition over 0xe3 and 0xe4, which Sony's
+# /vendor/bin/ta_qmi_service serves, and its SIM manager logs to 0xe6,
+# /vendor/bin/mlog_qmi_service's. Without the first two the modem's data side
+# never starts (no DMS); without the third the UIM service never registers,
+# so no SIM is read. This is our own implementation of all three, written
+# from the stock binaries' and the modem's IDL tables and tad's partition
+# format; docs/05-status.md has how they were read.
+#
+# It opens the partition read-only and keeps whatever the modem writes in
+# memory, as upstream's rmtfs.service (-r) does for the modem's own storage.
+pkgname=sony-modem-qmi
+pkgver=0.1
+pkgrel=0
+pkgdesc="QMI services Sony's modem expects of the AP: trim area and logging"
+url="https://github.com/bruno-gregorio/nura-xperia-10-vi"
+arch="all"
+license="BSD-3-Clause"
+makedepends="linux-headers qrtr-dev"
+subpackages="$pkgname-openrc $pkgname-systemd:systemd"
+source="
+	qmi_sony.c
+	qmi_sony.h
+	sony-modem-qmi.c
+	sony-modem-qmi.initd
+	sony-modem-qmi.service
+	ta.c
+	ta.h
+	ta_raw.c
+	ta_raw.h
+	"
+builddir="$srcdir"
+options="!check"
+
+build() {
+	${CC:-cc} $CFLAGS -Wall -Wextra -Wno-unused-parameter \
+		-o sony-modem-qmi \
+		sony-modem-qmi.c qmi_sony.c ta.c ta_raw.c \
+		$LDFLAGS -lqrtr
+}
+
+package() {
+	install -Dm755 sony-modem-qmi -t "$pkgdir"/usr/bin/
+	install -Dm755 sony-modem-qmi.initd "$pkgdir"/etc/init.d/sony-modem-qmi
+	install -Dm644 sony-modem-qmi.service \
+		-t "$pkgdir"/usr/lib/systemd/system/
+}
+
+systemd() {
+	pkgdesc="$pkgdesc (systemd service)"
+	depends="systemd"
+	install_if="$pkgname=$pkgver-r$pkgrel systemd"
+	amove usr/lib/systemd/system
+}
+
+sha512sums="
+df1293a5590bd0262980b6caaba99242d3281a4fada47553a5965d62e0ecc92b3db320fdda0ae1ba09aa091db39bbcd516d8d7d4056f5b2adaec84a6247b69c8  qmi_sony.c
+8ad1fb0ac0020d2e6bf1cd2017c081426d63021c68a86ee3d5d2ecc4483e1ad72763065e44470806809f0274c9d4a6fd5aa6678d8121136088a02b0ddd1c2118  qmi_sony.h
+75aa3d29c5a0b428619133600acba01b0e4ddc0e32346e421233757b3ecea9dd4bc5a9020bf4afa4a3d57df2c9c251ceb6912c66bf009cabbe38ad6089b10532  sony-modem-qmi.c
+446b88247bbfaebf82996b3bcc5656f75a5a4e159fbc3343cc71ba5ebb4a0d815455f66843e4866f6a9b3d9b8c1352fe887be0b728d5d6ae4b6378bc0cf9625f  sony-modem-qmi.initd
+a1bce4ed8bff304bac5b2279695be099a8dbbce23623d0205dba293ecc2ce2cf022abc3c0cfb3900f0fb65d916da13cd00ba278f4ad422bd4923d7cd9bcadbab  sony-modem-qmi.service
+7213a16c529a261d7e552b46a30a17d63d61f19736de1f37bb550f93421ac894e5fd8bd596f50d5f1d9c4143c1b1e0ac036b6fea3a4e2ce8b3790c4ba1f13639  ta.c
+6dafc586d7fc4e480d42c2beb657b4035af33c5b7730096e8d6aa8135f63aa305949f7626789d0e71f9b7eeaa5fe58af7cdfcc19c4712fd178954a82b8ea4f12  ta.h
+e01609a9faa3d856f138b8d57afd299844738a1c0c6075114703f035faf2979c418beee73a239b8deaae4bed27555a8b3a70d573134dbb344a5aa3889bb458be  ta_raw.c
+539289554d40f952fb4b404f9c131bd31b288b24a6bb3a3fac36a9325135d4502e14cd1e46b44b661a49060767ff1a6e799c514ad056a4dd19c09d62eaf20317  ta_raw.h
+"

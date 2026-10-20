@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+
+name="Sony modem QMI services"
+description="Serves the modem the trim area and takes its log over QMI"
+
+command=/usr/bin/sony-modem-qmi
+command_background=true
+pidfile="/run/$RC_SVCNAME.pid"
+output_log="/var/log/$RC_SVCNAME.log"
+error_log="/var/log/$RC_SVCNAME.log"
+
+depend() {
+	before rmtfs
+}
+
+start_pre() {
+	[ -e /dev/disk/by-partlabel/TA ] || {
+		eerror "no partition labelled TA"
+		return 1
+	}
+}

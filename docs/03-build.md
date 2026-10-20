@@ -7,7 +7,16 @@ nothing is installed on the host, and all state lands under `.pmb/`.
 
 Run these once, in order.
 
-1. **Provision the container.** Installs the apt packages, clones pmbootstrap
+1. **Create the container.** A plain rootless distrobox from Debian trixie.
+   The host must already run aarch64 binaries through binfmt_misc (Fedora's
+   `qemu-user-static` registers `qemu-aarch64`), since a rootless container
+   cannot register it.
+
+   ```sh
+   distrobox create --name pmport --image docker.io/library/debian:trixie --yes
+   ```
+
+2. **Provision the container.** Installs the apt packages, clones pmbootstrap
    (pinned to 3.11.1) and pmaports into `.pmb/`, creates the venv, writes
    `.pmb/pmbootstrap_v3.cfg` from `scripts/pmbootstrap_v3.cfg.in`, applies
    `patches/`, and syncs `aports/` into the pmaports checkout.
@@ -16,7 +25,7 @@ Run these once, in order.
    distrobox enter pmport -- ./scripts/bootstrap.sh
    ```
 
-2. **Initialise the work directory.** Accept the defaults; the config already
+3. **Initialise the work directory.** Accept the defaults; the config already
    selects `sony-pdx246`, the `mainline` kernel, systemd and the
    `plasma-mobile` UI.
 

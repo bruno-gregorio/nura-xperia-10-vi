@@ -10,8 +10,9 @@
 #
 # - out/firmware/gpu/: the Adreno 710's SQE and GMU firmware, and the zap
 #   shader squashed into one .mbn;
-# - out/firmware/mbn/: the ADSP, CDSP, modem and WPSS images, squashed by
-#   scripts/pil-squash.py out of stock's modem partition;
+# - out/firmware/mbn/: the ADSP, CDSP, modem and WPSS images and the IPA's
+#   GSI firmware, ipa_fws, squashed by scripts/pil-squash.py out of stock's
+#   modem partition;
 # - out/firmware/audio/aw88261_acf.bin and aw88263_acf.bin: the speaker
 #   amplifier's settings for either chip, stock's /vendor/firmware files of
 #   those names, dumped from the vendor image with
@@ -41,7 +42,8 @@ say() { echo "==> $*"; }
 [ -f "$DST/APKBUILD" ] || die "no $DST/APKBUILD"
 
 for f in gpu/a710_sqe.fw gpu/gmu_gen70000.bin gpu/a710_zap.mbn \
-	mbn/adsp.mbn mbn/cdsp.mbn mbn/modem.mbn mbn/wpss.mbn audio/aw88261_acf.bin \
+	mbn/adsp.mbn mbn/cdsp.mbn mbn/ipa_fws.mbn mbn/modem.mbn mbn/wpss.mbn \
+	audio/aw88261_acf.bin \
 	audio/aw88263_acf.bin; do
 	[ -s "$ROOT/out/firmware/$f" ] || die "no out/firmware/$f"
 	cp -- "$ROOT/out/firmware/$f" "$DST/${f#*/}"

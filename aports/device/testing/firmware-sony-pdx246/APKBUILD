@@ -26,7 +26,7 @@
 maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=firmware-sony-pdx246
 pkgver=1
-pkgrel=6
+pkgrel=7
 pkgdesc="Firmware for Sony Xperia 10 VI"
 url="https://postmarketos.org"
 arch="aarch64"
@@ -69,6 +69,7 @@ source="
 	hi846-back-init.bin
 	hi846-back-3264x2448.bin
 	hi846-back-2304x1728.bin
+	ipa_fws.mbn
 	modem.mbn
 	modem-pr.tar
 	wpss.mbn
@@ -131,7 +132,10 @@ hexagonfs() {
 
 modem() {
 	pkgdesc="Sony Xperia 10 VI modem firmware and read-only remote files"
-	install -Dm644 "$srcdir"/modem.mbn -t "$subpkgdir/$_fwdir"/
+	# ipa_fws is the IP Accelerator's GSI firmware, which the kernel loads
+	# for the modem's data path; it ships in the same partition as the modem's.
+	install -Dm644 "$srcdir"/ipa_fws.mbn "$srcdir"/modem.mbn \
+		-t "$subpkgdir/$_fwdir"/
 	cp -R "$srcdir"/modem_pr "$subpkgdir/$_fwdir"/
 }
 
@@ -168,6 +172,7 @@ cabb0a3a4c5447ae4d15fd860007fbc85911519be9eaf34b00c67e83acfb3e4afffa14eb838a549e
 86355703e4ce079c83b4c5253557cb28805b75312747d2c6f7f0cef251d5c09529136d4b6d5bcc20d4f3a11a20537229f58d808fe4ca05586bde56ff028e026e  hi846-back-init.bin
 916a47966d446483e7818490eaa6dd94668617852ea6f30e1319a89d09cf035a411c19904f4bdd6b6ced3a7fedf7d7f32facbeae1cf0e524d3e1dd42d319ab30  hi846-back-3264x2448.bin
 313a781c9ab4d783a1c9262ceaa406b30ed657404a5ddf494a5e64638c00c9b6d7fd6f596f8c4fc914c54166f10c827d1dcd7d913d51cf6909a8075fb8f68d64  hi846-back-2304x1728.bin
+ccaf2debbfd23b21ee1c5eef7deab5b514fd5d1cf21fc344904d1edb31343be923311b06b17a757b096e903528fec88c8abbaa88df4871b9b2e5bc5f09fdcdfb  ipa_fws.mbn
 21844403340ee0ff907f08f1397633c4ea082b78775f71fb334bf94f2c00a2205c50ced7ef6848ae8c66acae6d57a91213e96ac66cf58d8969fd52ad79a1131b  modem.mbn
 c91ff70febc37daf57b66b1eff887a184a041dc27e24a828f7135819d88693dfa828abb4667f9f6514ef305214da3c5e66cf269577f1472022ff595bd2ff7695  modem-pr.tar
 1d4b7c7f9f3e2c2dfefd594c46fdff1478cc07d1f70eb5c071264b67a9c801b91d52e030e43fea608bbe570e868a6efc1444142042266e1eb2d1014af2380de5  wpss.mbn

@@ -13,14 +13,19 @@
 # hi846*.json hold the golden sample's shading and the green weights, from
 # Sony's stock tuning; scripts/camera-low-light.py imports both them and the
 # tuning files from it.
+#
+# The five tuning files are decoded from the phone's own Chromatix files and
+# may not be redistributed, so, like firmware-sony-pdx246, this aport builds
+# them from next to its APKBUILD, where .gitignore keeps them out of git.
+# Only the scripts and the service are this port's own, under MIT.
 maintainer="Bruno Gregorio <accounts@bruno.pw>"
 pkgname=pdx246-camera-calibration
 pkgver=1
-pkgrel=4
+pkgrel=5
 pkgdesc="Xperia 10 VI camera tuning, calibrated per unit from the Hi-846 OTP"
 url="https://postmarketos.org"
 arch="noarch"
-license="MIT"
+license="MIT AND proprietary"
 depends="python3 py3-yaml"
 options="!check"
 source="

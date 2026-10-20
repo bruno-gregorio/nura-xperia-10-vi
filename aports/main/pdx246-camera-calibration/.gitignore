@@ -1,0 +1,8 @@
+# The module tuning is Sony's, decoded from the phone's own Chromatix files,
+# and may not be redistributed. It is kept here for the build, out of git;
+# only the recipe and this port's own code are tracked.
+/hi846.yaml
+/hi846.json
+/hi846-front.yaml
+/hi846-front.json
+/imx582.yaml

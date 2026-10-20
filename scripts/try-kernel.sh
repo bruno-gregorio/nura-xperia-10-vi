@@ -59,7 +59,11 @@ if [ -z "${TRY_KERNEL_ROOT:-}" ]; then
 fi
 case "$0" in */.running.*) rm -f -- "$0" ;; esac
 DEVICE=sony-pdx246
-BOOT="$ROOT/.pmb/work/chroot_rootfs_$DEVICE/boot"
+# BOOT=dir takes boot.img, vendor_boot.img and dtbs/ from somewhere other than
+# pmbootstrap's rootfs chroot: from the phone's own /boot, say, which
+# boot-deploy rewrites whenever a kernel package is installed there. That is
+# the same device package making the same images, without a 'pmb install'.
+BOOT=${BOOT:-"$ROOT/.pmb/work/chroot_rootfs_$DEVICE/boot"}
 STOCK="$ROOT/out/device-dump-root/stock"
 WORK="$ROOT/out/try-kernel"
 

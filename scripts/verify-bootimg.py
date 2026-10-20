@@ -14,6 +14,7 @@ Exits nonzero on the first thing that is wrong.
 import gzip
 import hashlib
 import io
+import os
 import struct
 import subprocess
 import sys
@@ -24,8 +25,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 # The fastboot images live in the rootfs chroot's /boot, where boot-deploy
 # writes them. home/pmos/rootfs holds the *partition* images instead, which is
-# a different thing entirely - see docs/03-build.md.
-BOOT = ROOT / ".pmb/work/chroot_rootfs_sony-pdx246/boot"
+# a different thing entirely - see docs/03-build.md. BOOT= in the environment
+# points it elsewhere, as it does scripts/try-kernel.sh.
+BOOT = Path(os.environ.get("BOOT", ROOT / ".pmb/work/chroot_rootfs_sony-pdx246/boot"))
 IMAGES = ROOT / ".pmb/work/chroot_native/home/pmos/rootfs"
 
 # device/sony/columbia/PlatformConfig.mk, plus mkbootimg's defaults for the two
@@ -158,7 +160,16 @@ KERNEL_PKG = {
 def dtb_from_kernel_apk():
     # Match the rootfs's installed version. Lexical sorting selected r9 over
     # r43 and silently compared a new image against an unrelated old kernel.
-    installed = (BOOT.parent / "lib/apk/db/installed").read_text()
+    # A BOOT= from outside a rootfs has no database beside it, so the version
+    # installed where the images were made is then given as KERNEL_VERSION=.
+    if "KERNEL_VERSION" in os.environ:
+        version = os.environ["KERNEL_VERSION"]
+        apk = KERNEL_APK / f"{KERNEL_PKG}-{version}.apk"
+        return dtb_from_apk(apk)
+    db = BOOT.parent / "lib/apk/db/installed"
+    if not db.is_file():
+        return None, f"{db} (or set KERNEL_VERSION=)"
+    installed = db.read_text()
     version = None
     for record in installed.split("\n\n"):
         fields = dict(line.split(":", 1) for line in record.splitlines() if ":" in line)
@@ -167,7 +178,10 @@ def dtb_from_kernel_apk():
             break
     if version is None:
         return None, None
-    apk = KERNEL_APK / f"{KERNEL_PKG}-{version}.apk"
+    return dtb_from_apk(KERNEL_APK / f"{KERNEL_PKG}-{version}.apk")
+
+
+def dtb_from_apk(apk):
     if not apk.is_file():
         return None, apk.name
     want = deviceinfo().get("deviceinfo_dtb", "") + ".dtb"

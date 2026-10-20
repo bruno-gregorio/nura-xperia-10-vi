@@ -1,5 +1,45 @@
 # Status
 
+## The fingerprint verifies again; one failure is unexplained, 2026-10-20
+
+**The owner reported the fingerprint had stopped working. It had, twice,
+for two different reasons.** Kernel r51 (#52), libfprint r106. Evidence in
+`out/fp-diag-*.txt` and `out/fp-debug-*.log`.
+
+- **Verified, 15 to 18 October: the TA never loaded.** Every boot on kernel
+  r50 carried `modprobe.blacklist=qcomtee,qseecomtee` from a round's
+  `CMDLINE_ADD`. r50 made `qseecomtee` a module, so the blacklist kept the
+  TEE away and egisap64 was never loaded (boot −1, three days). r51 boots
+  the shipped command line, which has no blacklist. **Rule:** a round
+  that blacklists `qseecomtee` has no fingerprint.
+- **Verified, 19 October evening: verify never saw a finger.** On r51 the
+  TA loaded and every call returned 0, but all of the verify captures
+  during touches came back `image 0 capture 2`, meaning no finger (95
+  captures in one window; one, `image 4`, was classed as water). This held
+  across fprintd restarts and a reload of the TA. An enrollment of another
+  finger in the same minutes captured normally (`image 16 capture 4`, 12
+  stages, cancelled, nothing stored).
+- **Verified, 20 October morning: verify matches.** Six cold verifies, each
+  in a fresh fprintd, matched on the first touch. They used r106 and an
+  experimental build whose default path is r106's, plus four variants of
+  verify's arming (`0x010b4204` set to 1, 3, 0 or unset, and an aborted
+  enroll arming first). So the arming was not the cause. Setting enroll's
+  `0x01084004` inside a verify is refused by the TA (status 1).
+- **Not known: what broke the evening's verifies, and what fixed them.**
+  The TA dialogue is identical in failing and matching sessions. Between
+  them, the phone was in deep suspend from 22:18 to 04:29, and the battery
+  went from charging to full. The modem was registered throughout, so it is
+  not the cause. If verify fails like this again, note whether the phone is
+  charging and how long since the last suspend. Then run a debug verify (as
+  in `out/fp-diag-4.txt`) before anything else.
+- **Verified, and no longer open from the r50 entry:**
+  - The r50 egisfp driver works. `scripts/egisfp-device-check.py` passes,
+    and powered pins read VDD and VCC enable high, reset released and the
+    IRQ pulled up.
+  - The template survives a reboot: the TA read it through the supplicant
+    on the first fprintd start after boot.
+  - Lock-screen unlock is still untested.
+
 ## The modem registers with a SIM: Sony's three services, 2026-10-19
 
 **The Fairphone 6 shows what a working modem needs, and only Sony's part

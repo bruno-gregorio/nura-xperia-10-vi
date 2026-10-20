@@ -2397,7 +2397,7 @@ had become the priority.
 - **Since 2026-10-05 the hook had been armed in the wrong place** —
   Verified in the image round 19 flashed, and fixed. `install` put
   `. /bootlog.sh` after the first `mount_proc_sys_dev` followed by a newline.
-  Since 22859f2, which moved the USB watchdog to the top of `/init`, that
+  Since 8f1cfaa, which moved the USB watchdog to the top of `/init`, that
   match has been a comment line in the watchdog's block. So the hook was the
   first thing `/init` ran: before `busybox --install` and before `/proc`,
   `/sys` and `/dev` were mounted. Its wait loop counts iterations and gives
@@ -2577,7 +2577,7 @@ as what it would have fixed.
   `7 x (12.9 + 60) + 30`, across initramfs contents that differ as much as a
   four-line reboot script differs from the real pmOS init. 362 did not
   reproduce and has no explanation; the honest reading is one bad measurement,
-  and the conclusion commit 1558974 recorded is superseded by this entry.
+  and the conclusion commit 7f8bc85 recorded is superseded by this entry.
 
   What follows from the four that agree is the opposite of what was claimed:
   the panic happens before `/init` and nothing in the initramfs reaches it.
@@ -3398,11 +3398,11 @@ as what it would have fixed.
   `debug_shell`, and 1 for the rung. Its first act on the way out is sysrq
   `w`, which logs "sysrq: Show Blocked State", and record 600 has no such
   line; its dmesg ends at 31.9 seconds.
-- **It died at birth, on every boot since 22859f2** — Verified 2026-10-08,
+- **It died at birth, on every boot since 8f1cfaa** — Verified 2026-10-08,
   under pmport's busybox in a mount namespace with an empty `/dev`. A
   non-interactive ash points a background job's stdin at `/dev/null` as it
   forks it, and when that open fails the child dies with "can't open
-  '/dev/null'" before running a line of its body. 22859f2, on 2026-10-05,
+  '/dev/null'" before running a line of its body. 8f1cfaa, on 2026-10-05,
   moved the watchdog to the top of `/init`, where nothing has mounted
   `/dev` yet and the only node there is the kernel's `/dev/console`. So
   from then on the watchdog never ran, rounds 19 to 22 included, and the
@@ -7280,7 +7280,7 @@ Until 2026-10-11 every mainline round stopped in the debug shell, and the
 loop was built around that: a telnet shell to run commands in, and jobs in
 the initramfs to log the boot to the card and reset the phone when nobody
 holds it. A boot that goes on into the rootfs loses all three, so commit
-2750b73 rebuilt each for it. Round 83, the first `FULLBOOT=1` round, ran it;
+cc7b119 rebuilt each for it. Round 83, the first `FULLBOOT=1` round, ran it;
 each entry says how much of it held.
 
 - **switch_root takes the jobs' tools and their /proc away** — Verified by

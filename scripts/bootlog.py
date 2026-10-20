@@ -1107,7 +1107,7 @@ USB_WATCHDOG = """
 # job's stdin at /dev/null as it forks it, and when that open fails the child
 # dies with "can't open '/dev/null'" before running a line of its body. At
 # this point nothing has mounted /dev: the only node there is the kernel's
-# own /dev/console. So from 22859f2 on, which moved this block up here, the
+# own /dev/console. So from 8f1cfaa on, which moved this block up here, the
 # watchdog died at birth on every boot, rounds 19 to 22 included, and said so
 # only on the serial console, which nobody reads. The node made here is
 # hidden, not removed, when mount_proc_sys_dev mounts devtmpfs over /dev, and

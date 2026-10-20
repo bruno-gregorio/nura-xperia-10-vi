@@ -1,4 +1,6 @@
 #!/bin/sh
 # Presets only apply to a fresh install; the wake gesture's proximity
-# inhibitor has to be enabled on upgraded phones too.
+# inhibitor and the modem's QMI services have to be enabled on upgraded
+# phones too.
 systemctl --quiet preset wake-gesture-proximity.service || true
+systemctl --quiet preset sony-modem-qmi.service || true

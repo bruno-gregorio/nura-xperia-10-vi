@@ -7,3 +7,5 @@ disable alsa-restore.service
 disable alsa-state.service
 # Double tap to wake stays off while the proximity sensor is covered.
 enable wake-gesture-proximity.service
+# The QMI services Sony's modem waits for; see the APKBUILD.
+enable sony-modem-qmi.service

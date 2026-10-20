@@ -1,5 +1,68 @@
 # Status
 
+## The modem registers with a SIM: Sony's three services, 2026-10-19
+
+**The Fairphone 6 shows what a working modem needs, and only Sony's part
+was missing.** Nura's `device-fairphone-fp6` gets its modem from stock
+open userspace: `rmtfs -r -P -s` (writes kept in memory), tqftpserv, the
+in-kernel pd-mapper, IPA, and `soc-qcom-modem` (`msm-modem-uim-selection`,
+`q6voiced`, `81voltd`) in front of ModemManager. The kernel side here
+already matches `linux-postmarketos-qcom-milos` option for option. What
+Sony's modem wants on top is three QMI services Sony's Android provides.
+
+**`sony-modem-qmi`, new in `aports/main/`, serves all three.** It is our
+own code, not Sony's; the source says how each part was read.
+
+- **TA (0xe3) and MiscTA (0xe4)** — `ta_qmi_service`'s, from its IDL
+  tables and handlers, over tad's partition format. They read the TA
+  partition read-only and keep writes in memory. The C reader and a
+  separate Python one agree byte for byte on all 69 units of this phone's
+  TA, and units 2560 and 2568 are the 6-byte addresses macaddrsetup expects.
+- **MLog (0xe6)** — `mlog_qmi_service`'s, from the modem's client object in
+  `modem.mbn`. The modem's SIM manager sends it log lines; ours go to the
+  journal.
+- **A copy of the TA** — `out/ta-backup/TA.img`,
+  read with `dd` and never written. It holds the device keys, so keep a
+  second copy somewhere safe and never commit it.
+
+**What each service unblocks, verified on kernel r51** (evidence in
+`out/modem-diag-5.txt` to `out/modem-diag-15.txt`):
+
+- **Without any of them** (diag 10), UIM registers and reports both slots
+  absent, and DMS, WMS and a dozen other services never register.
+- **With TA and MiscTA** (diag 5 to 9), DMS, NAS, WMS, WDS, Voice and PDC
+  register within 10 s, and the modem reads MiscTA units 2010 (Sony's
+  signed SIM lock record), 2209 (build type) and 2003 (the signed hardware
+  configuration). But UIM never registers, not in 3 minutes: the SIM
+  manager is waiting for MLog. Serving the absent unit 2015 changes nothing.
+- **With all three** (diag 11 to 13), UIM registers within 3 s, slot 1
+  reports the SIM present with its USIM application, and slot 2, empty,
+  `no-atr-received`.
+
+**The modem now runs the way the Fairphone 6's does, verified as services
+in boot order** (diag 14): `sony-modem-qmi`, then `rmtfs`, which starts the
+modem, then `msm-modem-uim-selection`, which selected the USIM, then
+ModemManager. ModemManager found the modem (`qrtr0`, plugin `qcom-soc`),
+something on the phone enabled it, and it registered on 3G at about 85%
+signal. On the phone, `sony-modem-qmi` and `soc-qcom-modem` were installed
+by hand and `rmtfs` unmasked; it stays read-only.
+
+**What is not done:**
+
+- **Mobile data — not shown.** The network refuses packet service
+  (`gprs-not-allowed`, cause 7) to this SIM.
+  That is the subscription, as far as anything here can tell; a SIM with
+  data on its home network is the next test.
+- **LTE and 5G — not shown.** The modem's mode preference allowed only 2G
+  and 3G. ModemManager changed it to 2G to 5G with 4G preferred, and it
+  stayed on 3G for the minute watched.
+- **Call audio — missing.** `q6voiced` skips itself without a
+  `q6voiced.conf` naming a voice PCM, and our AudioReach card has none.
+  Calls, SMS and VoLTE (`81voltd` runs) are untested.
+- **Device package r24 — built, not installed.** It depends on
+  `soc-qcom-modem` and `sony-modem-qmi`, enables the latter, and carries
+  the Fairphone 6's 30 s SIM wait. The phone still runs r22.
+
 ## The modem waits for IPA; the lost workspace rebuilt, 2026-10-18
 
 **ModemManager rejects the modem because the modem never offers DMS.** Its
